@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Package manager files
+.pnpm-store/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+config/settings.jsonc
+*.local
+*.key
+*.pem
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test and tool caches
+.vitest/
+.nyc_output/
+.eslintcache
+.turbo/
+.cache/
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
