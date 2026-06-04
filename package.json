@@ -1,0 +1,21 @@
+{
+  "name": "llm-proxy-ts-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @llm-proxy/server dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "generate:schema": "pnpm --filter @llm-proxy/server generate:schema",
+    "models:sync": "pnpm --filter @llm-proxy/core models:sync"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "dotenv": "^17.4.2",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vitest": "latest",
+    "zod": "latest"
+  }
+}

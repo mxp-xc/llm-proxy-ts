@@ -1,0 +1,151 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Settings } from '@llm-proxy/core';
+import { createProviderRegistry } from '../src/providers/registry.js';
+
+const mocks = vi.hoisted(() => ({
+  capturedLogs: [] as unknown[],
+  capturedProviderOptions: [] as Array<{ providerName: string; selectedApiKey: string | undefined }>,
+}));
+
+vi.mock('@llm-proxy/core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@llm-proxy/core')>();
+  return {
+    ...original,
+    createOpenAICompatibleProvider(
+      providerName: string,
+      provider: unknown,
+      settings: unknown,
+      modelHeaders: unknown,
+      selectedApiKey: string | undefined,
+    ) {
+      mocks.capturedProviderOptions.push({ providerName, selectedApiKey });
+      return (upstreamModel: string) => ({ upstreamModel, providerName });
+    },
+    sanitizeHeaders(headers: Record<string, string>) {
+      const sensitiveHeaders = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'apikey', 'api_key']);
+      return Object.fromEntries(Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())));
+    },
+  };
+});
+
+vi.mock('../src/logging.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/logging.js')>()),
+  logger: {
+    info(payload: unknown) {
+      mocks.capturedLogs.push(payload);
+    },
+  },
+}));
+
+const settings: Settings = {
+  service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
+  requestTimeoutMs: 30000,
+  proxy: { url: 'http://127.0.0.1:7890', verify: false },
+  routing: { enableFlatModelLookup: false },
+  providers: {
+    openrouter: {
+      type: 'openai-compatible',
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: 'secret',
+      headers: {
+        authorization: 'Bearer wrong',
+        'proxy-authorization': 'Basic wrong',
+        'x-api-key': 'wrong',
+        'api-key': 'wrong',
+        apikey: 'wrong',
+        api_key: 'wrong',
+        'X-Test': 'yes',
+      },
+      plugins: [],
+      models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
+    },
+  },
+};
+
+describe('provider registry', () => {
+  afterEach(() => {
+    mocks.capturedLogs.length = 0;
+    mocks.capturedProviderOptions.length = 0;
+  });
+
+  it('creates openai-compatible language models and filters auth header overrides', () => {
+    const registry = createProviderRegistry(settings);
+    const model = registry.languageModel('openrouter', 'openrouter/chat', {
+      AUTHORIZATION: 'Bearer also-wrong',
+      'X-API-Key': 'also-wrong',
+    });
+
+    expect(model).toBeTruthy();
+    expect(registry.debugProviderConfig('openrouter')).toEqual({
+      baseURL: 'https://openrouter.ai/api/v1',
+      headers: { 'X-Test': 'yes' },
+      proxyEnabled: true,
+    });
+  });
+
+  it('rotates api key arrays per provider across requests', () => {
+    const registry = createProviderRegistry({
+      ...settings,
+      providers: {
+        openrouter: {
+          ...settings.providers.openrouter!,
+          apiKey: ['secret-token-1', 'secret-token-2'],
+        },
+      },
+    });
+
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+
+    expect(mocks.capturedProviderOptions).toMatchObject([
+      { selectedApiKey: 'secret-token-1' },
+      { selectedApiKey: 'secret-token-2' },
+      { selectedApiKey: 'secret-token-1' },
+    ]);
+    expect(mocks.capturedLogs).toEqual([
+      { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
+      { provider: 'openrouter', keyIndex: 1, keyCount: 2 },
+      { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
+    ]);
+    expect(JSON.stringify(mocks.capturedLogs)).not.toContain('secret');
+  });
+
+  it('does not log short api keys', () => {
+    const registry = createProviderRegistry({
+      ...settings,
+      providers: {
+        openrouter: {
+          ...settings.providers.openrouter!,
+          apiKey: ['key-1', '12345678'],
+        },
+      },
+    });
+
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+
+    const logs = JSON.stringify(mocks.capturedLogs);
+    expect(logs).toContain('"keyIndex":0');
+    expect(logs).toContain('"keyIndex":1');
+    expect(logs).not.toContain('key-1');
+    expect(logs).not.toContain('12345678');
+  });
+
+  it('does not pass api keys for unkeyed providers', () => {
+    const registry = createProviderRegistry({
+      ...settings,
+      providers: {
+        openrouter: {
+          ...settings.providers.openrouter!,
+          apiKey: null,
+        },
+      },
+    });
+
+    registry.languageModel('openrouter', 'openrouter/chat', {});
+
+    expect(mocks.capturedProviderOptions[0]?.selectedApiKey).toBeUndefined();
+    expect(mocks.capturedLogs).toEqual([]);
+  });
+});

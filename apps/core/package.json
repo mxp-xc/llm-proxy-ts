@@ -1,0 +1,26 @@
+{
+  "name": "@llm-proxy/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "models:sync": "tsx src/cli/cli.ts models sync"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "latest",
+    "@clack/prompts": "^1.5.1",
+    "dotenv": "^17.4.2",
+    "jsonc-parser": "latest",
+    "undici": "latest",
+    "zod-to-json-schema": "latest"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "$schema": "./settings.schema.json",
+  "service": {
+    "name": "llm-proxy",
+    "host": "127.0.0.1",
+    "port": 8000
+  },
+  "requestTimeoutMs": 30000,
+  "proxy": null,
+  "routing": {
+    "enableFlatModelLookup": true
+  },
+  "providers": {
+    "local-openai": {
+      "type": "openai-compatible",
+      "baseURL": "http://example.com/v1",
+      "apiKey": [
+        "example-api-key",
+        "${LOCAL_OPENAI_API_KEY_2}"
+      ],
+      // Set enableFlatModelLookup to override the routing-level setting per-provider.
+      // If omitted, inherits from routing.enableFlatModelLookup.
+      // "enableFlatModelLookup": false,
+      "plugins": [
+        {
+          "name": "vendor_sse_error",
+          "config": {}
+        }
+      ],
+      "models": {
+        "gpt-5.5": {
+          "upstreamModel": "gpt-5.5"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,123 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { parse, type ParseError } from 'jsonc-parser';
+import { z } from 'zod/v3';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+
+export const pluginConfigSchema = z.object({
+  name: z.string().min(1),
+  config: z.record(z.string(), z.unknown()).default({}),
+});
+
+const apiKeySchema = z.union([z.string().min(1), z.array(z.string().min(1)).nonempty()]).nullable().optional();
+
+export const modelRouteConfigSchema = z.object({
+  upstreamModel: z.string().min(1),
+  aliases: z.array(z.string().min(1)).default([]),
+  headers: z.record(z.string(), z.string()).default({}),
+  plugins: z.array(pluginConfigSchema).default([]),
+});
+
+export const providerConfigSchema = z.object({
+  type: z.literal('openai-compatible'),
+  baseURL: z.string().url(),
+  apiKey: apiKeySchema,
+  headers: z.record(z.string(), z.string()).default({}),
+  plugins: z.array(pluginConfigSchema).default([]),
+  models: z.record(z.string(), modelRouteConfigSchema).default({}),
+  enableFlatModelLookup: z.boolean().optional(),
+});
+
+export const settingsSchema = z.object({
+  $schema: z.string().optional(),
+  service: z
+    .object({
+      name: z.string().min(1).default('llm-proxy'),
+      host: z.string().min(1).default('127.0.0.1'),
+      port: z.number().int().min(1).max(65535).default(8000),
+    })
+    .default({}),
+  requestTimeoutMs: z.number().positive().default(30000),
+  proxy: z
+    .object({
+      url: z.string().url(),
+      verify: z.boolean().default(true),
+    })
+    .nullable()
+    .default(null),
+  routing: z
+    .object({
+      enableFlatModelLookup: z.boolean().default(false),
+    })
+    .default({}),
+  providers: z.record(z.string(), providerConfigSchema).default({}),
+});
+
+export type PluginConfig = z.infer<typeof pluginConfigSchema>;
+export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>;
+export type ProviderConfig = z.infer<typeof providerConfigSchema>;
+export type Settings = z.infer<typeof settingsSchema>;
+
+const envPlaceholderPattern = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+export function resolveEnvPlaceholders(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const match = envPlaceholderPattern.exec(value);
+    if (!match) {
+      return value;
+    }
+
+    const envName = match[1];
+    if (!envName) {
+      return value;
+    }
+
+    const envValue = process.env[envName];
+    if (envValue === undefined) {
+      throw new Error(`Environment variable ${envName} is required`);
+    }
+
+    return envValue;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => resolveEnvPlaceholders(item));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, resolveEnvPlaceholders(item)]),
+    );
+  }
+
+  return value;
+}
+
+export async function loadSettingsFromFile(path: string): Promise<Settings> {
+  const raw = await readFile(path, 'utf8');
+  const errors: ParseError[] = [];
+  const parsed = parse(raw, errors, { allowTrailingComma: true });
+
+  if (errors.length > 0) {
+    throw new Error(`Failed to parse JSONC settings: ${errors[0]?.error}`);
+  }
+
+  return settingsSchema.parse(resolveEnvPlaceholders(parsed));
+}
+
+export function generateSettingsJsonSchema(): object {
+  return {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    ...zodToJsonSchema(settingsSchema, {
+      name: 'Settings',
+      nameStrategy: 'title',
+      $refStrategy: 'none',
+    }),
+    title: 'Settings',
+  };
+}
+
+export async function writeSettingsJsonSchema(path: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(generateSettingsJsonSchema(), null, 2)}\n`, 'utf8');
+}
