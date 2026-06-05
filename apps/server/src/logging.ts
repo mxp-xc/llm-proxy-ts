@@ -1,8 +1,8 @@
 import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
+import { Writable } from 'node:stream';
 import pino from 'pino';
-import pretty from 'pino-pretty';
 
 // --- Environment variable configuration ---
 
@@ -11,37 +11,128 @@ const LOG_DIR = process.env.LLM_PROXY_LOG_DIR ?? resolve(process.cwd(), 'logs');
 const LOG_FORMAT = process.env.LLM_PROXY_LOG_FORMAT ?? 'pretty';
 const LOG_RETENTION_DAYS = 7;
 
-// Note: dateformat (used by pino-pretty) has counter-intuitive tokens:
-//   mm = month (zero-padded), MM = minute (zero-padded)
-// So the correct format for "2024-06-04 19:01:27" is 'yyyy-mm-dd HH:MM:ss'
-const PRETTY_TIME_FORMAT = 'SYS:yyyy-mm-dd HH:MM:ss';
-
 // --- Redaction ---
 
 const secretKeys = new Set(['apikey', 'api_key', 'authorization', 'x-api-key', 'proxy-authorization']);
 
-// --- Shared pretty format config ---
+// --- Plain text log format ---
 
-const prettyMessageFormat =
-  '{msg}' +
-  '{if requestId} requestId={requestId}{end}' +
-  '{if method} method={method}{end}' +
-  '{if path} path={path}{end}' +
-  '{if status} status={status}{end}' +
-  '{if durationMs} durationMs={durationMs}{end}' +
-  '{if provider} provider={provider}{end}' +
-  '{if keyIndex} keyIndex={keyIndex}{end}' +
-  '{if keyCount} keyCount={keyCount}{end}' +
-  '{if host} host={host}{end}' +
-  '{if port} port={port}{end}';
+const baseLogKeys = new Set(['level', 'time', 'pid', 'hostname', 'name', 'msg']);
+const orderedFieldKeys = [
+  'requestId',
+  'method',
+  'path',
+  'status',
+  'durationMs',
+  'provider',
+  'requestedModel',
+  'actualModel',
+  'keyIndex',
+  'keyCount',
+  'host',
+  'port',
+];
 
-const basePrettyOptions = {
-  translateTime: PRETTY_TIME_FORMAT,
-  ignore: 'pid,hostname',
-  singleLine: true,
-  hideObject: true,
-  messageFormat: prettyMessageFormat,
-};
+function formatLocalTime(value: unknown): string {
+  const date = typeof value === 'string' || typeof value === 'number' ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const h = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  const s = String(date.getSeconds()).padStart(2, '0');
+  return `${y}-${m}-${d} ${h}:${min}:${s}`;
+}
+
+function formatFieldValue(value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    return /^[-./:@\w]+$/.test(value) ? value : JSON.stringify(value);
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function formatFields(log: Record<string, unknown>): string {
+  const seen = new Set(baseLogKeys);
+  const fields: string[] = [];
+
+  for (const key of orderedFieldKeys) {
+    seen.add(key);
+    const value = formatFieldValue(log[key]);
+    if (value !== undefined) {
+      fields.push(`${key}=${value}`);
+    }
+  }
+
+  for (const [key, rawValue] of Object.entries(log)) {
+    if (seen.has(key)) {
+      continue;
+    }
+    const value = formatFieldValue(rawValue);
+    if (value !== undefined) {
+      fields.push(`${key}=${value}`);
+    }
+  }
+
+  return fields.length > 0 ? ` ${fields.join(' ')}` : '';
+}
+
+function formatPlainLogLine(log: Record<string, unknown>): string {
+  const level =
+    typeof log.level === 'number' ? (pino.levels.labels[log.level]?.toUpperCase() ?? String(log.level)) : String(log.level ?? 'INFO');
+  const name = typeof log.name === 'string' ? log.name : 'llm-proxy';
+  const message = typeof log.msg === 'string' ? log.msg : '';
+  return `${formatLocalTime(log.time)} ${level.padEnd(5)} ${name} - ${message}${formatFields(log)}`;
+}
+
+function plainTextStream(destination: NodeJS.WritableStream): Writable {
+  let buffered = '';
+
+  return new Writable({
+    write(chunk, _encoding, callback) {
+      buffered += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() ?? '';
+
+      const output = lines
+        .filter((line) => line.length > 0)
+        .map((line) => {
+          try {
+            return formatPlainLogLine(JSON.parse(line) as Record<string, unknown>);
+          } catch {
+            return line;
+          }
+        })
+        .join('\n');
+
+      if (output.length === 0) {
+        callback();
+        return;
+      }
+      destination.write(`${output}\n`, callback);
+    },
+    final(callback) {
+      if (buffered.length === 0) {
+        callback();
+        return;
+      }
+      try {
+        destination.write(`${formatPlainLogLine(JSON.parse(buffered) as Record<string, unknown>)}\n`, callback);
+      } catch {
+        destination.write(`${buffered}\n`, callback);
+      }
+    },
+  });
+}
 
 // --- Log file rotation & cleanup ---
 
@@ -89,27 +180,21 @@ export function createLogger(options?: pino.LoggerOptions): pino.Logger {
   try {
     const streams: pino.StreamEntry[] = [];
 
-    // Stdout: pino-pretty as a direct sync stream (main thread)
+    // Stdout defaults to the same plain text format as log files.
     if (LOG_FORMAT === 'pretty') {
-      streams.push({
-        level: LOG_LEVEL as pino.Level,
-        stream: pretty({ ...basePrettyOptions, colorize: true, sync: true }),
-      });
+      streams.push({ level: LOG_LEVEL as pino.Level, stream: plainTextStream(process.stdout) });
     } else {
       streams.push({ level: LOG_LEVEL as pino.Level, stream: process.stdout });
     }
 
-    // File: pino-pretty (no color) writes to a file stream.
+    // File logs use a stable Java/Python-style plain text format.
     // Daily rotation is achieved by including the date in the filename.
     // Old log files are cleaned up on startup via cleanOldLogs().
     const logFilePath = resolve(LOG_DIR, getLogFileName());
     mkdirSync(resolve(LOG_DIR), { recursive: true });
     const fileStream = createWriteStream(logFilePath, { flags: 'a' });
 
-    streams.push({
-      level: 'trace' as pino.Level,
-      stream: pretty({ ...basePrettyOptions, colorize: false, destination: fileStream }),
-    });
+    streams.push({ level: 'trace' as pino.Level, stream: plainTextStream(fileStream) });
 
     return pino(pinoOptions, pino.multistream(streams));
   } catch {

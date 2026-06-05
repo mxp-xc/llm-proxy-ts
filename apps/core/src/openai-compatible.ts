@@ -13,6 +13,7 @@ export function createOpenAICompatibleProvider(
   settings: Settings,
   modelHeaders: Record<string, string>,
   selectedApiKey: string | undefined,
+  oauthFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) {
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders });
   const options: Parameters<typeof createOpenAICompatible>[0] = {
@@ -21,11 +22,17 @@ export function createOpenAICompatibleProvider(
     headers,
   };
 
-  if (selectedApiKey !== undefined) {
+  // OAuth 激活时不设 apiKey，避免与 OAuth fetch 注入的 Authorization 冲突
+  if (!oauthFetch && selectedApiKey !== undefined) {
     options.apiKey = selectedApiKey;
   }
 
-  if (settings.proxy) {
+  // fetch 组合：OAuth fetch → proxy fetch → global fetch
+  if (oauthFetch) {
+    options.fetch = settings.proxy
+      ? oauthFetch(createProxyFetch(settings.proxy.url, settings.proxy.verify))
+      : oauthFetch();
+  } else if (settings.proxy) {
     options.fetch = createProxyFetch(settings.proxy.url, settings.proxy.verify);
   }
 

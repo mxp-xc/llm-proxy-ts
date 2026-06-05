@@ -1,6 +1,8 @@
 import { generateText, streamText } from 'ai';
 import { Hono } from 'hono';
 import type { Settings } from '@llm-proxy/core';
+import { OAuthError } from '@llm-proxy/core';
+import type { TokenManager, AuthStatus } from '@llm-proxy/core';
 import pino from 'pino';
 import { logger as defaultLogger, requestId } from './logging.js';
 import { inspectVendorSseError } from './plugins/vendor-sse-error.js';
@@ -9,6 +11,8 @@ import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from './pro
 import { getModel, listModels } from './protocols/openai-models.js';
 import { createProviderRegistry, type ProviderRegistry } from './providers/registry.js';
 import { RoutingError, RoutingTable } from './routing.js';
+import { createOAuthCallbackApp } from './oauth/callback.js';
+import type { ProviderAuthStatus } from './oauth/startup.js';
 
 export type { Settings } from '@llm-proxy/core';
 
@@ -22,12 +26,18 @@ export interface AppDependencies {
   providerRegistry?: ProviderRegistry;
   gateway?: ModelGateway;
   logger?: pino.Logger;
+  tokenManager?: TokenManager;
+  nonce?: string;
+  authStatuses?: ProviderAuthStatus[];
 }
 
 type AppEnv = {
   Variables: {
     requestId: string;
     logger: pino.Logger;
+    requestedModel?: string;
+    actualModel?: string;
+    provider?: string;
   };
 };
 
@@ -36,9 +46,18 @@ export function createApp({
   providerRegistry = createProviderRegistry(settings),
   gateway = defaultGateway,
   logger = defaultLogger,
+  tokenManager,
+  nonce,
+  authStatuses,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const routingTable = RoutingTable.fromSettings(settings);
+
+  // 挂载 OAuth 回调路由
+  if (tokenManager && nonce) {
+    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce });
+    app.route('/oauth', oauthApp);
+  }
 
   app.use('*', async (c, next) => {
     const id = requestId();
@@ -53,19 +72,40 @@ export function createApp({
 
     const duration = performance.now() - start;
     reqLogger.info(
-      { method: c.req.method, path: c.req.path, status: c.res.status, durationMs: Math.round(duration) },
+      {
+        method: c.req.method,
+        path: c.req.path,
+        status: c.res.status,
+        durationMs: Math.round(duration),
+        provider: c.get('provider'),
+        requestedModel: c.get('requestedModel'),
+        actualModel: c.get('actualModel'),
+      },
       'request completed',
     );
     c.header('x-request-id', id);
   });
 
-  app.get('/health', (c) =>
-    c.json({
+  app.get('/health', (c) => {
+    const base: Record<string, unknown> = {
       status: 'ok',
       service: settings.service.name,
       providersConfigured: Object.keys(settings.providers).length,
-    }),
-  );
+    };
+
+    if (authStatuses && authStatuses.length > 0) {
+      base.auth = Object.fromEntries(
+        authStatuses.map((s) => [
+          s.provider,
+          s.status === 'valid'
+            ? { status: s.status }
+            : { status: s.status, loginUrl: s.loginUrl },
+        ]),
+      );
+    }
+
+    return c.json(base);
+  });
 
   app.get('/v1/models', (c) => c.json(listModels(settings)));
 
@@ -114,8 +154,30 @@ export function createApp({
       throw error;
     }
 
+    c.set('provider', route.providerName);
+    c.set('requestedModel', request.model);
+    c.set('actualModel', route.upstreamModel);
+
     const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName);
-    const model = providerRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
+    let model;
+    try {
+      model = providerRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
+    } catch (error) {
+      if (error instanceof OAuthError && error.code === 'auth_required') {
+        return c.json(
+          {
+            error: {
+              type: 'auth_required',
+              code: 'oauth_login_needed',
+              message: error.message,
+              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+            },
+          },
+          503,
+        );
+      }
+      throw error;
+    }
     const abortController = new AbortController();
 
     if (request.stream) {
@@ -134,6 +196,19 @@ export function createApp({
         });
       } catch (error) {
         c.get('logger').error({ err: error }, 'stream request failed');
+        if (error instanceof OAuthError && error.code === 'auth_required') {
+          return c.json(
+            {
+              error: {
+                type: 'auth_required',
+                code: 'oauth_login_needed',
+                message: error.message,
+                loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+              },
+            },
+            503,
+          );
+        }
         if (error instanceof RequestTimeoutError) {
           return upstreamTimeoutResponse();
         }
@@ -159,6 +234,19 @@ export function createApp({
       );
     } catch (error) {
       c.get('logger').error({ err: error }, 'generation request failed');
+      if (error instanceof OAuthError && error.code === 'auth_required') {
+        return c.json(
+          {
+            error: {
+              type: 'auth_required',
+              code: 'oauth_login_needed',
+              message: error.message,
+              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+            },
+          },
+          503,
+        );
+      }
       if (error instanceof RequestTimeoutError) {
         return upstreamTimeoutResponse();
       }

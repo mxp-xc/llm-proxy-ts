@@ -25,10 +25,10 @@ Client → Hono app (/v1/chat/completions)
 
 | 模块 | 职责 |
 |---|---|
-| `server.ts` | 入口，解析配置路径，启动 `@hono/node-server` |
-| `app.ts` | Hono 应用工厂，路由处理器，超时逻辑，流检查；可注入 `ModelGateway` 和 `ProviderRegistry` 用于测试 |
+| `server.ts` | 入口，解析配置路径，OAuth 初始化，启动 `@hono/node-server` |
+| `app.ts` | Hono 应用工厂，路由处理器，超时逻辑，流检查，OAuthError 处理；可注入 `ModelGateway`、`ProviderRegistry`、`TokenManager` 用于测试 |
 | `routing.ts` | `RoutingTable` — 解析 `provider/model` 选择器和别名，支持可选的扁平模型查找 |
-| `providers/registry.ts` | `ProviderRegistry` — 创建 AI SDK `LanguageModel` 实例，处理 apiKey 数组的轮询选择 |
+| `providers/registry.ts` | `ProviderRegistry` — 创建 AI SDK `LanguageModel` 实例，处理 apiKey 数组的轮询选择；OAuth provider 通过 `createOAuthFetch` 注入动态 token |
 | `protocols/openai-chat.ts` | 请求校验（Zod）+ OpenAI 格式到 AI SDK 输入的映射（messages、tools、tool_choice、provider options） |
 | `protocols/openai-chat-renderer.ts` | 将 AI SDK 结果渲染回 OpenAI Chat Completion 格式（非流式 + SSE 流式含 tool calls） |
 | `protocols/openai-models.ts` | `/v1/models` 和 `/v1/models/*` 端点，从配置生成模型列表 |
@@ -36,11 +36,15 @@ Client → Hono app (/v1/chat/completions)
 | `plugins/types.ts` | 插件类型定义 |
 | `plugins/vendor-sse-error.ts` | 在转发前检查 SSE chunk 中的上游限流错误 |
 | `logging.ts` | Pino 日志，请求 ID 生成，敏感信息脱敏 |
+| `oauth/callback.ts` | OAuth 回调端点 — `/oauth/login/:provider`（重定向到授权 URL）、`/oauth/callback`（交换授权码） |
+| `oauth/startup.ts` | OAuth 启动校验 — 遍历 OAuth provider，自动刷新过期 token，打印需要登录的 provider URL |
 
 ## 设计决策
 
-- **可注入依赖：** `createApp()` 接受 `ModelGateway` 和 `ProviderRegistry` 覆盖。测试通过注入避免真实上游调用。
+- **可注入依赖：** `createApp()` 接受 `ModelGateway`、`ProviderRegistry`、`TokenManager` 覆盖。测试通过注入避免真实上游调用。
 - **API Key 轮询：** `apiKey` 为数组时，`ProviderRegistry` 按请求循环选择 key（索引按 provider name 追踪）。
+- **OAuth 认证：** Provider 配置 `oauth` 后，通过自定义 `fetch` 函数在每次请求时动态注入 `Authorization` 头。OAuth fetch 与 proxy fetch 可组合（OAuth → proxy → global）。OAuth 优先于静态 `apiKey`。
+- **OAuth 启动校验：** 服务启动时检查 OAuth provider 的 token 状态，自动刷新过期 token，未认证的 provider 打印登录 URL 且不阻塞启动。
 - **流首包检查：** `vendor_sse_error` 插件在转发前窥视第一个 SSE chunk — 检测到限流错误时中断流并返回 429。
 - **Provider options 透传：** 请求中不在 `mappedRequestKeys` 集合内的未知字段，作为 `providerOptions.{providerName}` 转发给 AI SDK。
 
@@ -53,9 +57,10 @@ Client → Hono app (/v1/chat/completions)
 
 ### 敏感数据规则
 
-- 禁止提交 `.env`、`settings.jsonc` 或真实 API key。
+- 禁止提交 `.env`、`settings.jsonc`、`auth.json` 或真实 API key。
 - 日志自动脱敏的 key：`apikey`、`api_key`、`authorization`、`x-api-key`、`proxy-authorization`（不区分大小写）。
 - API key 选择日志仅记录 provider 名称、key 索引和总数。
+- OAuth `clientSecret` 应使用 `${ENV_VAR}` 占位符，避免写入配置文件明文。
 
 ## 关键依赖
 
@@ -64,7 +69,7 @@ Client → Hono app (/v1/chat/completions)
 | `ai` | Vercel AI SDK（`generateText`/`streamText`） |
 | `hono` | HTTP 框架 |
 | `@hono/node-server` | Node.js 适配器 |
-| `pino` + `pino-pretty` + `pino-roll` | 结构化日志（控制台 pretty + 文件 pretty + 滚动） |
+| `pino` | 结构化日志源；console 和 `.log` 文件默认输出 Java/Python 风格 plain text 日志 |
 | `@llm-proxy/core` | 配置、Provider 工厂（`workspace:*`） |
 
 ## 测试
@@ -82,5 +87,8 @@ Client → Hono app (/v1/chat/completions)
 | `openai-chat-renderer.test.ts` | 响应渲染 |
 | `routing.test.ts` | 路由解析和别名 |
 | `provider-registry.test.ts` | Provider 注册和 API key 轮询 |
+| `oauth-callback.test.ts` | OAuth 回调端点 |
+| `oauth-startup.test.ts` | OAuth 启动校验 |
+| `oauth-registry.test.ts` | OAuth Provider 注册和 fetch 注入 |
 | `security-and-plugins.test.ts` | 插件合并和安全 |
 | `smoke.test.ts` | 真实上游流式测试（需 `LLM_PROXY_TEST_BASE_URL` + `LLM_PROXY_TEST_API_KEY` + `LLM_PROXY_TEST_MODEL`） |

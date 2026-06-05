@@ -1,18 +1,18 @@
 import { modify, applyEdits } from 'jsonc-parser';
 import { writeFile } from 'node:fs/promises';
-import type { ModelRouteConfig } from '../config.js';
+import type { ModelRouteInput } from '../config.js';
 
 export interface WriteModelsOptions {
   settingsPath: string;
   rawText: string;
   providerName: string;
-  newModels: Record<string, ModelRouteConfig>;
+  newModels: Record<string, ModelRouteInput>;
 }
 
 export function computeModelsEdits(
   rawText: string,
   providerName: string,
-  newModels: Record<string, ModelRouteConfig>,
+  newModels: Record<string, ModelRouteInput>,
 ): string {
   const edits = modify(rawText, ['providers', providerName, 'models'], newModels, {
     formattingOptions: {
@@ -25,7 +25,7 @@ export function computeModelsEdits(
 
 export function applyMultipleProviderModels(
   rawText: string,
-  changes: Array<{ providerName: string; newModels: Record<string, ModelRouteConfig> }>,
+  changes: Array<{ providerName: string; newModels: Record<string, ModelRouteInput> }>,
 ): string {
   let current = rawText;
   for (const { providerName, newModels } of changes) {

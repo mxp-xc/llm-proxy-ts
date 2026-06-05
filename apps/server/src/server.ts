@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { createApp } from './app.js';
-import { loadSettingsFromFile, loadEnvironmentFiles, resolveSettingsPath, settingsSchema } from '@llm-proxy/core';
+import { loadSettingsFromFile, loadEnvironmentFiles, resolveSettingsPath, settingsSchema, TokenManager } from '@llm-proxy/core';
 import { logger } from './logging.js';
+import { validateOAuthStatus, generateNonce } from './oauth/startup.js';
 
 async function main(): Promise<void> {
   const appDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,7 +15,29 @@ async function main(): Promise<void> {
 
   const settingsPath = resolveSettingsPath({ rootDir });
   const settings = existsSync(settingsPath) ? await loadSettingsFromFile(settingsPath) : settingsSchema.parse({});
-  const app = createApp({ settings });
+
+  // OAuth 初始化
+  let tokenManager: TokenManager | undefined;
+  let nonce: string | undefined;
+  let authStatuses: import('./oauth/startup.js').ProviderAuthStatus[] | undefined;
+
+  const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth);
+  if (hasOAuthProviders) {
+    // 解析 auth 文件路径：默认与 settings.jsonc 同目录
+    const defaultAuthFile = join(dirname(settingsPath), 'auth.json');
+    const authFilePath = defaultAuthFile;
+
+    tokenManager = new TokenManager(authFilePath);
+    await tokenManager.load();
+
+    nonce = generateNonce();
+    authStatuses = await validateOAuthStatus(settings, tokenManager);
+  }
+
+  const app = createApp({
+    settings,
+    ...(tokenManager && nonce ? { tokenManager, nonce, ...(authStatuses ? { authStatuses } : {}) } : {}),
+  });
 
   const server = serve(
     {

@@ -2,7 +2,7 @@ import * as clack from '@clack/prompts';
 import { readFile } from 'node:fs/promises';
 import { parse, type ParseError } from 'jsonc-parser';
 import { loadSettingsFromFile, resolveEnvPlaceholders } from '../config.js';
-import type { ModelRouteConfig, Settings } from '../config.js';
+import type { ModelRouteInput, Settings } from '../config.js';
 import { fetchUpstreamModels, type OpenAIModel } from './discover-models.js';
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js';
 
@@ -15,7 +15,7 @@ export interface ModelsSyncOptions {
 interface ProviderModelsResult {
   providerName: string;
   models: OpenAIModel[];
-  existingModels: Record<string, ModelRouteConfig>;
+  existingModels: Record<string, ModelRouteInput>;
 }
 
 export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
@@ -129,7 +129,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   }
 
   // 4. 选择模型
-  const changes: Array<{ providerName: string; newModels: Record<string, ModelRouteConfig>; added: number; kept: number; removed: number }> = [];
+  const changes: Array<{ providerName: string; newModels: Record<string, ModelRouteInput>; added: number; kept: number; removed: number }> = [];
 
   for (const { providerName, models, existingModels } of results) {
     const existingKeys = Object.keys(existingModels);
@@ -163,7 +163,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
 
     const selectedIds = new Set(selected as string[]);
 
-    const newModels: Record<string, ModelRouteConfig> = {};
+    const newModels: Record<string, ModelRouteInput> = {};
     let kept = 0;
     let added = 0;
 

@@ -15,6 +15,7 @@ coverage/
 .env.*
 !.env.example
 config/settings.jsonc
+config/auth.json
 *.local
 *.key
 *.pem

@@ -13,9 +13,20 @@ const apiKeySchema = z.union([z.string().min(1), z.array(z.string().min(1)).none
 
 export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
-  aliases: z.array(z.string().min(1)).default([]),
-  headers: z.record(z.string(), z.string()).default({}),
-  plugins: z.array(pluginConfigSchema).default([]),
+  aliases: z.array(z.string().min(1)).optional().default([]),
+  headers: z.record(z.string(), z.string()).optional().default({}),
+  plugins: z.array(pluginConfigSchema).optional().default([]),
+});
+
+export const oauthConfigSchema = z.object({
+  flow: z.enum(['authorization_code', 'client_credentials']),
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  tokenUrl: z.string().url(),
+  authorizationUrl: z.string().url().optional(),
+  scopes: z.array(z.string().min(1)).default([]),
+  redirectUri: z.string().url().optional(),
+  authFile: z.string().optional(),
 });
 
 export const providerConfigSchema = z.object({
@@ -26,6 +37,7 @@ export const providerConfigSchema = z.object({
   plugins: z.array(pluginConfigSchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   enableFlatModelLookup: z.boolean().optional(),
+  oauth: oauthConfigSchema.optional(),
 });
 
 export const settingsSchema = z.object({
@@ -55,6 +67,9 @@ export const settingsSchema = z.object({
 
 export type PluginConfig = z.infer<typeof pluginConfigSchema>;
 export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>;
+/** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
+export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>;
+export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 export type Settings = z.infer<typeof settingsSchema>;
 

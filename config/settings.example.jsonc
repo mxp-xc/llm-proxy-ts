@@ -33,5 +33,32 @@
         }
       }
     }
+    // OAuth provider example (Authorization Code flow):
+    // "oauth-provider": {
+    //   "type": "openai-compatible",
+    //   "baseURL": "https://api.example.com/v1",
+    //   "oauth": {
+    //     "flow": "authorization_code",
+    //     "clientId": "${OAUTH_CLIENT_ID}",
+    //     "clientSecret": "${OAUTH_CLIENT_SECRET}",
+    //     "tokenUrl": "https://auth.example.com/oauth2/token",
+    //     "authorizationUrl": "https://auth.example.com/oauth2/authorize",
+    //     "scopes": ["api.read", "api.write"]
+    //   },
+    //   "models": { "chat": { "upstreamModel": "model-x" } }
+    // },
+    // OAuth provider example (Client Credentials flow):
+    // "service-account": {
+    //   "type": "openai-compatible",
+    //   "baseURL": "https://api.example.com/v1",
+    //   "oauth": {
+    //     "flow": "client_credentials",
+    //     "clientId": "${OAUTH_CLIENT_ID}",
+    //     "clientSecret": "${OAUTH_CLIENT_SECRET}",
+    //     "tokenUrl": "https://auth.example.com/oauth2/token",
+    //     "scopes": ["api.read"]
+    //   },
+    //   "models": { "chat": { "upstreamModel": "model-y" } }
+    // }
   }
 }

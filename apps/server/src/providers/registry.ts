@@ -1,5 +1,5 @@
 import type { LanguageModel } from 'ai';
-import type { Settings } from '@llm-proxy/core';
+import type { Settings, OAuthConfig, TokenManager } from '@llm-proxy/core';
 import { logger } from '../logging.js';
 import { createOpenAICompatibleProvider, sanitizeHeaders } from '@llm-proxy/core';
 
@@ -8,7 +8,10 @@ export interface ProviderRegistry {
   debugProviderConfig(providerName: string): { baseURL: string; headers: Record<string, string>; proxyEnabled: boolean };
 }
 
-export function createProviderRegistry(settings: Settings): ProviderRegistry {
+export function createProviderRegistry(
+  settings: Settings,
+  tokenManager?: TokenManager,
+): ProviderRegistry {
   const apiKeyIndexes = new Map<string, number>();
 
   return {
@@ -18,6 +21,15 @@ export function createProviderRegistry(settings: Settings): ProviderRegistry {
         throw new Error(`Unknown provider '${providerName}'`);
       }
 
+      // OAuth 路径：使用动态 fetch 注入 token
+      if (provider.oauth && tokenManager) {
+        const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager);
+        return createOpenAICompatibleProvider(
+          providerName, provider, settings, modelHeaders, undefined, oauthFetch,
+        )(upstreamModel);
+      }
+
+      // 静态 API Key 路径（现有逻辑）
       const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes);
       if (selection) {
         logger.info(
@@ -40,6 +52,26 @@ export function createProviderRegistry(settings: Settings): ProviderRegistry {
         proxyEnabled: settings.proxy !== null,
       };
     },
+  };
+}
+
+/**
+ * 创建 OAuth fetch 工厂：在每次请求前确保 token 有效并注入 Authorization 头。
+ *
+ * 支持与 proxy fetch 组合：oauthFetch(proxyFetch) → proxyFetch 添加代理，
+ * oauth fetch 添加认证头。
+ */
+export function createOAuthFetch(
+  providerName: string,
+  oauthConfig: OAuthConfig,
+  tokenManager: TokenManager,
+): (baseFetch?: typeof fetch) => typeof fetch {
+  return (baseFetch) => async (input, init) => {
+    const token = await tokenManager.ensureValidToken(providerName, oauthConfig);
+    const headers = new Headers(init?.headers);
+    headers.set('Authorization', `${token.tokenType} ${token.accessToken}`);
+    const fetchFn = baseFetch ?? globalThis.fetch;
+    return fetchFn(input, { ...init, headers });
   };
 }
 
