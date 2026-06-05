@@ -1,9 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": ".",
     "outDir": "dist",
-    "types": ["node", "vitest"]
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "types": ["node", "vitest"],
+    "paths": {
+      "@llm-proxy/core": ["./src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

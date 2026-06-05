@@ -6,7 +6,7 @@ import { createApp, type ModelGateway } from '../src/app.js';
 import type { Settings } from '@llm-proxy/core';
 import { loadEnvironmentFiles, resolveSettingsPath } from '@llm-proxy/core';
 import { redact, safeProxyHost } from '../src/logging.js';
-import { inspectVendorSseError } from '../src/plugins/vendor-sse-error.js';
+import { inspectVendorSseError } from '@llm-proxy/core';
 
 describe('logging redaction', () => {
   it('redacts known secret fields recursively', () => {

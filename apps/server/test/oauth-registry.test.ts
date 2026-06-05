@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import type { Settings, OAuthConfig } from '@llm-proxy/core';
 import { TokenManager, OAuthError } from '@llm-proxy/core';
-import { createProviderRegistry } from '../src/providers/registry.js';
+import { createProviderRegistry } from '@llm-proxy/core';
 
 const oauthConfig: OAuthConfig = {
   flow: 'client_credentials',
@@ -32,8 +32,8 @@ const mocks = vi.hoisted(() => ({
   }>,
 }));
 
-vi.mock('@llm-proxy/core', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@llm-proxy/core')>();
+vi.mock('../../core/src/openai-compatible.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../core/src/openai-compatible.js')>();
   return {
     ...original,
     createOpenAICompatibleProvider(
@@ -57,14 +57,6 @@ vi.mock('@llm-proxy/core', async (importOriginal) => {
     },
   };
 });
-
-vi.mock('../src/logging.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/logging.js')>()),
-  logger: {
-    info: () => {},
-    warn: () => {},
-  },
-}));
 
 describe('OAuth provider registry', () => {
   let tempDir: string;

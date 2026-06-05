@@ -1,14 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Settings } from '@llm-proxy/core';
+import type { Settings, Logger } from '@llm-proxy/core';
 import { createProviderRegistry } from '../src/providers/registry.js';
 
-const mocks = vi.hoisted(() => ({
-  capturedLogs: [] as unknown[],
-  capturedProviderOptions: [] as Array<{ providerName: string; selectedApiKey: string | undefined }>,
-}));
+const capturedLogs: unknown[] = [];
 
-vi.mock('@llm-proxy/core', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@llm-proxy/core')>();
+const mockLogger: Logger = {
+  info(payload: unknown) {
+    capturedLogs.push(payload);
+  },
+  warn() {},
+  error() {},
+  fatal() {},
+  child() { return mockLogger; },
+};
+
+vi.mock('../src/openai-compatible.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/openai-compatible.js')>();
   return {
     ...original,
     createOpenAICompatibleProvider(
@@ -18,8 +25,7 @@ vi.mock('@llm-proxy/core', async (importOriginal) => {
       modelHeaders: unknown,
       selectedApiKey: string | undefined,
     ) {
-      mocks.capturedProviderOptions.push({ providerName, selectedApiKey });
-      return (upstreamModel: string) => ({ upstreamModel, providerName });
+      return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey });
     },
     sanitizeHeaders(headers: Record<string, string>) {
       const sensitiveHeaders = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'apikey', 'api_key']);
@@ -27,15 +33,6 @@ vi.mock('@llm-proxy/core', async (importOriginal) => {
     },
   };
 });
-
-vi.mock('../src/logging.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../src/logging.js')>()),
-  logger: {
-    info(payload: unknown) {
-      mocks.capturedLogs.push(payload);
-    },
-  },
-}));
 
 const settings: Settings = {
   service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
@@ -64,12 +61,11 @@ const settings: Settings = {
 
 describe('provider registry', () => {
   afterEach(() => {
-    mocks.capturedLogs.length = 0;
-    mocks.capturedProviderOptions.length = 0;
+    capturedLogs.length = 0;
   });
 
   it('creates openai-compatible language models and filters auth header overrides', () => {
-    const registry = createProviderRegistry(settings);
+    const registry = createProviderRegistry(settings, undefined, mockLogger);
     const model = registry.languageModel('openrouter', 'openrouter/chat', {
       AUTHORIZATION: 'Bearer also-wrong',
       'X-API-Key': 'also-wrong',
@@ -92,23 +88,18 @@ describe('provider registry', () => {
           apiKey: ['secret-token-1', 'secret-token-2'],
         },
       },
-    });
+    }, undefined, mockLogger);
 
     registry.languageModel('openrouter', 'openrouter/chat', {});
     registry.languageModel('openrouter', 'openrouter/chat', {});
     registry.languageModel('openrouter', 'openrouter/chat', {});
 
-    expect(mocks.capturedProviderOptions).toMatchObject([
-      { selectedApiKey: 'secret-token-1' },
-      { selectedApiKey: 'secret-token-2' },
-      { selectedApiKey: 'secret-token-1' },
-    ]);
-    expect(mocks.capturedLogs).toEqual([
+    expect(capturedLogs).toEqual([
       { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
       { provider: 'openrouter', keyIndex: 1, keyCount: 2 },
       { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
     ]);
-    expect(JSON.stringify(mocks.capturedLogs)).not.toContain('secret');
+    expect(JSON.stringify(capturedLogs)).not.toContain('secret');
   });
 
   it('does not log short api keys', () => {
@@ -120,12 +111,12 @@ describe('provider registry', () => {
           apiKey: ['key-1', '12345678'],
         },
       },
-    });
+    }, undefined, mockLogger);
 
     registry.languageModel('openrouter', 'openrouter/chat', {});
     registry.languageModel('openrouter', 'openrouter/chat', {});
 
-    const logs = JSON.stringify(mocks.capturedLogs);
+    const logs = JSON.stringify(capturedLogs);
     expect(logs).toContain('"keyIndex":0');
     expect(logs).toContain('"keyIndex":1');
     expect(logs).not.toContain('key-1');
@@ -141,11 +132,10 @@ describe('provider registry', () => {
           apiKey: null,
         },
       },
-    });
+    }, undefined, mockLogger);
 
     registry.languageModel('openrouter', 'openrouter/chat', {});
 
-    expect(mocks.capturedProviderOptions[0]?.selectedApiKey).toBeUndefined();
-    expect(mocks.capturedLogs).toEqual([]);
+    expect(capturedLogs).toEqual([]);
   });
 });

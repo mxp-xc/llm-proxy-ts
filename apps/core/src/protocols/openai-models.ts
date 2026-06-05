@@ -1,17 +1,6 @@
-import type { Settings } from '@llm-proxy/core';
-import { isFlatLookupEnabled } from '@llm-proxy/core';
-
-export interface OpenAIModel {
-  id: string;
-  object: 'model';
-  created: number;
-  owned_by: string;
-}
-
-export interface OpenAIModelList {
-  object: 'list';
-  data: OpenAIModel[];
-}
+import type { Settings } from '../config.js';
+import { isFlatLookupEnabled } from '../config-helpers.js';
+import type { OpenAIModel, OpenAIModelList } from './openai-types.js';
 
 export function listModels(settings: Settings): OpenAIModelList {
   const data: OpenAIModel[] = [];

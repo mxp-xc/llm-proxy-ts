@@ -1,5 +1,6 @@
-import type { PluginConfig, ProviderConfig, Settings } from '@llm-proxy/core';
-import { isFlatLookupEnabled, assertKnownPlugins, resolvePluginConfigs } from '@llm-proxy/core';
+import type { PluginConfig, ProviderConfig, Settings } from './config.js';
+import { isFlatLookupEnabled } from './config-helpers.js';
+import { assertKnownPlugins, resolvePluginConfigs } from './plugins/registry.js';
 
 export interface RouteMatch {
   providerName: string;
