@@ -29,6 +29,13 @@ export const oauthConfigSchema = z.object({
   authFile: z.string().optional(),
 });
 
+export const authConfigSchema = z.object({
+  /** 文件路径或 npm 包名，启动时动态 import 加载 */
+  module: z.string().min(1),
+  /** 插件自定义配置 */
+  config: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const providerConfigSchema = z.object({
   type: z.literal('openai-compatible'),
   baseURL: z.string().url(),
@@ -38,8 +45,12 @@ export const providerConfigSchema = z.object({
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
+  auth: authConfigSchema.optional(),
   modelsEndpoint: z.string().min(1).optional(),
-});
+}).refine(
+  (data) => !(data.oauth && data.auth),
+  { message: 'Provider cannot have both oauth and auth; use one or the other', path: ['auth'] },
+);
 
 export const settingsSchema = z.object({
   $schema: z.string().optional(),
@@ -71,6 +82,7 @@ export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>;
 /** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
 export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
+export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 export type Settings = z.infer<typeof settingsSchema>;
 

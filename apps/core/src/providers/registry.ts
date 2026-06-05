@@ -1,6 +1,10 @@
 import type { LanguageModel } from 'ai';
-import type { Settings, OAuthConfig, TokenManager, Logger } from '@llm-proxy/core';
-import { createOpenAICompatibleProvider, sanitizeHeaders } from '@llm-proxy/core';
+import type { Settings, OAuthConfig, ProviderConfig } from '../config.js';
+import type { TokenManager } from '../oauth/index.js';
+import type { Logger } from '../types.js';
+import type { AuthPluginContext, ResolvedAuthPlugin } from '../auth/types.js';
+import { createPluginStore } from '../auth/store-adapter.js';
+import { createOpenAICompatibleProvider, sanitizeHeaders } from '../openai-compatible.js';
 
 const noopLogger: Logger = {
   info() {},
@@ -19,6 +23,8 @@ export function createProviderRegistry(
   settings: Settings,
   tokenManager?: TokenManager,
   logger?: Logger,
+  authPlugins?: Map<string, ResolvedAuthPlugin>,
+  authFilePath?: string,
 ): ProviderRegistry {
   const log = logger ?? noopLogger;
   const apiKeyIndexes = new Map<string, number>();
@@ -28,6 +34,19 @@ export function createProviderRegistry(
       const provider = settings.providers[providerName];
       if (!provider) {
         throw new Error(`Unknown provider '${providerName}'`);
+      }
+
+      // Auth 插件路径：使用插件的 fetch wrapper
+      if (provider.auth && authPlugins) {
+        const resolved = authPlugins.get(providerName);
+        if (!resolved) {
+          throw new Error(`Auth plugin not loaded for provider '${providerName}'`);
+        }
+        const ctx = buildAuthPluginContext(providerName, provider, resolved, log, authFilePath);
+        const authFetch = resolved.plugin.createFetch(ctx);
+        return createOpenAICompatibleProvider(
+          providerName, provider, settings, modelHeaders, undefined, authFetch,
+        )(upstreamModel);
       }
 
       // OAuth 路径：使用动态 fetch 注入 token
@@ -105,4 +124,20 @@ function selectApiKey(
   }
   apiKeyIndexes.set(providerName, index + 1);
   return { apiKey: selectedApiKey, index: selectedIndex, count: apiKey.length };
+}
+
+function buildAuthPluginContext(
+  providerName: string,
+  provider: ProviderConfig,
+  resolved: ResolvedAuthPlugin,
+  log: Logger,
+  authFilePath?: string,
+): AuthPluginContext {
+  return {
+    providerName,
+    baseURL: provider.baseURL,
+    config: provider.auth?.config ?? {},
+    store: authFilePath ? createPluginStore(authFilePath, providerName) : undefined,
+    log: log.child({ component: 'auth-plugin', plugin: resolved.plugin.name, provider: providerName }),
+  };
 }

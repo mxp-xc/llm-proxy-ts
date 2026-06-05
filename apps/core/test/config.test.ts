@@ -262,4 +262,93 @@ describe('config', () => {
     const settings = await loadSettingsFromFile(settingsPath);
     expect(settings.providers.custom?.modelsEndpoint).toBeUndefined();
   });
+
+  it('rejects provider with both oauth and auth', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "conflicted": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "oauth": {
+              "flow": "client_credentials",
+              "clientId": "id",
+              "clientSecret": "secret",
+              "tokenUrl": "https://auth.example.com/token"
+            },
+            "auth": {
+              "module": "./my-plugin.mjs",
+              "config": {}
+            },
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow(
+      /cannot have both oauth and auth/,
+    );
+  });
+
+  it('accepts provider with only auth', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "auth-only": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "auth": {
+              "module": "./my-plugin.mjs",
+              "config": { "tokenUrl": "https://auth.example.com/token" }
+            },
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.providers['auth-only']?.auth?.module).toBe('./my-plugin.mjs');
+    expect(settings.providers['auth-only']?.auth?.config).toEqual({ tokenUrl: 'https://auth.example.com/token' });
+  });
+
+  it('accepts provider with only oauth', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "oauth-only": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "oauth": {
+              "flow": "client_credentials",
+              "clientId": "id",
+              "clientSecret": "secret",
+              "tokenUrl": "https://auth.example.com/token"
+            },
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.providers['oauth-only']?.oauth?.flow).toBe('client_credentials');
+    expect(settings.providers['oauth-only']?.auth).toBeUndefined();
+  });
 });

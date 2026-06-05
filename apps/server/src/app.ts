@@ -1,16 +1,10 @@
 import { generateText, streamText } from 'ai';
 import { Hono } from 'hono';
-import type { Settings } from '@llm-proxy/core';
-import { OAuthError } from '@llm-proxy/core';
-import type { TokenManager, AuthStatus } from '@llm-proxy/core';
+import type { Settings, TokenManager, AuthStatus, ResolvedAuthPlugin } from '@llm-proxy/core';
+import { OAuthError, inspectVendorSseError, mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest, renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE, getModel, listModels, RoutingError, RoutingTable, createProviderRegistry } from '@llm-proxy/core';
+import type { ProviderRegistry } from '@llm-proxy/core';
 import pino from 'pino';
 import { logger as defaultLogger, requestId } from './logging.js';
-import { inspectVendorSseError } from './plugins/vendor-sse-error.js';
-import { mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest } from './protocols/openai-chat.js';
-import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from './protocols/openai-chat-renderer.js';
-import { getModel, listModels } from './protocols/openai-models.js';
-import { createProviderRegistry, type ProviderRegistry } from './providers/registry.js';
-import { RoutingError, RoutingTable } from './routing.js';
 import { createOAuthCallbackApp } from './oauth/callback.js';
 import type { ProviderAuthStatus } from './oauth/startup.js';
 
@@ -29,6 +23,8 @@ export interface AppDependencies {
   tokenManager?: TokenManager;
   nonce?: string;
   authStatuses?: ProviderAuthStatus[];
+  authPlugins?: Map<string, ResolvedAuthPlugin>;
+  authFilePath?: string;
 }
 
 type AppEnv = {
@@ -43,15 +39,18 @@ type AppEnv = {
 
 export function createApp({
   settings,
-  providerRegistry = createProviderRegistry(settings),
-  gateway = defaultGateway,
-  logger = defaultLogger,
   tokenManager,
+  logger = defaultLogger,
+  providerRegistry,
+  gateway = defaultGateway,
   nonce,
   authStatuses,
+  authPlugins,
+  authFilePath,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const routingTable = RoutingTable.fromSettings(settings);
+  const resolvedRegistry = providerRegistry ?? createProviderRegistry(settings, tokenManager, logger, authPlugins, authFilePath);
 
   // 挂载 OAuth 回调路由
   if (tokenManager && nonce) {
@@ -161,7 +160,7 @@ export function createApp({
     const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName);
     let model;
     try {
-      model = providerRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
+      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(

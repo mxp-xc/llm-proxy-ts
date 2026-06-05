@@ -64,6 +64,31 @@
     //     "scopes": ["api.read"]
     //   },
     //   "models": { "chat": { "upstreamModel": "model-y" } }
+    // },
+    // Auth plugin example (Baidu — access_token in URL query):
+    // "baidu": {
+    //   "type": "openai-compatible",
+    //   "baseURL": "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop",
+    //   "auth": {
+    //     "module": "./plugins/auth-baidu/index.ts",
+    //     "config": {
+    //       "clientId": "${BAIDU_CLIENT_ID}",
+    //       "clientSecret": "${BAIDU_CLIENT_SECRET}"
+    //     }
+    //   },
+    //   "models": { "chat": { "upstreamModel": "completions_pro" } }
+    // },
+    // Auth plugin example (ZhipuAI — self-signed JWT):
+    // "zhipu": {
+    //   "type": "openai-compatible",
+    //   "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+    //   "auth": {
+    //     "module": "./plugins/auth-zhipu/index.ts",
+    //     "config": {
+    //       "apiKey": "${ZHIPU_API_KEY}"
+    //     }
+    //   },
+    //   "models": { "chat": { "upstreamModel": "glm-4" } }
     // }
   }
 }
