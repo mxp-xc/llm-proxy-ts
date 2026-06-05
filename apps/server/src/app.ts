@@ -190,7 +190,10 @@ export function createApp({
         if (inspection.error) {
           return c.json(inspection.error.body, inspection.error.status as 429);
         }
-        return new Response(readableStreamFromAsyncIterable(renderOpenAIChatCompletionSSE({ model: request.model, stream: inspection.stream })), {
+        const reqLogger = c.get('logger');
+        return new Response(readableStreamFromAsyncIterable(renderOpenAIChatCompletionSSE({ model: request.model, stream: inspection.stream }), (error) => {
+          reqLogger.error({ err: error }, 'stream consumption failed');
+        }), {
           headers: { 'content-type': 'text/event-stream' },
         });
       } catch (error) {
@@ -366,15 +369,20 @@ function inspectStreamChunk(plugins: Settings['providers'][string]['plugins'], c
   return undefined;
 }
 
-function readableStreamFromAsyncIterable(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
+function readableStreamFromAsyncIterable(iterable: AsyncIterable<Uint8Array>, onError: (error: unknown) => void): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]();
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const next = await iterator.next();
-      if (next.done) {
-        controller.close();
-      } else {
-        controller.enqueue(next.value);
+      try {
+        const next = await iterator.next();
+        if (next.done) {
+          controller.close();
+        } else {
+          controller.enqueue(next.value);
+        }
+      } catch (error) {
+        onError(error);
+        controller.error(error);
       }
     },
   });

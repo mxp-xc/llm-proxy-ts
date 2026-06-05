@@ -112,6 +112,17 @@ async function main(): Promise<void> {
   });
 }
 
+// Global uncaught error handlers — ensure anything that escapes per-request
+// error handling still reaches pino instead of silently disappearing to stderr.
+process.on('uncaughtException', (error) => {
+  logger.fatal({ err: error }, 'uncaught exception');
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: reason }, 'unhandled rejection');
+});
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   await main();
 }
