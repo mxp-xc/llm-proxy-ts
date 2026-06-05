@@ -32,8 +32,8 @@
 |---|---|---|
 | `models sync` | `cli.ts` → `discover-models.ts` + `models-sync.ts` | 发现上游可用模型并交互式选择写入 `settings.jsonc` |
 
-- `discover-models.ts` — 调用上游 `/v1/models` 获取模型列表
-- `models-sync.ts` — 交互式选择模型并写入配置（仅写入与默认值不同的字段）
+- `discover-models.ts` — 调用上游 models 端点获取模型列表，支持自定义 URL、OAuth token 和静态 headers
+- `models-sync.ts` — 交互式选择模型并写入配置（仅写入与默认值不同的字段）；支持 OAuth provider 自动刷新 token
 - `settings-writer.ts` — JSONC 配置的安全读写（保留注释和格式）
 
 ## 导出 API
@@ -53,6 +53,8 @@
 - **代理支持：** 可选 undici `ProxyAgent`，支持配置 TLS 验证。
 - **OAuth fetch 组合：** `createOpenAICompatibleProvider` 接受可选的 `oauthFetch` 参数，与 proxy fetch 组合（OAuth → proxy → global）。OAuth 激活时不设 `apiKey`，避免 `Authorization` 头冲突。
 - **Token 过期余量：** `isTokenValid` 使用 30 秒余量提前刷新，避免请求途中 token 过期。
+- **自定义 models 端点：** `providerConfigSchema.modelsEndpoint` 支持相对路径（拼接到 baseURL）或完整 URL 覆盖。未设置时默认 `{baseURL}/models`。
+- **CLI OAuth 支持：** `models sync` 命令自动检测 OAuth provider，使用 `TokenManager` 解析 token。`authorization_code` 流程未登录时跳过并提示登录 URL；`client_credentials` 流程自动刷新。
 
 ## 关键依赖
 

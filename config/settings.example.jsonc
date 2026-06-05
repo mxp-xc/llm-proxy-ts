@@ -18,6 +18,11 @@
         "example-api-key",
         "${LOCAL_OPENAI_API_KEY_2}"
       ],
+      // Custom models API endpoint (default: /models appended to baseURL).
+      // Relative path: appended to baseURL.
+      // "modelsEndpoint": "/v1/models",
+      // Full URL: used directly, ignoring baseURL.
+      // "modelsEndpoint": "https://other.api.com/list",
       // Set enableFlatModelLookup to override the routing-level setting per-provider.
       // If omitted, inherits from routing.enableFlatModelLookup.
       // "enableFlatModelLookup": false,

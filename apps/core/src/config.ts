@@ -38,6 +38,7 @@ export const providerConfigSchema = z.object({
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
+  modelsEndpoint: z.string().min(1).optional(),
 });
 
 export const settingsSchema = z.object({

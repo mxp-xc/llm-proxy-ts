@@ -172,4 +172,94 @@ describe('config', () => {
     expect(settings.providers.openrouter?.enableFlatModelLookup).toBe(true);
     expect(settings.routing.enableFlatModelLookup).toBe(false);
   });
+
+  it('accepts modelsEndpoint in provider config', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "modelsEndpoint": "/v1/models",
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.providers.custom?.modelsEndpoint).toBe('/v1/models');
+  });
+
+  it('accepts modelsEndpoint as full URL', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "modelsEndpoint": "https://other.api.com/list",
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.providers.custom?.modelsEndpoint).toBe('https://other.api.com/list');
+  });
+
+  it('rejects empty modelsEndpoint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "modelsEndpoint": "",
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow();
+  });
+
+  it('allows modelsEndpoint to be omitted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.providers.custom?.modelsEndpoint).toBeUndefined();
+  });
 });

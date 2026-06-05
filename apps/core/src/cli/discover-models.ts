@@ -20,31 +20,64 @@ export interface DiscoverModelsOptions {
   apiKey: string | string[] | null | undefined;
   proxySettings: Settings['proxy'];
   timeoutMs?: number;
+  /** 自定义 models API 端点：相对路径拼接到 baseURL，或以 http(s):// 开头的完整 URL */
+  modelsEndpoint?: string | undefined;
+  /** provider 级静态 headers，作为请求基础 headers */
+  headers?: Record<string, string> | undefined;
+  /** 已解析的 OAuth token，优先于 apiKey 设置 Authorization */
+  oauthToken?: { tokenType: string; accessToken: string } | undefined;
+}
+
+/**
+ * 解析 models API 的请求 URL。
+ *
+ * - modelsEndpoint 未设置 → `{baseURL}/models`
+ * - 以 `http://` 或 `https://` 开头 → 作为完整 URL 直接使用
+ * - 其他 → 作为相对路径拼接到 baseURL 后
+ */
+export function resolveModelsUrl(baseURL: string, modelsEndpoint?: string): string {
+  if (!modelsEndpoint) {
+    return `${baseURL.replace(/\/+$/, '')}/models`;
+  }
+  if (/^https?:\/\//i.test(modelsEndpoint)) {
+    return modelsEndpoint;
+  }
+  const base = baseURL.replace(/\/+$/, '');
+  const path = modelsEndpoint.startsWith('/') ? modelsEndpoint : `/${modelsEndpoint}`;
+  return `${base}${path}`;
 }
 
 /**
  * 从上游 OpenAI-compatible provider 获取可用模型列表。
- * 调用 GET {baseURL}/models，复用项目的代理配置。
+ * 支持 OAuth token、自定义 headers 和自定义 models 端点。
  */
 export async function fetchUpstreamModels({
   baseURL,
   apiKey,
   proxySettings,
   timeoutMs = 15_000,
+  modelsEndpoint,
+  headers: providerHeaders,
+  oauthToken,
 }: DiscoverModelsOptions): Promise<OpenAIModel[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
     : globalThis.fetch;
 
-  const headers: Record<string, string> = {};
-  if (apiKey) {
+  // 1. 铺 provider 级静态 headers
+  const headers: Record<string, string> = { ...providerHeaders };
+
+  // 2. 显式鉴权优先于静态 headers 中的 Authorization
+  if (oauthToken) {
+    headers['Authorization'] = `${oauthToken.tokenType} ${oauthToken.accessToken}`;
+  } else if (apiKey) {
     const key = Array.isArray(apiKey) ? apiKey[0] : apiKey;
     if (key) {
       headers['Authorization'] = `Bearer ${key}`;
     }
   }
 
-  const url = `${baseURL.replace(/\/+$/, '')}/models`;
+  const url = resolveModelsUrl(baseURL, modelsEndpoint);
   const response = await fetchFn(url, {
     headers,
     signal: AbortSignal.timeout(timeoutMs),

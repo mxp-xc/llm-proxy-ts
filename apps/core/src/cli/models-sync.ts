@@ -1,8 +1,10 @@
 import * as clack from '@clack/prompts';
 import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { parse, type ParseError } from 'jsonc-parser';
 import { loadSettingsFromFile, resolveEnvPlaceholders } from '../config.js';
 import type { ModelRouteInput, Settings } from '../config.js';
+import { TokenManager, OAuthError } from '../oauth/index.js';
 import { fetchUpstreamModels, type OpenAIModel } from './discover-models.js';
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js';
 
@@ -90,6 +92,18 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   }
 
   // 3. 发现模型
+
+  // 延迟初始化 TokenManager（仅当存在 OAuth provider 时）
+  let tokenManager: TokenManager | undefined;
+  const hasOAuthProviders = selectedProviders.some(
+    (name) => settings.providers[name]?.oauth,
+  );
+  if (hasOAuthProviders) {
+    const authFilePath = join(dirname(settingsPath), 'auth.json');
+    tokenManager = new TokenManager(authFilePath);
+    await tokenManager.load();
+  }
+
   const results: ProviderModelsResult[] = [];
 
   for (const providerName of selectedProviders) {
@@ -104,10 +118,35 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         ? (resolveEnvPlaceholders(rawProvider['apiKey']) as string | string[] | null)
         : provider.apiKey;
 
+      // 解析 OAuth token（如果配置了 OAuth）
+      let oauthToken: { tokenType: string; accessToken: string } | undefined;
+      if (provider.oauth && tokenManager) {
+        const status = tokenManager.getStatus(providerName, provider.oauth);
+        if (status === 'needs_login') {
+          s.stop(`Skipped ${providerName}`);
+          clack.log.warn(
+            `${providerName}: OAuth login required. Start the server and visit /oauth/login/${providerName} to authenticate.`,
+          );
+          continue;
+        }
+        try {
+          const token = await tokenManager.ensureValidToken(providerName, provider.oauth);
+          oauthToken = { tokenType: token.tokenType, accessToken: token.accessToken };
+        } catch (err) {
+          s.stop(`Skipped ${providerName}`);
+          const msg = err instanceof OAuthError ? err.message : (err instanceof Error ? err.message : String(err));
+          clack.log.warn(`${providerName}: OAuth token refresh failed — ${msg}`);
+          continue;
+        }
+      }
+
       const models = await fetchUpstreamModels({
         baseURL: provider.baseURL,
         apiKey: resolvedApiKey,
         proxySettings: settings.proxy,
+        modelsEndpoint: provider.modelsEndpoint,
+        headers: provider.headers,
+        oauthToken,
       });
 
       s.stop(`Found ${models.length} models from ${providerName}`);
