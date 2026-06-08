@@ -76,6 +76,7 @@ export const openAIChatRequestSchema = z
 export type OpenAIChatRequest = z.infer<typeof openAIChatRequestSchema>
 
 export interface AISDKInput {
+  system?: string
   messages: Array<Record<string, unknown>>
   temperature?: number
   topP?: number

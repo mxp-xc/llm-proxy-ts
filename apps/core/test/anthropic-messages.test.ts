@@ -54,7 +54,7 @@ describe('Anthropic Messages protocol mapping', () => {
     })
   })
 
-  it('maps system prompt as a leading system message', () => {
+  it('maps system prompt to input.system', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
       max_tokens: 1024,
@@ -62,8 +62,8 @@ describe('Anthropic Messages protocol mapping', () => {
       messages: [{ role: 'user', content: 'hello' }],
     })
 
-    expect(input.messages[0]).toEqual({ role: 'system', content: 'You are a helpful assistant.' })
-    expect(input.messages[1]).toEqual({ role: 'user', content: 'hello' })
+    expect(input.system).toBe('You are a helpful assistant.')
+    expect(input.messages).toEqual([{ role: 'user', content: 'hello' }])
   })
 
   it('maps system prompt array by joining text blocks', () => {
@@ -77,10 +77,7 @@ describe('Anthropic Messages protocol mapping', () => {
       messages: [{ role: 'user', content: 'hello' }],
     })
 
-    expect(input.messages[0]).toEqual({
-      role: 'system',
-      content: 'You are a helpful assistant.\nBe concise.',
-    })
+    expect(input.system).toBe('You are a helpful assistant.\nBe concise.')
   })
 
   it('maps tool_use content blocks to AI SDK tool-call parts', () => {
@@ -301,12 +298,9 @@ describe('Anthropic Messages protocol mapping', () => {
       ],
     })
 
-    // system 角色消息提取合并到前置 system message
-    expect(input.messages[0]).toEqual({
-      role: 'system',
-      content: 'Base system prompt.\nYou are Claude Code.',
-    })
-    expect(input.messages[1]).toEqual({ role: 'user', content: 'hello' })
+    // system 角色消息提取到 input.system，不放入 messages
+    expect(input.system).toBe('Base system prompt.\nYou are Claude Code.')
+    expect(input.messages).toEqual([{ role: 'user', content: 'hello' }])
   })
 
   it('handles system role messages without top-level system field', () => {
@@ -319,11 +313,8 @@ describe('Anthropic Messages protocol mapping', () => {
       ],
     })
 
-    expect(input.messages[0]).toEqual({
-      role: 'system',
-      content: 'You are a helpful assistant.',
-    })
-    expect(input.messages[1]).toEqual({ role: 'user', content: 'hello' })
+    expect(input.system).toBe('You are a helpful assistant.')
+    expect(input.messages).toEqual([{ role: 'user', content: 'hello' }])
   })
 
   it('accepts thinking with display field', () => {
