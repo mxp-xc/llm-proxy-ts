@@ -10,10 +10,10 @@ Python/FastAPI 原版：[llm-proxy](https://github.com/mxp-xc/llm-proxy)
 pnpm install
 cp config/settings.example.jsonc config/settings.jsonc
 # 编辑 config/settings.jsonc，填入上游 baseURL 和 apiKey
-pnpm dev
+pnpm dev serve
 ```
 
-自定义配置路径：`LLM_PROXY_SETTINGS_FILE=path/to/settings.jsonc pnpm dev`
+自定义配置路径：`LLM_PROXY_SETTINGS_FILE=path/to/settings.jsonc pnpm dev serve`
 
 ## API
 
@@ -42,20 +42,29 @@ pnpm dev
 ## 项目结构
 
 ```
-apps/core/     @llm-proxy/core   — 配置系统、Provider 工厂、CLI 工具
+apps/core/     @llm-proxy/core   — 配置系统、Provider 工厂、插件系统、OAuth、CLI
 apps/server/   @llm-proxy/server — Hono HTTP 服务器
+plugins/       示例外部插件（auth-demo）
 config/        示例配置 + JSON Schema
 ```
 
-## 命令
+## CLI 命令
 
-| 命令                   | 作用                                             |
-| ---------------------- | ------------------------------------------------ |
-| `pnpm dev`             | 启动开发服务器                                   |
-| `pnpm test`            | 运行全部测试                                     |
-| `pnpm typecheck`       | 类型检查                                         |
-| `pnpm generate:schema` | 从 Zod schema 生成 `config/settings.schema.json` |
-| `pnpm models:sync`     | 交互式同步上游模型到配置文件                     |
+基于 [Commander.js](https://github.com/tj/commander.js)，通过 `pnpm dev <command>` 调用。
+
+| 命令                        | 作用                                             |
+| --------------------------- | ------------------------------------------------ |
+| `pnpm dev serve`            | 启动开发服务器（默认 `tsx watch` 热重载）        |
+| `pnpm dev serve --no-watch` | 启动服务器（无热重载）                           |
+| `pnpm dev models sync`      | 交互式同步上游模型到配置文件                     |
+| `pnpm dev models sync -p <name>` | 同步指定 provider                          |
+| `pnpm dev models sync --dry-run` | 预览变更，不写入                            |
+| `pnpm dev models list`      | 列出所有已配置模型（表格）                       |
+| `pnpm dev models list --format json` | 列出所有已配置模型（JSON）               |
+| `pnpm models:sync`          | 同 `pnpm dev models sync`（向后兼容）            |
+| `pnpm test`                 | 运行全部测试                                     |
+| `pnpm typecheck`            | 类型检查                                         |
+| `pnpm generate:schema`      | 从 Zod schema 生成 `config/settings.schema.json` |
 
 ## 安全
 

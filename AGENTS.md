@@ -21,14 +21,26 @@ llm-proxy-ts/
 
 `server` 依赖 `core`（`workspace:*`）。各包有独立的 `AGENTS.md` 描述模块细节。
 
+## CLI 框架
+
+基于 [Commander.js v15](https://github.com/tj/commander.js)。命令定义在 `apps/core/src/cli/` 下各文件的 `create*Command()` 函数中，业务逻辑（`runModelsSync`/`runModelsList` 等）保持框架无关。新增命令只需：
+
+1. 在对应文件添加 `createXxxCommand()` 返回 `Command` 实例
+2. 在 `models.ts` 或 `cli.ts` 中 `addCommand()` 注册
+
 ## 通用命令
 
-| 命令 | 作用 |
-|---|---|
-| `pnpm install` | 安装依赖 |
-| `pnpm dev` | 启动开发服务器（`tsx watch`） |
-| `pnpm test` | 运行全部测试（Vitest，无网络） |
-| `pnpm typecheck` | `tsc --noEmit` |
+| 命令                        | 作用                                  |
+| --------------------------- | ------------------------------------- |
+| `pnpm install`              | 安装依赖                              |
+| `pnpm dev serve`            | 启动开发服务器（`tsx watch`）         |
+| `pnpm dev serve --no-watch` | 启动服务器（无 watch）                |
+| `pnpm dev models sync`      | 交互式同步上游模型列表到 settings     |
+| `pnpm dev models list`      | 列出所有已配置的模型                  |
+| `pnpm dev`                  | 显示帮助信息                          |
+| `pnpm models:sync`          | 同 `pnpm dev models sync`（向后兼容） |
+| `pnpm test`                 | 运行全部测试（Vitest，无网络）        |
+| `pnpm typecheck`            | `tsc --noEmit`                        |
 
 运行单个测试：`pnpm --filter <pkg> test test/xxx.test.ts`
 

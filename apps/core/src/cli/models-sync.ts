@@ -1,3 +1,4 @@
+import { Command } from 'commander'
 import * as clack from '@clack/prompts'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
@@ -9,6 +10,7 @@ import { PluginRegistry } from '../plugins/registry.js'
 import type { DiscoveredModel } from '../plugins/types.js'
 import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover-models.js'
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js'
+import { resolveCliContext } from './context.js'
 
 export interface ModelsSyncOptions {
   settingsPath: string
@@ -329,4 +331,20 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   }
 
   clack.outro('Done')
+}
+
+export function createModelsSyncCommand(): Command {
+  return new Command('sync')
+    .description('Discover and select models from upstream providers')
+    .option('-p, --provider <name>', 'Skip provider selection, sync specific provider')
+    .option('--dry-run', 'Preview changes without writing to settings')
+    .action(async (opts) => {
+      const { settingsPath } = resolveCliContext()
+      const syncOpts: Parameters<typeof runModelsSync>[0] = {
+        settingsPath,
+        dryRun: opts.dryRun ?? false,
+      }
+      if (opts.provider !== undefined) syncOpts.provider = opts.provider
+      await runModelsSync(syncOpts)
+    })
 }

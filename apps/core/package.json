@@ -19,6 +19,7 @@
     "@ai-sdk/openai-compatible": "latest",
     "@clack/prompts": "^1.5.1",
     "ai": "^6.0.197",
+    "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "jsonc-parser": "latest",
     "undici": "latest",
