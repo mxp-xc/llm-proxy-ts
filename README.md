@@ -17,11 +17,11 @@ pnpm dev
 
 ## API
 
-| 端点 | 说明 |
-|---|---|
-| `GET /health` | 服务状态和 provider 数量 |
+| 端点                        | 说明                             |
+| --------------------------- | -------------------------------- |
+| `GET /health`               | 服务状态和 provider 数量         |
 | `POST /v1/chat/completions` | 非流式 + `stream: true` SSE 流式 |
-| `GET /v1/models` | 可用模型列表 |
+| `GET /v1/models`            | 可用模型列表                     |
 
 请求格式兼容 OpenAI Chat Completions API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
 
@@ -49,13 +49,13 @@ config/        示例配置 + JSON Schema
 
 ## 命令
 
-| 命令 | 作用 |
-|---|---|
-| `pnpm dev` | 启动开发服务器 |
-| `pnpm test` | 运行全部测试 |
-| `pnpm typecheck` | 类型检查 |
+| 命令                   | 作用                                             |
+| ---------------------- | ------------------------------------------------ |
+| `pnpm dev`             | 启动开发服务器                                   |
+| `pnpm test`            | 运行全部测试                                     |
+| `pnpm typecheck`       | 类型检查                                         |
 | `pnpm generate:schema` | 从 Zod schema 生成 `config/settings.schema.json` |
-| `pnpm models:sync` | 交互式同步上游模型到配置文件 |
+| `pnpm models:sync`     | 交互式同步上游模型到配置文件                     |
 
 ## 安全
 

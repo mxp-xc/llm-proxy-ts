@@ -1,17 +1,20 @@
-import { assistantModelMessageSchema, toolModelMessageSchema } from 'ai';
-import { describe, expect, it } from 'vitest';
-import { mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest } from '../src/protocols/openai-chat.js';
+import { assistantModelMessageSchema, toolModelMessageSchema } from 'ai'
+import { describe, expect, it } from 'vitest'
+import {
+  mapOpenAIChatRequestToAISDKInput,
+  validateOpenAIChatRequest,
+} from '../src/protocols/openai-chat.js'
 
 describe('OpenAI chat protocol mapping', () => {
   it('validates required model and messages', () => {
     const parsed = validateOpenAIChatRequest({
       model: 'openrouter/chat',
       messages: [{ role: 'user', content: 'hello' }],
-    });
+    })
 
-    expect(parsed.model).toBe('openrouter/chat');
-    expect(parsed.messages).toHaveLength(1);
-  });
+    expect(parsed.model).toBe('openrouter/chat')
+    expect(parsed.messages).toHaveLength(1)
+  })
 
   it('maps common OpenAI parameters to AI SDK settings', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -21,7 +24,7 @@ describe('OpenAI chat protocol mapping', () => {
       top_p: 0.9,
       max_completion_tokens: 123,
       stop: ['END'],
-    });
+    })
 
     expect(input).toMatchObject({
       messages: [{ role: 'user', content: 'hello' }],
@@ -29,8 +32,8 @@ describe('OpenAI chat protocol mapping', () => {
       topP: 0.9,
       maxOutputTokens: 123,
       stopSequences: ['END'],
-    });
-  });
+    })
+  })
 
   it('maps function tools without execute handlers', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -42,17 +45,21 @@ describe('OpenAI chat protocol mapping', () => {
           function: {
             name: 'get_weather',
             description: 'Get weather',
-            parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+            parameters: {
+              type: 'object',
+              properties: { city: { type: 'string' } },
+              required: ['city'],
+            },
           },
         },
       ],
       tool_choice: { type: 'function', function: { name: 'get_weather' } },
-    });
+    })
 
-    expect(Object.keys(input.tools ?? {})).toEqual(['get_weather']);
-    expect(input.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' });
-    expect(input.tools?.get_weather).not.toHaveProperty('execute');
-  });
+    expect(Object.keys(input.tools ?? {})).toEqual(['get_weather'])
+    expect(input.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' })
+    expect(input.tools?.get_weather).not.toHaveProperty('execute')
+  })
 
   it('maps assistant tool calls to AI SDK message parts', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -70,7 +77,7 @@ describe('OpenAI chat protocol mapping', () => {
           ],
         },
       ],
-    });
+    })
 
     expect(input.messages).toEqual([
       {
@@ -84,9 +91,9 @@ describe('OpenAI chat protocol mapping', () => {
           },
         ],
       },
-    ]);
-    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true);
-  });
+    ])
+    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
 
   it('keeps assistant text when mapping assistant messages with tool calls', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -104,17 +111,22 @@ describe('OpenAI chat protocol mapping', () => {
           ],
         },
       ],
-    });
+    })
 
     expect(input.messages[0]).toEqual({
       role: 'assistant',
       content: [
         { type: 'text', text: 'I will call the weather tool.' },
-        { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } },
+        {
+          type: 'tool-call',
+          toolCallId: 'call_1',
+          toolName: 'get_weather',
+          input: { city: 'NYC' },
+        },
       ],
-    });
-    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true);
-  });
+    })
+    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
 
   it('rejects assistant null content without tool calls', () => {
     expect(() =>
@@ -122,8 +134,8 @@ describe('OpenAI chat protocol mapping', () => {
         model: 'openrouter/chat',
         messages: [{ role: 'assistant', content: null }],
       }),
-    ).toThrow();
-  });
+    ).toThrow()
+  })
 
   it('rejects assistant messages without content or tool calls', () => {
     expect(() =>
@@ -131,8 +143,8 @@ describe('OpenAI chat protocol mapping', () => {
         model: 'openrouter/chat',
         messages: [{ role: 'assistant' }],
       }),
-    ).toThrow();
-  });
+    ).toThrow()
+  })
 
   it('rejects tool messages without a non-empty tool_call_id', () => {
     expect(() =>
@@ -140,15 +152,15 @@ describe('OpenAI chat protocol mapping', () => {
         model: 'openrouter/chat',
         messages: [{ role: 'tool', content: 'sunny' }],
       }),
-    ).toThrow();
+    ).toThrow()
 
     expect(() =>
       validateOpenAIChatRequest({
         model: 'openrouter/chat',
         messages: [{ role: 'tool', tool_call_id: '', content: 'sunny' }],
       }),
-    ).toThrow();
-  });
+    ).toThrow()
+  })
 
   it('rejects tool messages without content', () => {
     expect(() =>
@@ -156,18 +168,18 @@ describe('OpenAI chat protocol mapping', () => {
         model: 'openrouter/chat',
         messages: [{ role: 'tool', tool_call_id: 'call_1' }],
       }),
-    ).toThrow();
-  });
+    ).toThrow()
+  })
 
   it('maps tool results to the AI SDK v6 accepted output shape', () => {
     const textInput = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
       messages: [{ role: 'tool', tool_call_id: 'call_1', content: 'sunny' }],
-    });
+    })
     const jsonInput = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
       messages: [{ role: 'tool', tool_call_id: 'call_2', content: { temp: 72 } }],
-    });
+    })
 
     expect(textInput.messages[0]).toEqual({
       role: 'tool',
@@ -179,7 +191,7 @@ describe('OpenAI chat protocol mapping', () => {
           output: { type: 'text', value: 'sunny' },
         },
       ],
-    });
+    })
     expect(jsonInput.messages[0]).toEqual({
       role: 'tool',
       content: [
@@ -190,10 +202,10 @@ describe('OpenAI chat protocol mapping', () => {
           output: { type: 'json', value: { temp: 72 } },
         },
       ],
-    });
-    expect(toolModelMessageSchema.safeParse(textInput.messages[0]).success).toBe(true);
-    expect(toolModelMessageSchema.safeParse(jsonInput.messages[0]).success).toBe(true);
-  });
+    })
+    expect(toolModelMessageSchema.safeParse(textInput.messages[0]).success).toBe(true)
+    expect(toolModelMessageSchema.safeParse(jsonInput.messages[0]).success).toBe(true)
+  })
 
   it('maps provider-specific fields into provider options when provider is known', () => {
     const input = mapOpenAIChatRequestToAISDKInput(
@@ -205,7 +217,7 @@ describe('OpenAI chat protocol mapping', () => {
         extra_body: { include_reasoning: true },
       },
       'openrouter',
-    );
+    )
 
     expect(input.providerOptions).toEqual({
       openrouter: {
@@ -213,8 +225,8 @@ describe('OpenAI chat protocol mapping', () => {
         reasoning: { effort: 'high' },
         extra_body: { include_reasoning: true },
       },
-    });
-  });
+    })
+  })
 
   it('keeps provider-specific fields compatible when provider is unknown', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -222,8 +234,8 @@ describe('OpenAI chat protocol mapping', () => {
       messages: [{ role: 'user', content: 'hello' }],
       parallel_tool_calls: true,
       reasoning: { effort: 'low' },
-    });
+    })
 
-    expect(input.providerOptions).toBeUndefined();
-  });
-});
+    expect(input.providerOptions).toBeUndefined()
+  })
+})

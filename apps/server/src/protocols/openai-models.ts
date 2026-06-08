@@ -1,23 +1,23 @@
-import type { Settings } from '@llm-proxy/core';
-import { isFlatLookupEnabled } from '@llm-proxy/core';
+import type { Settings } from '@llm-proxy/core'
+import { isFlatLookupEnabled } from '@llm-proxy/core'
 
 export interface OpenAIModel {
-  id: string;
-  object: 'model';
-  created: number;
-  owned_by: string;
+  id: string
+  object: 'model'
+  created: number
+  owned_by: string
 }
 
 export interface OpenAIModelList {
-  object: 'list';
-  data: OpenAIModel[];
+  object: 'list'
+  data: OpenAIModel[]
 }
 
 export function listModels(settings: Settings): OpenAIModelList {
-  const data: OpenAIModel[] = [];
+  const data: OpenAIModel[] = []
 
   for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const flatEnabled = isFlatLookupEnabled(provider, settings);
+    const flatEnabled = isFlatLookupEnabled(provider, settings)
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
       data.push({
@@ -25,7 +25,7 @@ export function listModels(settings: Settings): OpenAIModelList {
         object: 'model',
         created: 0,
         owned_by: providerName,
-      });
+      })
 
       if (flatEnabled) {
         data.push({
@@ -33,36 +33,36 @@ export function listModels(settings: Settings): OpenAIModelList {
           object: 'model',
           created: 0,
           owned_by: providerName,
-        });
+        })
         for (const alias of model.aliases) {
           data.push({
             id: alias,
             object: 'model',
             created: 0,
             owned_by: providerName,
-          });
+          })
         }
       }
     }
   }
 
-  return { object: 'list', data };
+  return { object: 'list', data }
 }
 
 export function getModel(settings: Settings, modelId: string): OpenAIModel | null {
-  const slashIndex = modelId.indexOf('/');
+  const slashIndex = modelId.indexOf('/')
 
   // provider/modelKey 格式
   if (slashIndex > 0) {
-    const providerName = modelId.slice(0, slashIndex);
-    const modelKey = modelId.slice(slashIndex + 1);
+    const providerName = modelId.slice(0, slashIndex)
+    const modelKey = modelId.slice(slashIndex + 1)
     if (!modelKey) {
-      return null;
+      return null
     }
 
-    const provider = settings.providers[providerName];
+    const provider = settings.providers[providerName]
     if (!provider?.models[modelKey]) {
-      return null;
+      return null
     }
 
     return {
@@ -70,13 +70,13 @@ export function getModel(settings: Settings, modelId: string): OpenAIModel | nul
       object: 'model',
       created: 0,
       owned_by: providerName,
-    };
+    }
   }
 
   // 扁平名称查找 — 仅搜索启用了 flat lookup 的 provider
   for (const [providerName, provider] of Object.entries(settings.providers)) {
     if (!isFlatLookupEnabled(provider, settings)) {
-      continue;
+      continue
     }
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
@@ -86,7 +86,7 @@ export function getModel(settings: Settings, modelId: string): OpenAIModel | nul
           object: 'model',
           created: 0,
           owned_by: providerName,
-        };
+        }
       }
       if (model.aliases.includes(modelId)) {
         return {
@@ -94,10 +94,10 @@ export function getModel(settings: Settings, modelId: string): OpenAIModel | nul
           object: 'model',
           created: 0,
           owned_by: providerName,
-        };
+        }
       }
     }
   }
 
-  return null;
+  return null
 }

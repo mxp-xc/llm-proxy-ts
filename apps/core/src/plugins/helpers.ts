@@ -1,4 +1,4 @@
-import type { ProviderContext } from './types.js';
+import type { ProviderContext } from './types.js'
 
 /**
  * 简单认证结果：只需注入 headers 和/或 query params。
@@ -8,9 +8,9 @@ import type { ProviderContext } from './types.js';
  */
 export interface SimpleAuthCredentials {
   /** 要设置到请求上的 headers */
-  headers?: Record<string, string>;
+  headers?: Record<string, string>
   /** 要追加到请求 URL 上的 query 参数 */
-  query?: Record<string, string>;
+  query?: Record<string, string>
 }
 
 /**
@@ -37,47 +37,47 @@ export function createSimpleAuthFetch(
   ctx: ProviderContext,
 ): (baseFetch?: typeof fetch) => typeof fetch {
   return (baseFetch) => async (input, init) => {
-    const credentials = await acquireCredentials(ctx);
+    const credentials = await acquireCredentials(ctx)
 
     // 构建最终 URL（追加 query params）
-    let url: URL;
-    let reconstructedInput: RequestInfo | URL;
+    let url: URL
+    let reconstructedInput: RequestInfo | URL
 
     if (typeof input === 'string') {
-      url = new URL(input);
-      reconstructedInput = url;
+      url = new URL(input)
+      reconstructedInput = url
     } else if (input instanceof URL) {
-      url = new URL(input.toString());
-      reconstructedInput = url;
+      url = new URL(input.toString())
+      reconstructedInput = url
     } else {
       // Request 对象
-      url = new URL(input.url);
-      reconstructedInput = new Request(url.toString(), input);
+      url = new URL(input.url)
+      reconstructedInput = new Request(url.toString(), input)
     }
 
     if (credentials.query) {
       for (const [key, value] of Object.entries(credentials.query)) {
-        url.searchParams.set(key, value);
+        url.searchParams.set(key, value)
       }
       // URL 已修改，需要重建 input
       if (typeof input === 'string') {
-        reconstructedInput = url.toString();
+        reconstructedInput = url.toString()
       } else if (input instanceof URL) {
-        reconstructedInput = url.toString();
+        reconstructedInput = url.toString()
       } else {
-        reconstructedInput = new Request(url.toString(), input);
+        reconstructedInput = new Request(url.toString(), input)
       }
     }
 
     // 构建 headers
-    const headers = new Headers(init?.headers);
+    const headers = new Headers(init?.headers)
     if (credentials.headers) {
       for (const [key, value] of Object.entries(credentials.headers)) {
-        headers.set(key, value);
+        headers.set(key, value)
       }
     }
 
-    const fetchFn = baseFetch ?? globalThis.fetch;
-    return fetchFn(reconstructedInput, { ...init, headers });
-  };
+    const fetchFn = baseFetch ?? globalThis.fetch
+    return fetchFn(reconstructedInput, { ...init, headers })
+  }
 }

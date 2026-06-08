@@ -1,18 +1,18 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
 import {
   generateSettingsJsonSchema,
   loadSettingsFromFile,
   resolveEnvPlaceholders,
-} from '../src/config.js';
+} from '../src/config.js'
 
 describe('config', () => {
   it('loads JSONC settings and resolves env placeholders', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
-    process.env.OPENROUTER_API_KEY = 'env-secret';
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+    process.env.OPENROUTER_API_KEY = 'env-secret'
 
     await writeFile(
       settingsPath,
@@ -33,22 +33,22 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
+    const settings = await loadSettingsFromFile(settingsPath)
 
-    expect(settings.proxy).toEqual({ url: 'http://127.0.0.1:7890', verify: false });
-    expect(settings.providers.openrouter?.apiKey).toBe('env-secret');
+    expect(settings.proxy).toEqual({ url: 'http://127.0.0.1:7890', verify: false })
+    expect(settings.providers.openrouter?.apiKey).toBe('env-secret')
     expect(settings.providers.openrouter?.models['deepseek-r1']?.upstreamModel).toBe(
       'deepseek/deepseek-r1',
-    );
-  });
+    )
+  })
 
   it('loads api key arrays and resolves env placeholders', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
-    process.env.OPENROUTER_API_KEY_1 = 'env-secret-1';
-    process.env.OPENROUTER_API_KEY_2 = 'env-secret-2';
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+    process.env.OPENROUTER_API_KEY_1 = 'env-secret-1'
+    process.env.OPENROUTER_API_KEY_2 = 'env-secret-2'
 
     await writeFile(
       settingsPath,
@@ -64,34 +64,34 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
+    const settings = await loadSettingsFromFile(settingsPath)
 
-    expect(settings.providers.openrouter?.apiKey).toEqual(['env-secret-1', 'env-secret-2']);
-  });
+    expect(settings.providers.openrouter?.apiKey).toEqual(['env-secret-1', 'env-secret-2'])
+  })
 
   it('allows inline api keys', () => {
-    expect(resolveEnvPlaceholders('ak-inline')).toBe('ak-inline');
-  });
+    expect(resolveEnvPlaceholders('ak-inline')).toBe('ak-inline')
+  })
 
   it('rejects service ports outside the TCP port range', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
       `{
         "service": { "port": 65536 }
       }`,
-    );
+    )
 
-    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow();
-  });
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow()
+  })
 
   it('rejects empty model aliases', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -106,14 +106,14 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow();
-  });
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow()
+  })
 
   it('rejects empty api key arrays', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -129,26 +129,26 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow();
-  });
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow()
+  })
 
   it('generates a JSON schema from the Zod settings schema', () => {
-    const schema = generateSettingsJsonSchema();
+    const schema = generateSettingsJsonSchema()
 
     expect(schema).toMatchObject({
       $schema: 'http://json-schema.org/draft-07/schema#',
       title: 'Settings',
       type: 'object',
-    });
-    expect(JSON.stringify(schema)).toContain('providers');
-    expect(JSON.stringify(schema)).toContain('apiKey');
-  });
+    })
+    expect(JSON.stringify(schema)).toContain('providers')
+    expect(JSON.stringify(schema)).toContain('apiKey')
+  })
 
   it('accepts enableFlatModelLookup per-provider override', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -166,16 +166,16 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers.openrouter?.enableFlatModelLookup).toBe(true);
-    expect(settings.routing.enableFlatModelLookup).toBe(false);
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers.openrouter?.enableFlatModelLookup).toBe(true)
+    expect(settings.routing.enableFlatModelLookup).toBe(false)
+  })
 
   it('accepts modelsEndpoint in provider config', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -190,15 +190,15 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers.custom?.modelsEndpoint).toBe('/v1/models');
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers.custom?.modelsEndpoint).toBe('/v1/models')
+  })
 
   it('accepts modelsEndpoint as full URL', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -213,15 +213,15 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers.custom?.modelsEndpoint).toBe('https://other.api.com/list');
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers.custom?.modelsEndpoint).toBe('https://other.api.com/list')
+  })
 
   it('rejects empty modelsEndpoint', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -236,14 +236,14 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow();
-  });
+    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow()
+  })
 
   it('allows modelsEndpoint to be omitted', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -257,15 +257,15 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers.custom?.modelsEndpoint).toBeUndefined();
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers.custom?.modelsEndpoint).toBeUndefined()
+  })
 
   it('rejects provider with both oauth and auth plugin targeting it', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -288,18 +288,18 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
     // Schema no longer has auth field — oauth+auth conflict is now validated
     // at runtime by PluginRegistry (oauth + auth plugin targeting same provider).
     // The schema-level test just verifies that oauth alone is valid.
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers['conflicted']?.oauth?.flow).toBe('client_credentials');
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers['conflicted']?.oauth?.flow).toBe('client_credentials')
+  })
 
   it('accepts provider with oauth only', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -319,15 +319,15 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers['oauth-only']?.oauth?.flow).toBe('client_credentials');
-  });
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.providers['oauth-only']?.oauth?.flow).toBe('client_credentials')
+  })
 
   it('accepts global plugins array', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
 
     await writeFile(
       settingsPath,
@@ -345,12 +345,12 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.plugins).toHaveLength(2);
-    expect(settings.plugins[0]).toEqual({ name: 'vendor_sse_error', config: {}, providers: [] });
-    expect(settings.plugins[1]?.name).toBe('my-auth');
-    expect(settings.plugins[1]?.providers).toEqual(['auth-only']);
-  });
-});
+    const settings = await loadSettingsFromFile(settingsPath)
+    expect(settings.plugins).toHaveLength(2)
+    expect(settings.plugins[0]).toEqual({ name: 'vendor_sse_error', config: {}, providers: [] })
+    expect(settings.plugins[1]?.name).toBe('my-auth')
+    expect(settings.plugins[1]?.providers).toEqual(['auth-only'])
+  })
+})

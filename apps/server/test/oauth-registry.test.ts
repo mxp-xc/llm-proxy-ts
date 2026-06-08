@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import type { Settings, OAuthConfig } from '@llm-proxy/core';
-import { TokenManager, OAuthError } from '@llm-proxy/core';
-import { createProviderRegistry } from '@llm-proxy/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import type { Settings, OAuthConfig } from '@llm-proxy/core'
+import { TokenManager, OAuthError } from '@llm-proxy/core'
+import { createProviderRegistry } from '@llm-proxy/core'
 
 const oauthConfig: OAuthConfig = {
   flow: 'client_credentials',
@@ -12,7 +12,7 @@ const oauthConfig: OAuthConfig = {
   clientSecret: 'test-client-secret',
   tokenUrl: 'https://auth.example.com/oauth2/token',
   scopes: [],
-};
+}
 
 function makeSettings(providers: Settings['providers'] = {}): Settings {
   return {
@@ -22,19 +22,19 @@ function makeSettings(providers: Settings['providers'] = {}): Settings {
     routing: { enableFlatModelLookup: false },
     plugins: [],
     providers,
-  };
+  }
 }
 
 const mocks = vi.hoisted(() => ({
   capturedOptions: [] as Array<{
-    providerName: string;
-    selectedApiKey: string | undefined;
-    hasOauthFetch: boolean;
+    providerName: string
+    selectedApiKey: string | undefined
+    hasOauthFetch: boolean
   }>,
-}));
+}))
 
 vi.mock('../../core/src/openai-compatible.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../core/src/openai-compatible.js')>();
+  const original = await importOriginal<typeof import('../../core/src/openai-compatible.js')>()
   return {
     ...original,
     createOpenAICompatibleProvider(
@@ -49,40 +49,53 @@ vi.mock('../../core/src/openai-compatible.js', async (importOriginal) => {
         providerName,
         selectedApiKey,
         hasOauthFetch: oauthFetch !== undefined,
-      });
-      return (upstreamModel: string) => ({ upstreamModel, providerName });
+      })
+      return (upstreamModel: string) => ({ upstreamModel, providerName })
     },
     sanitizeHeaders(headers: Record<string, string>) {
-      const sensitiveHeaders = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'apikey', 'api_key']);
-      return Object.fromEntries(Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())));
+      const sensitiveHeaders = new Set([
+        'authorization',
+        'proxy-authorization',
+        'x-api-key',
+        'api-key',
+        'apikey',
+        'api_key',
+      ])
+      return Object.fromEntries(
+        Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())),
+      )
     },
-  };
-});
+  }
+})
 
 describe('OAuth provider registry', () => {
-  let tempDir: string;
-  let authFilePath: string;
+  let tempDir: string
+  let authFilePath: string
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'oauth-registry-test-'));
-    authFilePath = join(tempDir, 'auth.json');
-  });
+    tempDir = await mkdtemp(join(tmpdir(), 'oauth-registry-test-'))
+    authFilePath = join(tempDir, 'auth.json')
+  })
 
   afterEach(async () => {
-    vi.restoreAllMocks();
-    mocks.capturedOptions.length = 0;
-    await rm(tempDir, { recursive: true, force: true });
-  });
+    vi.restoreAllMocks()
+    mocks.capturedOptions.length = 0
+    await rm(tempDir, { recursive: true, force: true })
+  })
 
   it('uses oauthFetch when provider has oauth config', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        access_token: 'oauth-token',
-        expires_in: 3600,
-        token_type: 'Bearer',
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            access_token: 'oauth-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+          }),
       }),
-    }));
+    )
 
     const settings = makeSettings({
       'oauth-provider': {
@@ -94,19 +107,19 @@ describe('OAuth provider registry', () => {
         models: { chat: { upstreamModel: 'm', aliases: [], headers: {}, plugins: [] } },
         oauth: oauthConfig,
       },
-    });
+    })
 
-    const tokenManager = new TokenManager(authFilePath);
-    await tokenManager.load();
+    const tokenManager = new TokenManager(authFilePath)
+    await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager);
-    registry.languageModel('oauth-provider', 'm', {});
+    const registry = await createProviderRegistry(settings, tokenManager)
+    registry.languageModel('oauth-provider', 'm', {})
 
-    expect(mocks.capturedOptions).toHaveLength(1);
-    expect(mocks.capturedOptions[0]!.providerName).toBe('oauth-provider');
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined();
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true);
-  });
+    expect(mocks.capturedOptions).toHaveLength(1)
+    expect(mocks.capturedOptions[0]!.providerName).toBe('oauth-provider')
+    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
+    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true)
+  })
 
   it('uses static apiKey when provider has no oauth', async () => {
     const settings = makeSettings({
@@ -118,25 +131,29 @@ describe('OAuth provider registry', () => {
         plugins: [],
         models: { chat: { upstreamModel: 'm', aliases: [], headers: {}, plugins: [] } },
       },
-    });
+    })
 
-    const registry = await createProviderRegistry(settings);
-    registry.languageModel('static-provider', 'm', {});
+    const registry = await createProviderRegistry(settings)
+    registry.languageModel('static-provider', 'm', {})
 
-    expect(mocks.capturedOptions).toHaveLength(1);
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBe('static-key');
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(false);
-  });
+    expect(mocks.capturedOptions).toHaveLength(1)
+    expect(mocks.capturedOptions[0]!.selectedApiKey).toBe('static-key')
+    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(false)
+  })
 
   it('oauth takes precedence when both apiKey and oauth are configured', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        access_token: 'oauth-token',
-        expires_in: 3600,
-        token_type: 'Bearer',
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            access_token: 'oauth-token',
+            expires_in: 3600,
+            token_type: 'Bearer',
+          }),
       }),
-    }));
+    )
 
     const settings = makeSettings({
       'both-provider': {
@@ -148,18 +165,18 @@ describe('OAuth provider registry', () => {
         models: { chat: { upstreamModel: 'm', aliases: [], headers: {}, plugins: [] } },
         oauth: oauthConfig,
       },
-    });
+    })
 
-    const tokenManager = new TokenManager(authFilePath);
-    await tokenManager.load();
+    const tokenManager = new TokenManager(authFilePath)
+    await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager);
-    registry.languageModel('both-provider', 'm', {});
+    const registry = await createProviderRegistry(settings, tokenManager)
+    registry.languageModel('both-provider', 'm', {})
 
-    expect(mocks.capturedOptions).toHaveLength(1);
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined();
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true);
-  });
+    expect(mocks.capturedOptions).toHaveLength(1)
+    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
+    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true)
+  })
 
   it('throws OAuthError when auth is required for auth_code flow', async () => {
     const authCodeConfig: OAuthConfig = {
@@ -169,7 +186,7 @@ describe('OAuth provider registry', () => {
       tokenUrl: 'https://auth.example.com/oauth2/token',
       authorizationUrl: 'https://auth.example.com/oauth2/authorize',
       scopes: [],
-    };
+    }
 
     const settings = makeSettings({
       'auth-code-provider': {
@@ -181,17 +198,17 @@ describe('OAuth provider registry', () => {
         models: { chat: { upstreamModel: 'm', aliases: [], headers: {}, plugins: [] } },
         oauth: authCodeConfig,
       },
-    });
+    })
 
-    const tokenManager = new TokenManager(authFilePath);
-    await tokenManager.load();
+    const tokenManager = new TokenManager(authFilePath)
+    await tokenManager.load()
 
     // The registry creates a model with oauthFetch. When the model is used,
     // the fetch function calls ensureValidToken which throws OAuthError.
     // But languageModel() itself doesn't call ensureValidToken — the fetch
     // function does at request time. So languageModel() succeeds here.
-    const registry = await createProviderRegistry(settings, tokenManager);
-    const model = registry.languageModel('auth-code-provider', 'm', {});
-    expect(model).toBeTruthy();
-  });
-});
+    const registry = await createProviderRegistry(settings, tokenManager)
+    const model = registry.languageModel('auth-code-provider', 'm', {})
+    expect(model).toBeTruthy()
+  })
+})

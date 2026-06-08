@@ -3,12 +3,12 @@
   "service": {
     "name": "llm-proxy",
     "host": "127.0.0.1",
-    "port": 8000
+    "port": 8000,
   },
   "requestTimeoutMs": 30000,
   "proxy": null,
   "routing": {
-    "enableFlatModelLookup": true
+    "enableFlatModelLookup": true,
   },
   "plugins": [
     // Auth plugin example (custom token endpoint → Bearer header):
@@ -26,10 +26,7 @@
     "local-openai": {
       "type": "openai-compatible",
       "baseURL": "http://example.com/v1",
-      "apiKey": [
-        "example-api-key",
-        "${LOCAL_OPENAI_API_KEY_2}"
-      ],
+      "apiKey": ["example-api-key", "${LOCAL_OPENAI_API_KEY_2}"],
       // Custom models API endpoint (default: /models appended to baseURL).
       // Relative path: appended to baseURL.
       // "modelsEndpoint": "/v1/models",
@@ -38,15 +35,13 @@
       // Set enableFlatModelLookup to override the routing-level setting per-provider.
       // If omitted, inherits from routing.enableFlatModelLookup.
       // "enableFlatModelLookup": false,
-      "plugins": [
-        "vendor_sse_error"
-      ],
+      "plugins": ["vendor_sse_error"],
       "models": {
         "gpt-5.5": {
-          "upstreamModel": "gpt-5.5"
-        }
-      }
-    }
+          "upstreamModel": "gpt-5.5",
+        },
+      },
+    },
     // OAuth provider example (Authorization Code flow):
     // "oauth-provider": {
     //   "type": "openai-compatible",
@@ -80,5 +75,5 @@
     //   "baseURL": "https://api.example.com/v1",
     //   "models": { "chat": { "upstreamModel": "model-x" } }
     // }
-  }
+  },
 }

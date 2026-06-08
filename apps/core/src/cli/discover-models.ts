@@ -1,31 +1,31 @@
-import { createProxyFetch } from '../openai-compatible.js';
-import type { Settings } from '../config.js';
+import { createProxyFetch } from '../openai-compatible.js'
+import type { Settings } from '../config.js'
 
 /** OpenAI /models 端点返回的单个模型对象 */
 export interface OpenAIModel {
-  id: string;
-  object: string;
-  created?: number;
-  owned_by?: string;
+  id: string
+  object: string
+  created?: number
+  owned_by?: string
 }
 
 /** OpenAI /models 端点返回的完整响应 */
 export interface OpenAIModelList {
-  object: 'list';
-  data: OpenAIModel[];
+  object: 'list'
+  data: OpenAIModel[]
 }
 
 export interface DiscoverModelsOptions {
-  baseURL: string;
-  apiKey: string | string[] | null | undefined;
-  proxySettings: Settings['proxy'];
-  timeoutMs?: number;
+  baseURL: string
+  apiKey: string | string[] | null | undefined
+  proxySettings: Settings['proxy']
+  timeoutMs?: number
   /** 自定义 models API 端点：相对路径拼接到 baseURL，或以 http(s):// 开头的完整 URL */
-  modelsEndpoint?: string | undefined;
+  modelsEndpoint?: string | undefined
   /** provider 级静态 headers，作为请求基础 headers */
-  headers?: Record<string, string> | undefined;
+  headers?: Record<string, string> | undefined
   /** 已解析的 OAuth token，优先于 apiKey 设置 Authorization */
-  oauthToken?: { tokenType: string; accessToken: string } | undefined;
+  oauthToken?: { tokenType: string; accessToken: string } | undefined
 }
 
 /**
@@ -37,14 +37,14 @@ export interface DiscoverModelsOptions {
  */
 export function resolveModelsUrl(baseURL: string, modelsEndpoint?: string): string {
   if (!modelsEndpoint) {
-    return `${baseURL.replace(/\/+$/, '')}/models`;
+    return `${baseURL.replace(/\/+$/, '')}/models`
   }
   if (/^https?:\/\//i.test(modelsEndpoint)) {
-    return modelsEndpoint;
+    return modelsEndpoint
   }
-  const base = baseURL.replace(/\/+$/, '');
-  const path = modelsEndpoint.startsWith('/') ? modelsEndpoint : `/${modelsEndpoint}`;
-  return `${base}${path}`;
+  const base = baseURL.replace(/\/+$/, '')
+  const path = modelsEndpoint.startsWith('/') ? modelsEndpoint : `/${modelsEndpoint}`
+  return `${base}${path}`
 }
 
 /**
@@ -62,36 +62,36 @@ export async function fetchUpstreamModels({
 }: DiscoverModelsOptions): Promise<OpenAIModel[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
-    : globalThis.fetch;
+    : globalThis.fetch
 
   // 1. 铺 provider 级静态 headers
-  const headers: Record<string, string> = { ...providerHeaders };
+  const headers: Record<string, string> = { ...providerHeaders }
 
   // 2. 显式鉴权优先于静态 headers 中的 Authorization
   if (oauthToken) {
-    headers['Authorization'] = `${oauthToken.tokenType} ${oauthToken.accessToken}`;
+    headers['Authorization'] = `${oauthToken.tokenType} ${oauthToken.accessToken}`
   } else if (apiKey) {
-    const key = Array.isArray(apiKey) ? apiKey[0] : apiKey;
+    const key = Array.isArray(apiKey) ? apiKey[0] : apiKey
     if (key) {
-      headers['Authorization'] = `Bearer ${key}`;
+      headers['Authorization'] = `Bearer ${key}`
     }
   }
 
-  const url = resolveModelsUrl(baseURL, modelsEndpoint);
+  const url = resolveModelsUrl(baseURL, modelsEndpoint)
   const response = await fetchFn(url, {
     headers,
     signal: AbortSignal.timeout(timeoutMs),
-  });
+  })
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    throw new Error(`HTTP ${response.status} ${response.statusText}`)
   }
 
-  const body = (await response.json()) as OpenAIModelList;
+  const body = (await response.json()) as OpenAIModelList
 
   if (!body.data || !Array.isArray(body.data)) {
-    throw new Error('Unexpected response format: missing data array');
+    throw new Error('Unexpected response format: missing data array')
   }
 
-  return body.data.sort((a, b) => a.id.localeCompare(b.id));
+  return body.data.sort((a, b) => a.id.localeCompare(b.id))
 }

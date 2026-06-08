@@ -1,10 +1,19 @@
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { ProxyAgent, request } from 'undici';
-import type { ProviderConfig, Settings } from './config.js';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { ProxyAgent, request } from 'undici'
+import type { ProviderConfig, Settings } from './config.js'
 
 export function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
-  const sensitiveHeaders = new Set(['authorization', 'proxy-authorization', 'x-api-key', 'api-key', 'apikey', 'api_key']);
-  return Object.fromEntries(Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())));
+  const sensitiveHeaders = new Set([
+    'authorization',
+    'proxy-authorization',
+    'x-api-key',
+    'api-key',
+    'apikey',
+    'api_key',
+  ])
+  return Object.fromEntries(
+    Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())),
+  )
 }
 
 export function createOpenAICompatibleProvider(
@@ -15,54 +24,55 @@ export function createOpenAICompatibleProvider(
   selectedApiKey: string | undefined,
   oauthFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) {
-  const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders });
+  const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
   const options: Parameters<typeof createOpenAICompatible>[0] = {
     name: providerName,
     baseURL: provider.baseURL,
     headers,
-  };
+  }
 
   // OAuth 激活时不设 apiKey，避免与 OAuth fetch 注入的 Authorization 冲突
   if (!oauthFetch && selectedApiKey !== undefined) {
-    options.apiKey = selectedApiKey;
+    options.apiKey = selectedApiKey
   }
 
   // fetch 组合：OAuth fetch → proxy fetch → global fetch
   if (oauthFetch) {
     options.fetch = settings.proxy
       ? oauthFetch(createProxyFetch(settings.proxy.url, settings.proxy.verify))
-      : oauthFetch();
+      : oauthFetch()
   } else if (settings.proxy) {
-    options.fetch = createProxyFetch(settings.proxy.url, settings.proxy.verify);
+    options.fetch = createProxyFetch(settings.proxy.url, settings.proxy.verify)
   }
 
-  return createOpenAICompatible(options);
+  return createOpenAICompatible(options)
 }
 
 export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {
-  const dispatcher = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: verify } });
+  const dispatcher = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: verify } })
 
   return async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
-    const options: Parameters<typeof request>[1] = { dispatcher };
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    const options: Parameters<typeof request>[1] = { dispatcher }
 
     if (init?.method !== undefined) {
-      options.method = init.method as never;
+      options.method = init.method as never
     }
 
     if (init?.body !== undefined && init.body !== null) {
-      options.body = init.body as never;
+      options.body = init.body as never
     }
 
     if (init?.headers !== undefined) {
-      options.headers = init.headers as never;
+      options.headers = init.headers as never
     }
 
-    const response = await request(url, options);
+    const response = await request(url, options)
 
     return new Response(response.body as never, {
       status: response.statusCode,
       headers: response.headers as HeadersInit,
-    });
-  };
+    })
+  }
 }

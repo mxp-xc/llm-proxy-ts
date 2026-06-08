@@ -8,11 +8,14 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "generate:schema": "pnpm --filter @llm-proxy/server generate:schema",
-    "models:sync": "pnpm --filter @llm-proxy/core models:sync"
+    "models:sync": "pnpm --filter @llm-proxy/core models:sync",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "devDependencies": {
     "@types/node": "latest",
     "dotenv": "^17.4.2",
+    "prettier": "^3.8.3",
     "tsx": "latest",
     "typescript": "latest",
     "vitest": "latest",

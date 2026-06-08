@@ -1,31 +1,33 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { loadPlugin, registerBuiltInPlugin } from '../src/plugins/loader.js';
-import type { Plugin } from '../src/plugins/types.js';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { loadPlugin, registerBuiltInPlugin } from '../src/plugins/loader.js'
+import type { Plugin } from '../src/plugins/types.js'
 
 describe('loadPlugin', () => {
-  let tempDir: string;
+  let tempDir: string
 
   afterEach(async () => {
     if (tempDir) {
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true })
     }
-  });
+  })
 
   async function writePluginFile(fileName: string, content: string): Promise<string> {
     if (!tempDir) {
-      tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-auth-loader-'));
+      tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-auth-loader-'))
     }
-    const filePath = join(tempDir, fileName);
-    await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, content, 'utf8');
-    return filePath;
+    const filePath = join(tempDir, fileName)
+    await mkdir(dirname(filePath), { recursive: true })
+    await writeFile(filePath, content, 'utf8')
+    return filePath
   }
 
   it('should load a valid plugin module with default export', async () => {
-    const filePath = await writePluginFile('valid-plugin.mjs', `
+    const filePath = await writePluginFile(
+      'valid-plugin.mjs',
+      `
       export default {
         name: 'test-plugin',
         createFetch(ctx) {
@@ -35,27 +37,33 @@ describe('loadPlugin', () => {
           };
         },
       };
-    `);
+    `,
+    )
 
-    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir);
+    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)
 
-    expect(result.plugin.name).toBe('test-plugin');
-    expect(result.modulePath).toBe(filePath);
-  });
+    expect(result.plugin.name).toBe('test-plugin')
+    expect(result.modulePath).toBe(filePath)
+  })
 
   it('should reject modules without default export', async () => {
-    const filePath = await writePluginFile('no-default.mjs', `
+    const filePath = await writePluginFile(
+      'no-default.mjs',
+      `
       export const version = '1.0.0';
       export function doSomething() {}
-    `);
+    `,
+    )
 
-    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
-      /must export a default object|must have a non-empty string 'name' property/,
-    );
-  });
+    await expect(
+      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
+    ).rejects.toThrow(/must export a default object|must have a non-empty string 'name' property/)
+  })
 
   it('should reject modules without name property', async () => {
-    const filePath = await writePluginFile('no-name.mjs', `
+    const filePath = await writePluginFile(
+      'no-name.mjs',
+      `
       export default {
         createFetch(ctx) {
           return (baseFetch) => async (input, init) => {
@@ -64,27 +72,33 @@ describe('loadPlugin', () => {
           };
         },
       };
-    `);
+    `,
+    )
 
-    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
-      /must have a non-empty string 'name' property/,
-    );
-  });
+    await expect(
+      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
+    ).rejects.toThrow(/must have a non-empty string 'name' property/)
+  })
 
   it('should reject modules without any hook', async () => {
-    const filePath = await writePluginFile('no-hook.mjs', `
+    const filePath = await writePluginFile(
+      'no-hook.mjs',
+      `
       export default {
         name: 'no-hook',
       };
-    `);
+    `,
+    )
 
-    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
-      /must implement at least one hook/,
-    );
-  });
+    await expect(
+      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
+    ).rejects.toThrow(/must implement at least one hook/)
+  })
 
   it('should reject modules with invalid validateConfig (not a function)', async () => {
-    const filePath = await writePluginFile('bad-validate.mjs', `
+    const filePath = await writePluginFile(
+      'bad-validate.mjs',
+      `
       export default {
         name: 'bad-validate',
         createFetch(ctx) {
@@ -95,22 +109,28 @@ describe('loadPlugin', () => {
         },
         validateConfig: 'not-a-function',
       };
-    `);
+    `,
+    )
 
     // The new loader no longer validates validateConfig specifically;
     // it just checks that at least one hook is present. Since createFetch
     // is a hook, this module loads successfully — validateConfig is ignored.
-    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir);
-    expect(result.plugin.name).toBe('bad-validate');
-  });
+    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)
+    expect(result.plugin.name).toBe('bad-validate')
+  })
 
   it('should resolve relative paths against baseDir', async () => {
-    const pluginDir = join(tempDir ?? await mkdtemp(join(tmpdir(), 'llm-proxy-auth-loader-')), 'plugins');
-    if (!tempDir) tempDir = pluginDir.split('plugins')[0]!;
+    const pluginDir = join(
+      tempDir ?? (await mkdtemp(join(tmpdir(), 'llm-proxy-auth-loader-'))),
+      'plugins',
+    )
+    if (!tempDir) tempDir = pluginDir.split('plugins')[0]!
 
-    const filePath = join(pluginDir, 'relative-plugin.mjs');
-    await mkdir(pluginDir, { recursive: true });
-    await writeFile(filePath, `
+    const filePath = join(pluginDir, 'relative-plugin.mjs')
+    await mkdir(pluginDir, { recursive: true })
+    await writeFile(
+      filePath,
+      `
       export default {
         name: 'relative-plugin',
         createFetch(ctx) {
@@ -120,15 +140,22 @@ describe('loadPlugin', () => {
           };
         },
       };
-    `, 'utf8');
+    `,
+      'utf8',
+    )
 
-    const result = await loadPlugin({ module: './plugins/relative-plugin.mjs', config: {}, providers: [] }, tempDir ?? pluginDir);
+    const result = await loadPlugin(
+      { module: './plugins/relative-plugin.mjs', config: {}, providers: [] },
+      tempDir ?? pluginDir,
+    )
 
-    expect(result.plugin.name).toBe('relative-plugin');
-  });
+    expect(result.plugin.name).toBe('relative-plugin')
+  })
 
   it('should accept absolute paths', async () => {
-    const filePath = await writePluginFile('absolute-plugin.mjs', `
+    const filePath = await writePluginFile(
+      'absolute-plugin.mjs',
+      `
       export default {
         name: 'absolute-plugin',
         createFetch(ctx) {
@@ -138,36 +165,40 @@ describe('loadPlugin', () => {
           };
         },
       };
-    `);
+    `,
+    )
 
-    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, '/irrelevant/basedir');
+    const result = await loadPlugin(
+      { module: filePath, config: {}, providers: [] },
+      '/irrelevant/basedir',
+    )
 
-    expect(result.plugin.name).toBe('absolute-plugin');
-  });
+    expect(result.plugin.name).toBe('absolute-plugin')
+  })
 
   it('should load built-in plugin by name', async () => {
     const builtIn: Plugin = {
       name: 'test-built-in',
       async init() {},
-    };
-    registerBuiltInPlugin(builtIn);
+    }
+    registerBuiltInPlugin(builtIn)
 
-    const result = await loadPlugin({ name: 'test-built-in', config: {}, providers: [] }, tempDir);
-    expect(result.plugin.name).toBe('test-built-in');
-    expect(result.modulePath).toBeUndefined();
-  });
+    const result = await loadPlugin({ name: 'test-built-in', config: {}, providers: [] }, tempDir)
+    expect(result.plugin.name).toBe('test-built-in')
+    expect(result.modulePath).toBeUndefined()
+  })
 
   it('should reject unknown built-in plugin name', async () => {
-    await expect(loadPlugin({ name: 'nonexistent-plugin', config: {}, providers: [] }, tempDir)).rejects.toThrow(
-      /Unknown built-in plugin/,
-    );
-  });
-});
+    await expect(
+      loadPlugin({ name: 'nonexistent-plugin', config: {}, providers: [] }, tempDir),
+    ).rejects.toThrow(/Unknown built-in plugin/)
+  })
+})
 
 // Helper: dirname for ESM (simple version)
 function dirname(filePath: string): string {
-  const sep = filePath.includes('\\') ? '\\' : '/';
-  const parts = filePath.split(sep);
-  parts.pop();
-  return parts.join(sep);
+  const sep = filePath.includes('\\') ? '\\' : '/'
+  const parts = filePath.split(sep)
+  parts.pop()
+  return parts.join(sep)
 }

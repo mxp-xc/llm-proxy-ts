@@ -17,19 +17,19 @@ Client → Hono app (/v1/chat/completions)
 
 ## 命令
 
-| 命令 | 作用 |
-|---|---|
+| 命令                   | 作用                                                 |
+| ---------------------- | ---------------------------------------------------- |
 | `pnpm generate:schema` | 从 Zod schema 重新生成 `config/settings.schema.json` |
 
 ## 模块职责
 
-| 模块 | 职责 |
-|---|---|
-| `server.ts` | 入口，解析配置路径，OAuth 初始化，启动 `@hono/node-server` |
-| `app.ts` | Hono 应用工厂，路由处理器，超时逻辑，流检查，OAuthError 处理；可注入 `ModelGateway`、`ProviderRegistry`、`TokenManager` 用于测试 |
-| `logging.ts` | Pino 日志，请求 ID 生成，敏感信息脱敏 |
-| `oauth/callback.ts` | OAuth 回调端点 — `/oauth/login/:provider`（重定向到授权 URL）、`/oauth/callback`（交换授权码） |
-| `oauth/startup.ts` | OAuth 启动校验 — 遍历 OAuth provider，自动刷新过期 token，打印需要登录的 provider URL |
+| 模块                | 职责                                                                                                                             |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `server.ts`         | 入口，解析配置路径，OAuth 初始化，启动 `@hono/node-server`                                                                       |
+| `app.ts`            | Hono 应用工厂，路由处理器，超时逻辑，流检查，OAuthError 处理；可注入 `ModelGateway`、`ProviderRegistry`、`TokenManager` 用于测试 |
+| `logging.ts`        | Pino 日志，请求 ID 生成，敏感信息脱敏                                                                                            |
+| `oauth/callback.ts` | OAuth 回调端点 — `/oauth/login/:provider`（重定向到授权 URL）、`/oauth/callback`（交换授权码）                                   |
+| `oauth/startup.ts`  | OAuth 启动校验 — 遍历 OAuth provider，自动刷新过期 token，打印需要登录的 provider URL                                            |
 
 ## 设计决策
 
@@ -55,13 +55,13 @@ Client → Hono app (/v1/chat/completions)
 
 ## 关键依赖
 
-| 依赖 | 用途 |
-|---|---|
-| `ai` | Vercel AI SDK（`generateText`/`streamText`） |
-| `hono` | HTTP 框架 |
-| `@hono/node-server` | Node.js 适配器 |
-| `pino` | 结构化日志源；console 和 `.log` 文件默认输出 Java/Python 风格 plain text 日志 |
-| `@llm-proxy/core` | 配置、Provider 工厂、协议映射、路由、插件（`workspace:*`） |
+| 依赖                | 用途                                                                          |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `ai`                | Vercel AI SDK（`generateText`/`streamText`）                                  |
+| `hono`              | HTTP 框架                                                                     |
+| `@hono/node-server` | Node.js 适配器                                                                |
+| `pino`              | 结构化日志源；console 和 `.log` 文件默认输出 Java/Python 风格 plain text 日志 |
+| `@llm-proxy/core`   | 配置、Provider 工厂、协议映射、路由、插件（`workspace:*`）                    |
 
 ## 测试
 
@@ -69,14 +69,14 @@ Client → Hono app (/v1/chat/completions)
 
 `vitest.config.ts` 配置了 `@llm-proxy/core` 路径别名，指向 `../core/src/index.ts`。
 
-| 测试文件 | 覆盖 |
-|---|---|
-| `chat-endpoint.test.ts` | Chat Completions 端点（非流式 + 流式） |
-| `models-endpoint.test.ts` | `/v1/models` 端点 |
-| `health.test.ts` | 健康检查 |
-| `logging.test.ts` | 日志脱敏和请求 ID |
-| `oauth-callback.test.ts` | OAuth 回调端点 |
-| `oauth-startup.test.ts` | OAuth 启动校验 |
-| `oauth-registry.test.ts` | OAuth Provider 注册和 fetch 注入 |
-| `security-and-plugins.test.ts` | 插件合并和安全 |
-| `smoke.test.ts` | 真实上游流式测试（需 `LLM_PROXY_TEST_BASE_URL` + `LLM_PROXY_TEST_API_KEY` + `LLM_PROXY_TEST_MODEL`） |
+| 测试文件                       | 覆盖                                                                                                 |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `chat-endpoint.test.ts`        | Chat Completions 端点（非流式 + 流式）                                                               |
+| `models-endpoint.test.ts`      | `/v1/models` 端点                                                                                    |
+| `health.test.ts`               | 健康检查                                                                                             |
+| `logging.test.ts`              | 日志脱敏和请求 ID                                                                                    |
+| `oauth-callback.test.ts`       | OAuth 回调端点                                                                                       |
+| `oauth-startup.test.ts`        | OAuth 启动校验                                                                                       |
+| `oauth-registry.test.ts`       | OAuth Provider 注册和 fetch 注入                                                                     |
+| `security-and-plugins.test.ts` | 插件合并和安全                                                                                       |
+| `smoke.test.ts`                | 真实上游流式测试（需 `LLM_PROXY_TEST_BASE_URL` + `LLM_PROXY_TEST_API_KEY` + `LLM_PROXY_TEST_MODEL`） |

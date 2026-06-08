@@ -1,41 +1,61 @@
-import { generateText, streamText } from 'ai';
-import { Hono } from 'hono';
-import type { Settings, TokenManager, AuthStatus } from '@llm-proxy/core';
-import { OAuthError, mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest, renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE, getModel, listModels, RoutingError, RoutingTable } from '@llm-proxy/core';
-import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse } from '@llm-proxy/core';
-import pino from 'pino';
-import { logger as defaultLogger, requestId } from './logging.js';
-import { createOAuthCallbackApp } from './oauth/callback.js';
-import type { ProviderAuthStatus } from './oauth/startup.js';
+import { generateText, streamText } from 'ai'
+import { Hono } from 'hono'
+import type { Settings, TokenManager, AuthStatus } from '@llm-proxy/core'
+import {
+  OAuthError,
+  mapOpenAIChatRequestToAISDKInput,
+  validateOpenAIChatRequest,
+  renderOpenAIChatCompletion,
+  renderOpenAIChatCompletionSSE,
+  getModel,
+  listModels,
+  RoutingError,
+  RoutingTable,
+} from '@llm-proxy/core'
+import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse } from '@llm-proxy/core'
+import pino from 'pino'
+import { logger as defaultLogger, requestId } from './logging.js'
+import { createOAuthCallbackApp } from './oauth/callback.js'
+import type { ProviderAuthStatus } from './oauth/startup.js'
 
-export type { Settings } from '@llm-proxy/core';
+export type { Settings } from '@llm-proxy/core'
 
 export interface ModelGateway {
-  generate(input: { model: unknown; callInput: any; requestModel: string; abortSignal?: AbortSignal }): Promise<any>;
-  stream(input: { model: unknown; callInput: any; requestModel: string; abortSignal?: AbortSignal }): AsyncIterable<unknown>;
+  generate(input: {
+    model: unknown
+    callInput: any
+    requestModel: string
+    abortSignal?: AbortSignal
+  }): Promise<any>
+  stream(input: {
+    model: unknown
+    callInput: any
+    requestModel: string
+    abortSignal?: AbortSignal
+  }): AsyncIterable<unknown>
 }
 
 export interface AppDependencies {
-  settings: Settings;
-  providerRegistry?: ProviderRegistry;
-  gateway?: ModelGateway;
-  logger?: pino.Logger;
-  tokenManager?: TokenManager;
-  nonce?: string;
-  authStatuses?: ProviderAuthStatus[];
-  pluginRegistry?: PluginRegistry;
-  authFilePath?: string;
+  settings: Settings
+  providerRegistry?: ProviderRegistry
+  gateway?: ModelGateway
+  logger?: pino.Logger
+  tokenManager?: TokenManager
+  nonce?: string
+  authStatuses?: ProviderAuthStatus[]
+  pluginRegistry?: PluginRegistry
+  authFilePath?: string
 }
 
 type AppEnv = {
   Variables: {
-    requestId: string;
-    logger: pino.Logger;
-    requestedModel?: string;
-    actualModel?: string;
-    provider?: string;
-  };
-};
+    requestId: string
+    logger: pino.Logger
+    requestedModel?: string
+    actualModel?: string
+    provider?: string
+  }
+}
 
 export function createApp({
   settings,
@@ -48,31 +68,33 @@ export function createApp({
   pluginRegistry,
   authFilePath,
 }: AppDependencies): Hono<AppEnv> {
-  const app = new Hono<AppEnv>();
-  const routingTable = RoutingTable.fromSettings(settings, pluginRegistry);
+  const app = new Hono<AppEnv>()
+  const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
   if (!providerRegistry) {
-    throw new Error('providerRegistry is required — construct it with createProviderRegistry() before calling createApp()');
+    throw new Error(
+      'providerRegistry is required — construct it with createProviderRegistry() before calling createApp()',
+    )
   }
-  const resolvedRegistry = providerRegistry;
+  const resolvedRegistry = providerRegistry
 
   // 挂载 OAuth 回调路由
   if (tokenManager && nonce) {
-    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce });
-    app.route('/oauth', oauthApp);
+    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce })
+    app.route('/oauth', oauthApp)
   }
 
   app.use('*', async (c, next) => {
-    const id = requestId();
-    const reqLogger = logger.child({ requestId: id });
-    c.set('requestId', id);
-    c.set('logger', reqLogger);
+    const id = requestId()
+    const reqLogger = logger.child({ requestId: id })
+    c.set('requestId', id)
+    c.set('logger', reqLogger)
 
-    const start = performance.now();
-    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request started');
+    const start = performance.now()
+    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request started')
 
-    await next();
+    await next()
 
-    const duration = performance.now() - start;
+    const duration = performance.now() - start
     reqLogger.info(
       {
         method: c.req.method,
@@ -84,55 +106,53 @@ export function createApp({
         actualModel: c.get('actualModel'),
       },
       'request completed',
-    );
-    c.header('x-request-id', id);
-  });
+    )
+    c.header('x-request-id', id)
+  })
 
   app.get('/health', (c) => {
     const base: Record<string, unknown> = {
       status: 'ok',
       service: settings.service.name,
       providersConfigured: Object.keys(settings.providers).length,
-    };
+    }
 
     if (authStatuses && authStatuses.length > 0) {
       base.auth = Object.fromEntries(
         authStatuses.map((s) => [
           s.provider,
-          s.status === 'valid'
-            ? { status: s.status }
-            : { status: s.status, loginUrl: s.loginUrl },
+          s.status === 'valid' ? { status: s.status } : { status: s.status, loginUrl: s.loginUrl },
         ]),
-      );
+      )
     }
 
-    return c.json(base);
-  });
+    return c.json(base)
+  })
 
-  app.get('/v1/models', (c) => c.json(listModels(settings)));
+  app.get('/v1/models', (c) => c.json(listModels(settings)))
 
   app.get('/v1/models/*', (c) => {
-    const modelId = c.req.path.replace('/v1/models/', '');
+    const modelId = c.req.path.replace('/v1/models/', '')
     if (!modelId) {
       return c.json(
         { error: { type: 'invalid_request_error', message: 'Model ID is required' } },
         400,
-      );
+      )
     }
-    const model = getModel(settings, modelId);
+    const model = getModel(settings, modelId)
     if (!model) {
       return c.json(
         { error: { type: 'invalid_request_error', message: `Model '${modelId}' not found` } },
         404,
-      );
+      )
     }
-    return c.json(model);
-  });
+    return c.json(model)
+  })
 
   app.post('/v1/chat/completions', async (c) => {
-    let request;
+    let request
     try {
-      request = validateOpenAIChatRequest(await c.req.json());
+      request = validateOpenAIChatRequest(await c.req.json())
     } catch {
       return c.json(
         {
@@ -143,27 +163,27 @@ export function createApp({
           },
         },
         400,
-      );
+      )
     }
 
-    let route;
+    let route
     try {
-      route = routingTable.resolve(request.model);
+      route = routingTable.resolve(request.model)
     } catch (error) {
       if (error instanceof RoutingError) {
-        return c.json(error.toResponse(), error.status as 404);
+        return c.json(error.toResponse(), error.status as 404)
       }
-      throw error;
+      throw error
     }
 
-    c.set('provider', route.providerName);
-    c.set('requestedModel', request.model);
-    c.set('actualModel', route.upstreamModel);
+    c.set('provider', route.providerName)
+    c.set('requestedModel', request.model)
+    c.set('actualModel', route.upstreamModel)
 
-    const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName);
-    let model;
+    const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName)
+    let model
     try {
-      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
+      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
@@ -176,31 +196,42 @@ export function createApp({
             },
           },
           503,
-        );
+        )
       }
-      throw error;
+      throw error
     }
-    const abortController = new AbortController();
+    const abortController = new AbortController()
 
     if (request.stream) {
       try {
-        const stream = gateway.stream({ model, callInput, requestModel: request.model, abortSignal: abortController.signal });
+        const stream = gateway.stream({
+          model,
+          callInput,
+          requestModel: request.model,
+          abortSignal: abortController.signal,
+        })
         const inspection = await withRequestTimeout(
           inspectFirstStreamChunk(route.resolvedPlugins, stream),
           settings.requestTimeoutMs,
           abortController,
-        );
+        )
         if (inspection.error) {
-          return c.json(inspection.error.body, inspection.error.status as 429);
+          return c.json(inspection.error.body, inspection.error.status as 429)
         }
-        const reqLogger = c.get('logger');
-        return new Response(readableStreamFromAsyncIterable(renderOpenAIChatCompletionSSE({ model: request.model, stream: inspection.stream }), (error) => {
-          reqLogger.error({ err: error }, 'stream consumption failed');
-        }), {
-          headers: { 'content-type': 'text/event-stream' },
-        });
+        const reqLogger = c.get('logger')
+        return new Response(
+          readableStreamFromAsyncIterable(
+            renderOpenAIChatCompletionSSE({ model: request.model, stream: inspection.stream }),
+            (error) => {
+              reqLogger.error({ err: error }, 'stream consumption failed')
+            },
+          ),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+          },
+        )
       } catch (error) {
-        c.get('logger').error({ err: error }, 'stream request failed');
+        c.get('logger').error({ err: error }, 'stream request failed')
         if (error instanceof OAuthError && error.code === 'auth_required') {
           return c.json(
             {
@@ -212,21 +243,26 @@ export function createApp({
               },
             },
             503,
-          );
+          )
         }
         if (error instanceof RequestTimeoutError) {
-          return upstreamTimeoutResponse();
+          return upstreamTimeoutResponse()
         }
-        return upstreamErrorResponse();
+        return upstreamErrorResponse()
       }
     }
 
     try {
       const result = await withRequestTimeout(
-        gateway.generate({ model, callInput, requestModel: request.model, abortSignal: abortController.signal }),
+        gateway.generate({
+          model,
+          callInput,
+          requestModel: request.model,
+          abortSignal: abortController.signal,
+        }),
         settings.requestTimeoutMs,
         abortController,
-      );
+      )
       return c.json(
         renderOpenAIChatCompletion({
           model: request.model,
@@ -236,9 +272,9 @@ export function createApp({
           response: result.response,
           toolCalls: result.toolCalls,
         }),
-      );
+      )
     } catch (error) {
-      c.get('logger').error({ err: error }, 'generation request failed');
+      c.get('logger').error({ err: error }, 'generation request failed')
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
           {
@@ -250,47 +286,52 @@ export function createApp({
             },
           },
           503,
-        );
+        )
       }
       if (error instanceof RequestTimeoutError) {
-        return upstreamTimeoutResponse();
+        return upstreamTimeoutResponse()
       }
-      return upstreamErrorResponse();
+      return upstreamErrorResponse()
     }
-  });
+  })
 
-  return app;
+  return app
 }
 
 const defaultGateway: ModelGateway = {
   async generate({ model, callInput, abortSignal }) {
-    return generateText({ model, ...callInput, abortSignal } as Parameters<typeof generateText>[0]);
+    return generateText({ model, ...callInput, abortSignal } as Parameters<typeof generateText>[0])
   },
   stream({ model, callInput, abortSignal }) {
-    return streamText({ model, ...callInput, abortSignal } as Parameters<typeof streamText>[0]).fullStream as AsyncIterable<unknown>;
+    return streamText({ model, ...callInput, abortSignal } as Parameters<typeof streamText>[0])
+      .fullStream as AsyncIterable<unknown>
   },
-};
+}
 
 class RequestTimeoutError extends Error {
   constructor() {
-    super('Request timed out');
+    super('Request timed out')
   }
 }
 
-async function withRequestTimeout<T>(promise: Promise<T>, timeoutMs: number, abortController: AbortController): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+async function withRequestTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  abortController: AbortController,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      abortController.abort();
-      reject(new RequestTimeoutError());
-    }, timeoutMs);
-  });
+      abortController.abort()
+      reject(new RequestTimeoutError())
+    }, timeoutMs)
+  })
 
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await Promise.race([promise, timeoutPromise])
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearTimeout(timeout)
     }
   }
 }
@@ -305,7 +346,7 @@ function upstreamTimeoutResponse(): Response {
       },
     },
     { status: 504 },
-  );
+  )
 }
 
 function upstreamErrorResponse(): Response {
@@ -318,20 +359,22 @@ function upstreamErrorResponse(): Response {
       },
     },
     { status: 502 },
-  );
+  )
 }
 
 // ─── Stream inspection (generic dispatch) ─────────────────────────
 
-import type { ResolvedPlugin } from '@llm-proxy/core';
+import type { ResolvedPlugin } from '@llm-proxy/core'
 
 async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<unknown>) {
-  const inspectors = plugins.filter((rp) => typeof (rp.plugin as ProxyPlugin).inspectStreamChunk === 'function');
+  const inspectors = plugins.filter(
+    (rp) => typeof (rp.plugin as ProxyPlugin).inspectStreamChunk === 'function',
+  )
 
-  const iterator = stream[Symbol.asyncIterator]();
-  const first = await iterator.next();
+  const iterator = stream[Symbol.asyncIterator]()
+  const first = await iterator.next()
   if (first.done) {
-    return { stream: replayStream(undefined, iterator, plugins) };
+    return { stream: replayStream(undefined, iterator, plugins) }
   }
 
   if (inspectors.length > 0) {
@@ -342,66 +385,79 @@ async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncI
         provider: { id: '', provider: {} as any },
         config: rp.config,
         chunk: first.value,
-      });
+      })
       if (result && typeof result === 'object' && 'status' in result) {
-        return { error: result as PluginResponse, stream: replayStream(undefined, iterator, plugins) };
+        return {
+          error: result as PluginResponse,
+          stream: replayStream(undefined, iterator, plugins),
+        }
       }
     }
   }
 
-  return { stream: replayStream(first.value, iterator, plugins) };
+  return { stream: replayStream(first.value, iterator, plugins) }
 }
 
-async function* replayStream(first: unknown, iterator: AsyncIterator<unknown>, plugins: ResolvedPlugin[] = []): AsyncIterable<unknown> {
+async function* replayStream(
+  first: unknown,
+  iterator: AsyncIterator<unknown>,
+  plugins: ResolvedPlugin[] = [],
+): AsyncIterable<unknown> {
   if (first !== undefined) {
-    yield first;
+    yield first
   }
   while (true) {
-    const next = await iterator.next();
+    const next = await iterator.next()
     if (next.done) {
-      return;
+      return
     }
-    const error = await inspectStreamChunk(plugins, next.value);
+    const error = await inspectStreamChunk(plugins, next.value)
     if (error) {
-      yield { type: 'openai-error', body: error.body };
-      return;
+      yield { type: 'openai-error', body: error.body }
+      return
     }
-    yield next.value;
+    yield next.value
   }
 }
 
-async function inspectStreamChunk(plugins: ResolvedPlugin[], chunk: unknown): Promise<PluginResponse | undefined> {
+async function inspectStreamChunk(
+  plugins: ResolvedPlugin[],
+  chunk: unknown,
+): Promise<PluginResponse | undefined> {
   for (const rp of plugins) {
-    if (typeof (rp.plugin as ProxyPlugin).inspectStreamChunk !== 'function') continue;
+    if (typeof (rp.plugin as ProxyPlugin).inspectStreamChunk !== 'function') continue
     const result = await (rp.plugin as ProxyPlugin).inspectStreamChunk!({
       requestId: '',
       settings: {} as Settings,
       provider: { id: '', provider: {} as any },
       config: rp.config,
       chunk,
-    });
+    })
     if (result && typeof result === 'object' && 'status' in result) {
-      return result as PluginResponse;
+      return result as PluginResponse
     }
   }
-  return undefined;
+  return undefined
 }
 
-function readableStreamFromAsyncIterable(iterable: AsyncIterable<Uint8Array>, onError: (error: unknown) => void): ReadableStream<Uint8Array> {
-  const iterator = iterable[Symbol.asyncIterator]();
+function readableStreamFromAsyncIterable(
+  iterable: AsyncIterable<Uint8Array>,
+  onError: (error: unknown) => void,
+): ReadableStream<Uint8Array> {
+  const iterator = iterable[Symbol.asyncIterator]()
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const next = await iterator.next();
+        const next = await iterator.next()
         if (next.done) {
-          controller.close();
+          controller.close()
         } else {
-          controller.enqueue(next.value);
+          controller.enqueue(next.value)
         }
       } catch (error) {
-        onError(error);
-        controller.error(error);
+        onError(error)
+        controller.error(error)
       }
     },
-  });
+  })
 }

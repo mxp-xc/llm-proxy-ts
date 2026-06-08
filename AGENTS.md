@@ -22,12 +22,12 @@ llm-proxy-ts/
 
 ## 通用命令
 
-| 命令 | 作用 |
-|---|---|
-| `pnpm install` | 安装依赖 |
-| `pnpm dev` | 启动开发服务器（`tsx watch`） |
-| `pnpm test` | 运行全部测试（Vitest，无网络） |
-| `pnpm typecheck` | `tsc --noEmit` |
+| 命令             | 作用                           |
+| ---------------- | ------------------------------ |
+| `pnpm install`   | 安装依赖                       |
+| `pnpm dev`       | 启动开发服务器（`tsx watch`）  |
+| `pnpm test`      | 运行全部测试（Vitest，无网络） |
+| `pnpm typecheck` | `tsc --noEmit`                 |
 
 运行单个测试：`pnpm --filter <pkg> test test/xxx.test.ts`
 

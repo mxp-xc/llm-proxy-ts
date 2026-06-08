@@ -1,12 +1,12 @@
-import type { Settings, OAuthConfig } from '@llm-proxy/core';
-import { classifyStatus } from '@llm-proxy/core';
-import type { TokenManager, AuthStatus } from '@llm-proxy/core';
-import { logger } from '../logging.js';
+import type { Settings, OAuthConfig } from '@llm-proxy/core'
+import { classifyStatus } from '@llm-proxy/core'
+import type { TokenManager, AuthStatus } from '@llm-proxy/core'
+import { logger } from '../logging.js'
 
 export interface ProviderAuthStatus {
-  provider: string;
-  status: AuthStatus;
-  loginUrl?: string;
+  provider: string
+  status: AuthStatus
+  loginUrl?: string
 }
 
 /**
@@ -23,59 +23,59 @@ export async function validateOAuthStatus(
   settings: Settings,
   tokenManager: TokenManager,
 ): Promise<ProviderAuthStatus[]> {
-  const results: ProviderAuthStatus[] = [];
+  const results: ProviderAuthStatus[] = []
 
   for (const [providerName, provider] of Object.entries(settings.providers)) {
     // OAuth provider
-    if (!provider.oauth) continue;
+    if (!provider.oauth) continue
 
-    const oauth: OAuthConfig = provider.oauth;
-    const status = tokenManager.getStatus(providerName, oauth);
+    const oauth: OAuthConfig = provider.oauth
+    const status = tokenManager.getStatus(providerName, oauth)
 
     if (status === 'valid') {
-      logger.info({ provider: providerName }, 'oauth token valid');
-      results.push({ provider: providerName, status: 'valid' });
-      continue;
+      logger.info({ provider: providerName }, 'oauth token valid')
+      results.push({ provider: providerName, status: 'valid' })
+      continue
     }
 
     if (status === 'needs_refresh') {
       try {
-        await tokenManager.ensureValidToken(providerName, oauth);
-        logger.info({ provider: providerName }, 'oauth token refreshed');
-        results.push({ provider: providerName, status: 'valid' });
+        await tokenManager.ensureValidToken(providerName, oauth)
+        logger.info({ provider: providerName }, 'oauth token refreshed')
+        results.push({ provider: providerName, status: 'valid' })
       } catch {
         // 刷新失败，需要登录
-        const loginUrl = buildLoginUrl(settings, providerName);
+        const loginUrl = buildLoginUrl(settings, providerName)
         logger.warn(
           { provider: providerName, loginUrl },
           'oauth token refresh failed — login required',
-        );
-        results.push({ provider: providerName, status: 'needs_login', loginUrl });
+        )
+        results.push({ provider: providerName, status: 'needs_login', loginUrl })
       }
-      continue;
+      continue
     }
 
     // needs_login
-    const loginUrl = buildLoginUrl(settings, providerName);
+    const loginUrl = buildLoginUrl(settings, providerName)
     logger.warn(
       { provider: providerName, loginUrl },
       'oauth login required — visit the URL to authenticate',
-    );
-    results.push({ provider: providerName, status: 'needs_login', loginUrl });
+    )
+    results.push({ provider: providerName, status: 'needs_login', loginUrl })
   }
 
-  return results;
+  return results
 }
 
 function buildLoginUrl(settings: Settings, providerName: string): string {
-  return `http://127.0.0.1:${settings.service.port}/oauth/login/${providerName}`;
+  return `http://127.0.0.1:${settings.service.port}/oauth/login/${providerName}`
 }
 
 /**
  * 生成启动时使用的 CSRF nonce。
  */
 export function generateNonce(): string {
-  const bytes = new Uint8Array(32);
-  globalThis.crypto.getRandomValues(bytes);
-  return Buffer.from(bytes).toString('base64url');
+  const bytes = new Uint8Array(32)
+  globalThis.crypto.getRandomValues(bytes)
+  return Buffer.from(bytes).toString('base64url')
 }

@@ -1,21 +1,31 @@
-import type { LanguageModel } from 'ai';
-import type { Settings, OAuthConfig, ProviderConfig } from '../config.js';
-import type { TokenManager } from '../oauth/index.js';
-import type { Logger } from '../types.js';
-import type { PluginRegistry } from '../plugins/registry.js';
-import { createOpenAICompatibleProvider, sanitizeHeaders } from '../openai-compatible.js';
+import type { LanguageModel } from 'ai'
+import type { Settings, OAuthConfig, ProviderConfig } from '../config.js'
+import type { TokenManager } from '../oauth/index.js'
+import type { Logger } from '../types.js'
+import type { PluginRegistry } from '../plugins/registry.js'
+import { createOpenAICompatibleProvider, sanitizeHeaders } from '../openai-compatible.js'
 
 const noopLogger: Logger = {
   info() {},
   warn() {},
   error() {},
   fatal() {},
-  child() { return noopLogger; },
-};
+  child() {
+    return noopLogger
+  },
+}
 
 export interface ProviderRegistry {
-  languageModel(providerName: string, upstreamModel: string, modelHeaders: Record<string, string>): LanguageModel;
-  debugProviderConfig(providerName: string): { baseURL: string; headers: Record<string, string>; proxyEnabled: boolean };
+  languageModel(
+    providerName: string,
+    upstreamModel: string,
+    modelHeaders: Record<string, string>,
+  ): LanguageModel
+  debugProviderConfig(providerName: string): {
+    baseURL: string
+    headers: Record<string, string>
+    proxyEnabled: boolean
+  }
 }
 
 export async function createProviderRegistry(
@@ -25,67 +35,83 @@ export async function createProviderRegistry(
   pluginRegistry?: PluginRegistry,
   authFilePath?: string,
 ): Promise<ProviderRegistry> {
-  const log = logger ?? noopLogger;
-  const apiKeyIndexes = new Map<string, number>();
+  const log = logger ?? noopLogger
+  const apiKeyIndexes = new Map<string, number>()
 
   // 预构建 auth fetch wrappers（per-provider）
-  const authFetchMap = new Map<string, (baseFetch?: typeof fetch) => typeof fetch>();
+  const authFetchMap = new Map<string, (baseFetch?: typeof fetch) => typeof fetch>()
   if (pluginRegistry) {
     for (const providerId of Object.keys(settings.providers)) {
-      const authFetch = await pluginRegistry.createAuthFetch(providerId, log, authFilePath);
+      const authFetch = await pluginRegistry.createAuthFetch(providerId, log, authFilePath)
       if (authFetch) {
-        authFetchMap.set(providerId, authFetch);
+        authFetchMap.set(providerId, authFetch)
       }
     }
   }
 
   return {
     languageModel(providerName, upstreamModel, modelHeaders) {
-      const provider = settings.providers[providerName];
+      const provider = settings.providers[providerName]
       if (!provider) {
-        throw new Error(`Unknown provider '${providerName}'`);
+        throw new Error(`Unknown provider '${providerName}'`)
       }
 
       // Auth 插件路径：使用预构建的 fetch wrapper
-      const authFetch = authFetchMap.get(providerName);
+      const authFetch = authFetchMap.get(providerName)
       if (authFetch) {
         return createOpenAICompatibleProvider(
-          providerName, provider, settings, modelHeaders, undefined, authFetch,
-        )(upstreamModel);
+          providerName,
+          provider,
+          settings,
+          modelHeaders,
+          undefined,
+          authFetch,
+        )(upstreamModel)
       }
 
       // OAuth 路径：使用动态 fetch 注入 token
       if (provider.oauth && tokenManager) {
-        const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager);
+        const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
         return createOpenAICompatibleProvider(
-          providerName, provider, settings, modelHeaders, undefined, oauthFetch,
-        )(upstreamModel);
+          providerName,
+          provider,
+          settings,
+          modelHeaders,
+          undefined,
+          oauthFetch,
+        )(upstreamModel)
       }
 
       // 静态 API Key 路径（现有逻辑）
-      const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes);
+      const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
       if (selection) {
         log.info(
           { provider: providerName, keyIndex: selection.index, keyCount: selection.count },
           'selected api key for provider',
-        );
+        )
       }
 
-      return createOpenAICompatibleProvider(providerName, provider, settings, modelHeaders, selection?.apiKey)(upstreamModel);
+      return createOpenAICompatibleProvider(
+        providerName,
+        provider,
+        settings,
+        modelHeaders,
+        selection?.apiKey,
+      )(upstreamModel)
     },
     debugProviderConfig(providerName) {
-      const provider = settings.providers[providerName];
+      const provider = settings.providers[providerName]
       if (!provider) {
-        throw new Error(`Unknown provider '${providerName}'`);
+        throw new Error(`Unknown provider '${providerName}'`)
       }
 
       return {
         baseURL: provider.baseURL,
         headers: sanitizeHeaders(provider.headers),
         proxyEnabled: settings.proxy !== null,
-      };
+      }
     },
-  };
+  }
 }
 
 /**
@@ -100,12 +126,12 @@ export function createOAuthFetch(
   tokenManager: TokenManager,
 ): (baseFetch?: typeof fetch) => typeof fetch {
   return (baseFetch) => async (input, init) => {
-    const token = await tokenManager.ensureValidToken(providerName, oauthConfig);
-    const headers = new Headers(init?.headers);
-    headers.set('Authorization', `${token.tokenType} ${token.accessToken}`);
-    const fetchFn = baseFetch ?? globalThis.fetch;
-    return fetchFn(input, { ...init, headers });
-  };
+    const token = await tokenManager.ensureValidToken(providerName, oauthConfig)
+    const headers = new Headers(init?.headers)
+    headers.set('Authorization', `${token.tokenType} ${token.accessToken}`)
+    const fetchFn = baseFetch ?? globalThis.fetch
+    return fetchFn(input, { ...init, headers })
+  }
 }
 
 function selectApiKey(
@@ -114,19 +140,19 @@ function selectApiKey(
   apiKeyIndexes: Map<string, number>,
 ): { apiKey: string; index: number; count: number } | undefined {
   if (apiKey === undefined || apiKey === null) {
-    return undefined;
+    return undefined
   }
 
   if (typeof apiKey === 'string') {
-    return { apiKey, index: 0, count: 1 };
+    return { apiKey, index: 0, count: 1 }
   }
 
-  const index = apiKeyIndexes.get(providerName) ?? 0;
-  const selectedIndex = index % apiKey.length;
-  const selectedApiKey = apiKey[selectedIndex];
+  const index = apiKeyIndexes.get(providerName) ?? 0
+  const selectedIndex = index % apiKey.length
+  const selectedApiKey = apiKey[selectedIndex]
   if (selectedApiKey === undefined) {
-    throw new Error(`Missing API key at index ${selectedIndex} for provider '${providerName}'`);
+    throw new Error(`Missing API key at index ${selectedIndex} for provider '${providerName}'`)
   }
-  apiKeyIndexes.set(providerName, index + 1);
-  return { apiKey: selectedApiKey, index: selectedIndex, count: apiKey.length };
+  apiKeyIndexes.set(providerName, index + 1)
+  return { apiKey: selectedApiKey, index: selectedIndex, count: apiKey.length }
 }
