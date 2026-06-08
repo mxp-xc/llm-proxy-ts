@@ -3,7 +3,7 @@ import type { AuthPluginContext } from './types.js';
 /**
  * 简单认证结果：只需注入 headers 和/或 query params。
  *
- * 适用于"获取 token → 注入 header/query"的模式（百度、智谱AI 等）。
+ * 适用于"获取 token → 注入 header/query"的模式。
  * HMAC 等需访问请求 body 的场景，插件应直接实现 `createFetch`。
  */
 export interface SimpleAuthCredentials {
@@ -21,13 +21,13 @@ export interface SimpleAuthCredentials {
  *
  * @example
  * ```typescript
- * // 百度：access_token 放 URL query
+ * // 注入 Bearer header
  * const plugin: AuthPlugin = {
- *   name: 'baidu-auth',
+ *   name: 'demo-auth',
  *   createFetch(ctx) {
  *     return createSimpleAuthFetch(async (ctx) => {
- *       const token = await fetchBaiduToken(ctx);
- *       return { query: { access_token: token } };
+ *       const token = await fetchToken(ctx);
+ *       return { headers: { Authorization: `Bearer ${token}` } };
  *     }, ctx);
  *   },
  * };

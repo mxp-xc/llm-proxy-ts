@@ -190,6 +190,78 @@
           },
           "enableFlatModelLookup": {
             "type": "boolean"
+          },
+          "oauth": {
+            "type": "object",
+            "properties": {
+              "flow": {
+                "type": "string",
+                "enum": [
+                  "authorization_code",
+                  "client_credentials"
+                ]
+              },
+              "clientId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "clientSecret": {
+                "type": "string",
+                "minLength": 1
+              },
+              "tokenUrl": {
+                "type": "string",
+                "format": "uri"
+              },
+              "authorizationUrl": {
+                "type": "string",
+                "format": "uri"
+              },
+              "scopes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": []
+              },
+              "redirectUri": {
+                "type": "string",
+                "format": "uri"
+              },
+              "authFile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "flow",
+              "clientId",
+              "clientSecret",
+              "tokenUrl"
+            ],
+            "additionalProperties": false
+          },
+          "auth": {
+            "type": "object",
+            "properties": {
+              "module": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": {},
+                "default": {}
+              }
+            },
+            "required": [
+              "module"
+            ],
+            "additionalProperties": false
+          },
+          "modelsEndpoint": {
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": [
