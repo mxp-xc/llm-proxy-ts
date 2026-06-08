@@ -14,20 +14,21 @@
 llm-proxy-ts/
 ├── apps/core/     @llm-proxy/core   — 配置、Provider 工厂、CLI
 ├── apps/server/   @llm-proxy/server — Hono HTTP 服务器
+├── plugins/       示例外部插件（auth-demo）
 ├── config/        示例配置 + JSON Schema
 └── tsconfig.base.json
 ```
 
-`server` 依赖 `core`（`workspace:*`），`packages/` 预留为空。各包有独立的 `AGENTS.md` 描述模块细节。
+`server` 依赖 `core`（`workspace:*`）。各包有独立的 `AGENTS.md` 描述模块细节。
 
 ## 通用命令
 
-| 命令             | 作用                           |
-| ---------------- | ------------------------------ |
-| `pnpm install`   | 安装依赖                       |
-| `pnpm dev`       | 启动开发服务器（`tsx watch`）  |
-| `pnpm test`      | 运行全部测试（Vitest，无网络） |
-| `pnpm typecheck` | `tsc --noEmit`                 |
+| 命令 | 作用 |
+|---|---|
+| `pnpm install` | 安装依赖 |
+| `pnpm dev` | 启动开发服务器（`tsx watch`） |
+| `pnpm test` | 运行全部测试（Vitest，无网络） |
+| `pnpm typecheck` | `tsc --noEmit` |
 
 运行单个测试：`pnpm --filter <pkg> test test/xxx.test.ts`
 
