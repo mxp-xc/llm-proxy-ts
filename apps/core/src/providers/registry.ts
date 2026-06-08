@@ -3,7 +3,8 @@ import type { Settings, OAuthConfig, ProviderConfig } from '../config.js'
 import type { TokenManager } from '../oauth/index.js'
 import type { Logger } from '../types.js'
 import type { PluginRegistry } from '../plugins/registry.js'
-import { createOpenAICompatibleProvider, sanitizeHeaders } from '../openai-compatible.js'
+import { createOpenAICompatibleProvider, sanitizeHeaders } from './openai/provider.js'
+import { createAnthropicProvider } from './anthropic/provider.js'
 
 const noopLogger: Logger = {
   info() {},
@@ -56,33 +57,21 @@ export async function createProviderRegistry(
         throw new Error(`Unknown provider '${providerName}'`)
       }
 
+      const factory = createProviderModelFactory(providerName, provider, settings, modelHeaders)
+
       // Auth 插件路径：使用预构建的 fetch wrapper
       const authFetch = authFetchMap.get(providerName)
       if (authFetch) {
-        return createOpenAICompatibleProvider(
-          providerName,
-          provider,
-          settings,
-          modelHeaders,
-          undefined,
-          authFetch,
-        )(upstreamModel)
+        return factory(undefined, authFetch)(upstreamModel)
       }
 
       // OAuth 路径：使用动态 fetch 注入 token
       if (provider.oauth && tokenManager) {
         const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
-        return createOpenAICompatibleProvider(
-          providerName,
-          provider,
-          settings,
-          modelHeaders,
-          undefined,
-          oauthFetch,
-        )(upstreamModel)
+        return factory(undefined, oauthFetch)(upstreamModel)
       }
 
-      // 静态 API Key 路径（现有逻辑）
+      // 静态 API Key 路径
       const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
       if (selection) {
         log.info(
@@ -91,13 +80,7 @@ export async function createProviderRegistry(
         )
       }
 
-      return createOpenAICompatibleProvider(
-        providerName,
-        provider,
-        settings,
-        modelHeaders,
-        selection?.apiKey,
-      )(upstreamModel)
+      return factory(selection?.apiKey)(upstreamModel)
     },
     debugProviderConfig(providerName) {
       const provider = settings.providers[providerName]
@@ -106,7 +89,10 @@ export async function createProviderRegistry(
       }
 
       return {
-        baseURL: provider.baseURL,
+        baseURL:
+          provider.type === 'anthropic'
+            ? (provider.baseURL ?? 'https://api.anthropic.com/v1')
+            : provider.baseURL,
         headers: sanitizeHeaders(provider.headers),
         proxyEnabled: settings.proxy !== null,
       }
@@ -132,6 +118,41 @@ export function createOAuthFetch(
     const fetchFn = baseFetch ?? globalThis.fetch
     return fetchFn(input, { ...init, headers })
   }
+}
+
+/**
+ * 根据 provider.type 返回对应的 AI SDK provider 工厂函数。
+ * 消除 auth plugin / OAuth / static API key 三条路径的重复分派逻辑。
+ */
+function createProviderModelFactory(
+  providerName: string,
+  provider: ProviderConfig,
+  settings: Settings,
+  modelHeaders: Record<string, string>,
+): (
+  selectedApiKey?: string,
+  oauthFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+) => (upstreamModel: string) => LanguageModel {
+  if (provider.type === 'anthropic') {
+    return (selectedApiKey, oauthFetch) =>
+      createAnthropicProvider(
+        providerName,
+        provider,
+        settings,
+        modelHeaders,
+        selectedApiKey,
+        oauthFetch,
+      )
+  }
+  return (selectedApiKey, oauthFetch) =>
+    createOpenAICompatibleProvider(
+      providerName,
+      provider,
+      settings,
+      modelHeaders,
+      selectedApiKey,
+      oauthFetch,
+    )
 }
 
 function selectApiKey(

@@ -1,6 +1,7 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { ProxyAgent, request } from 'undici'
-import type { ProviderConfig, Settings } from './config.js'
+import type { Settings } from '../../config.js'
+import type { OpenAICompatibleProviderConfig } from '../../config.js'
 
 export function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
   const sensitiveHeaders = new Set([
@@ -18,7 +19,7 @@ export function sanitizeHeaders(headers: Record<string, string>): Record<string,
 
 export function createOpenAICompatibleProvider(
   providerName: string,
-  provider: ProviderConfig,
+  provider: OpenAICompatibleProviderConfig,
   settings: Settings,
   modelHeaders: Record<string, string>,
   selectedApiKey: string | undefined,

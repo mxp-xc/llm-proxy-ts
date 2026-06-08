@@ -116,220 +116,440 @@
     "providers": {
       "type": "object",
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "openai-compatible"
-          },
-          "baseURL": {
-            "type": "string",
-            "format": "uri"
-          },
-          "apiKey": {
-            "anyOf": [
-              {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "openai-compatible"
+              },
+              "baseURL": {
+                "type": "string",
+                "format": "uri"
+              },
+              "apiKey": {
                 "anyOf": [
                   {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "minItems": 1
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "default": {}
-          },
-          "plugins": {
-            "type": "array",
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1
-                },
-                {
-                  "type": "object",
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "module": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "config": {
-                      "type": "object",
-                      "additionalProperties": {},
-                      "default": {}
-                    },
-                    "providers": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        {
-                          "type": "array",
-                          "items": {
-                            "type": "string",
-                            "minLength": 1
-                          }
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false
-                }
-              ]
-            },
-            "default": []
-          },
-          "models": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "properties": {
-                "upstreamModel": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "aliases": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "default": []
-                },
-                "headers": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {}
-                },
-                "plugins": {
-                  "type": "array",
-                  "items": {
                     "anyOf": [
                       {
                         "type": "string",
                         "minLength": 1
                       },
                       {
-                        "type": "object",
-                        "properties": {
-                          "name": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "module": {
-                            "type": "string",
-                            "minLength": 1
-                          },
-                          "config": {
-                            "type": "object",
-                            "additionalProperties": {},
-                            "default": {}
-                          },
-                          "providers": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "minLength": 1
-                              },
-                              {
-                                "type": "array",
-                                "items": {
-                                  "type": "string",
-                                  "minLength": 1
-                                }
-                              }
-                            ]
-                          }
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
                         },
-                        "additionalProperties": false
+                        "minItems": 1
                       }
                     ]
                   },
-                  "default": []
-                }
+                  {
+                    "type": "null"
+                  }
+                ]
               },
-              "required": ["upstreamModel"],
-              "additionalProperties": false
-            },
-            "default": {}
-          },
-          "enableFlatModelLookup": {
-            "type": "boolean"
-          },
-          "oauth": {
-            "type": "object",
-            "properties": {
-              "flow": {
-                "type": "string",
-                "enum": ["authorization_code", "client_credentials"]
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {}
               },
-              "clientId": {
-                "type": "string",
-                "minLength": 1
-              },
-              "clientSecret": {
-                "type": "string",
-                "minLength": 1
-              },
-              "tokenUrl": {
-                "type": "string",
-                "format": "uri"
-              },
-              "authorizationUrl": {
-                "type": "string",
-                "format": "uri"
-              },
-              "scopes": {
+              "plugins": {
                 "type": "array",
                 "items": {
-                  "type": "string",
-                  "minLength": 1
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "module": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "config": {
+                          "type": "object",
+                          "additionalProperties": {},
+                          "default": {}
+                        },
+                        "providers": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
                 },
                 "default": []
               },
-              "redirectUri": {
+              "models": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "upstreamModel": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "aliases": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "default": []
+                    },
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "default": {}
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "module": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "config": {
+                                "type": "object",
+                                "additionalProperties": {},
+                                "default": {}
+                              },
+                              "providers": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "default": []
+                    }
+                  },
+                  "required": ["upstreamModel"],
+                  "additionalProperties": false
+                },
+                "default": {}
+              },
+              "enableFlatModelLookup": {
+                "type": "boolean"
+              },
+              "oauth": {
+                "type": "object",
+                "properties": {
+                  "flow": {
+                    "type": "string",
+                    "enum": ["authorization_code", "client_credentials"]
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "clientSecret": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "tokenUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "authorizationUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "redirectUri": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "authFile": {
+                    "type": "string"
+                  }
+                },
+                "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
+                "additionalProperties": false
+              },
+              "modelsEndpoint": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["type", "baseURL"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "anthropic"
+              },
+              "baseURL": {
                 "type": "string",
                 "format": "uri"
               },
-              "authFile": {
-                "type": "string"
+              "apiKey": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "minItems": 1
+                      }
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {}
+              },
+              "plugins": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "module": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "config": {
+                          "type": "object",
+                          "additionalProperties": {},
+                          "default": {}
+                        },
+                        "providers": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "default": []
+              },
+              "models": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "upstreamModel": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "aliases": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "default": []
+                    },
+                    "headers": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "default": {}
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "module": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "config": {
+                                "type": "object",
+                                "additionalProperties": {},
+                                "default": {}
+                              },
+                              "providers": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "default": []
+                    }
+                  },
+                  "required": ["upstreamModel"],
+                  "additionalProperties": false
+                },
+                "default": {}
+              },
+              "enableFlatModelLookup": {
+                "type": "boolean"
+              },
+              "oauth": {
+                "type": "object",
+                "properties": {
+                  "flow": {
+                    "type": "string",
+                    "enum": ["authorization_code", "client_credentials"]
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "clientSecret": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "tokenUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "authorizationUrl": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "default": []
+                  },
+                  "redirectUri": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "authFile": {
+                    "type": "string"
+                  }
+                },
+                "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
+                "additionalProperties": false
+              },
+              "anthropicVersion": {
+                "type": "string",
+                "minLength": 1
               }
             },
-            "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
+            "required": ["type"],
             "additionalProperties": false
-          },
-          "modelsEndpoint": {
-            "type": "string",
-            "minLength": 1
           }
-        },
-        "required": ["type", "baseURL"],
-        "additionalProperties": false
+        ]
       },
       "default": {}
     }

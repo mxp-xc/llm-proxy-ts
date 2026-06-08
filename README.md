@@ -52,19 +52,19 @@ config/        示例配置 + JSON Schema
 
 基于 [Commander.js](https://github.com/tj/commander.js)，通过 `pnpm dev <command>` 调用。
 
-| 命令                        | 作用                                             |
-| --------------------------- | ------------------------------------------------ |
-| `pnpm dev serve`            | 启动开发服务器（默认 `tsx watch` 热重载）        |
-| `pnpm dev serve --no-watch` | 启动服务器（无热重载）                           |
-| `pnpm dev models sync`      | 交互式同步上游模型到配置文件                     |
-| `pnpm dev models sync -p <name>` | 同步指定 provider                          |
-| `pnpm dev models sync --dry-run` | 预览变更，不写入                            |
-| `pnpm dev models list`      | 列出所有已配置模型（表格）                       |
-| `pnpm dev models list --format json` | 列出所有已配置模型（JSON）               |
-| `pnpm models:sync`          | 同 `pnpm dev models sync`（向后兼容）            |
-| `pnpm test`                 | 运行全部测试                                     |
-| `pnpm typecheck`            | 类型检查                                         |
-| `pnpm generate:schema`      | 从 Zod schema 生成 `config/settings.schema.json` |
+| 命令                                 | 作用                                             |
+| ------------------------------------ | ------------------------------------------------ |
+| `pnpm dev serve`                     | 启动开发服务器（默认 `tsx watch` 热重载）        |
+| `pnpm dev serve --no-watch`          | 启动服务器（无热重载）                           |
+| `pnpm dev models sync`               | 交互式同步上游模型到配置文件                     |
+| `pnpm dev models sync -p <name>`     | 同步指定 provider                                |
+| `pnpm dev models sync --dry-run`     | 预览变更，不写入                                 |
+| `pnpm dev models list`               | 列出所有已配置模型（表格）                       |
+| `pnpm dev models list --format json` | 列出所有已配置模型（JSON）                       |
+| `pnpm models:sync`                   | 同 `pnpm dev models sync`（向后兼容）            |
+| `pnpm test`                          | 运行全部测试                                     |
+| `pnpm typecheck`                     | 类型检查                                         |
+| `pnpm generate:schema`               | 从 Zod schema 生成 `config/settings.schema.json` |
 
 ## 安全
 

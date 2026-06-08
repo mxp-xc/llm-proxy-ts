@@ -193,7 +193,9 @@ describe('config', () => {
     )
 
     const settings = await loadSettingsFromFile(settingsPath)
-    expect(settings.providers.custom?.modelsEndpoint).toBe('/v1/models')
+    const p = settings.providers.custom
+    expect(p?.type).toBe('openai-compatible')
+    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBe('/v1/models')
   })
 
   it('accepts modelsEndpoint as full URL', async () => {
@@ -216,7 +218,9 @@ describe('config', () => {
     )
 
     const settings = await loadSettingsFromFile(settingsPath)
-    expect(settings.providers.custom?.modelsEndpoint).toBe('https://other.api.com/list')
+    const p = settings.providers.custom
+    expect(p?.type).toBe('openai-compatible')
+    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBe('https://other.api.com/list')
   })
 
   it('rejects empty modelsEndpoint', async () => {
@@ -260,7 +264,9 @@ describe('config', () => {
     )
 
     const settings = await loadSettingsFromFile(settingsPath)
-    expect(settings.providers.custom?.modelsEndpoint).toBeUndefined()
+    const p = settings.providers.custom
+    expect(p?.type).toBe('openai-compatible')
+    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBeUndefined()
   })
 
   it('rejects provider with both oauth and auth plugin targeting it', async () => {

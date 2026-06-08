@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch ../core/src/cli/cli.ts serve",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "generate:schema": "tsx scripts/generate-schema.ts"

@@ -3,7 +3,7 @@
   "service": {
     "name": "llm-proxy",
     "host": "127.0.0.1",
-    "port": 8000,
+    "port": 8056,
   },
   "requestTimeoutMs": 30000,
   "proxy": null,
@@ -74,6 +74,19 @@
     //   "type": "openai-compatible",
     //   "baseURL": "https://api.example.com/v1",
     //   "models": { "chat": { "upstreamModel": "model-x" } }
-    // }
+    // },
+    // Anthropic provider (native Messages API at /v1/messages):
+    // "anthropic": {
+    //   "type": "anthropic",
+    //   "apiKey": "${ANTHROPIC_API_KEY}",
+    //   // baseURL is optional — defaults to https://api.anthropic.com/v1
+    //   // "baseURL": "https://api.anthropic.com/v1",
+    //   // Override the default anthropic-version header:
+    //   // "anthropicVersion": "2023-06-01",
+    //   "models": {
+    //     "sonnet": { "upstreamModel": "claude-sonnet-4-5" },
+    //     "haiku": { "upstreamModel": "claude-haiku-4-5" },
+    //   }
+    // },
   },
 }

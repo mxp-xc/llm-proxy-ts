@@ -386,9 +386,7 @@ describe('openAIToDiscoveredModels', () => {
   })
 
   it('discards OpenAI-specific fields', () => {
-    const openaiModels = [
-      { id: 'model-a', object: 'model', created: 999, owned_by: 'org' },
-    ]
+    const openaiModels = [{ id: 'model-a', object: 'model', created: 999, owned_by: 'org' }]
     const result = openAIToDiscoveredModels(openaiModels)
     expect(result.models[0]).toEqual({ id: 'model-a' })
   })

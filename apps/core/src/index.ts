@@ -11,6 +11,8 @@ export type {
   ModelRouteConfig,
   ModelRouteInput,
   OAuthConfig,
+  OpenAICompatibleProviderConfig,
+  AnthropicProviderConfig,
   ProviderConfig,
   Settings,
 } from './config.js'
@@ -36,7 +38,8 @@ export {
   createOpenAICompatibleProvider,
   createProxyFetch,
   sanitizeHeaders,
-} from './openai-compatible.js'
+} from './providers/openai/provider.js'
+export { createAnthropicProvider } from './providers/anthropic/provider.js'
 
 // OAuth exports
 export type { OAuthToken, TokenStore, AuthStatus } from './oauth/types.js'
@@ -90,21 +93,43 @@ export { createPluginStore } from './plugins/store-adapter.js'
 export { resolvePluginConfigs, assertKnownPlugins } from './plugins/registry.js'
 
 // Protocol type exports
-export type { OpenAIModel, OpenAIModelList } from './protocols/openai-types.js'
+export type { OpenAIModel, OpenAIModelList } from './providers/openai/types.js'
+export type {
+  AnthropicStopReason,
+  AnthropicErrorResponse,
+  AnthropicErrorType,
+  AnthropicMessageResponse,
+  AnthropicContentBlock,
+  AnthropicTool,
+  AnthropicToolChoice,
+  AnthropicThinking,
+  AnthropicMessage,
+} from './providers/anthropic/types.js'
 
-// Protocol exports
+// Protocol exports — OpenAI
 export {
   validateOpenAIChatRequest,
   openAIChatRequestSchema,
   mapOpenAIChatRequestToAISDKInput,
-} from './protocols/openai-chat.js'
-export type { OpenAIChatRequest, AISDKInput } from './protocols/openai-chat.js'
+} from './providers/openai/protocol.js'
+export type { OpenAIChatRequest, AISDKInput } from './providers/openai/protocol.js'
 export {
   renderOpenAIChatCompletion,
   renderOpenAIChatCompletionSSE,
-} from './protocols/openai-chat-renderer.js'
-export type { RenderResultInput, OpenAIChatCompletion } from './protocols/openai-chat-renderer.js'
-export { listModels, getModel } from './protocols/openai-models.js'
+} from './providers/openai/renderer.js'
+export type { RenderResultInput, OpenAIChatCompletion } from './providers/openai/renderer.js'
+export { listModels, getModel } from './providers/openai/models.js'
+
+// Protocol exports — Anthropic
+export {
+  validateAnthropicMessagesRequest,
+  anthropicMessagesRequestSchema,
+  mapAnthropicMessagesRequestToAISDKInput,
+} from './providers/anthropic/protocol.js'
+export {
+  renderAnthropicMessage,
+  renderAnthropicMessageSSE,
+} from './providers/anthropic/renderer.js'
 
 // Routing exports
 export { RoutingTable, RoutingError } from './routing.js'

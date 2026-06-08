@@ -1,6 +1,6 @@
-import type { Settings } from '../config.js'
-import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { OpenAIModel, OpenAIModelList } from './openai-types.js'
+import type { Settings } from '../../config.js'
+import { isFlatLookupEnabled } from '../../config-helpers.js'
+import type { OpenAIModel, OpenAIModelList } from './types.js'
 
 export function listModels(settings: Settings): OpenAIModelList {
   const data: OpenAIModel[] = []

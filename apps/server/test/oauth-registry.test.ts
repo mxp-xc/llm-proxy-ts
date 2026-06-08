@@ -33,8 +33,9 @@ const mocks = vi.hoisted(() => ({
   }>,
 }))
 
-vi.mock('../../core/src/openai-compatible.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../core/src/openai-compatible.js')>()
+vi.mock('../../core/src/providers/openai/provider.js', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('../../core/src/providers/openai/provider.js')>()
   return {
     ...original,
     createOpenAICompatibleProvider(

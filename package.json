@@ -4,11 +4,11 @@
   "type": "module",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm --filter @llm-proxy/server dev",
+    "dev": "tsx apps/core/src/cli/cli.ts",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "generate:schema": "pnpm --filter @llm-proxy/server generate:schema",
-    "models:sync": "pnpm --filter @llm-proxy/core models:sync",
+    "models:sync": "tsx apps/core/src/cli/cli.ts models sync",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

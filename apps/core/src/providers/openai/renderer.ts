@@ -1,22 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 
-type FinishReason =
-  | 'stop'
-  | 'length'
-  | 'content-filter'
-  | 'tool-calls'
-  | 'error'
-  | 'other'
-  | undefined
-
-export interface RenderResultInput {
-  model: string
-  text: string
-  finishReason?: FinishReason
-  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
-  response?: { id?: string; timestamp?: Date }
-  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
-}
+export type { FinishReason, RenderResultInput } from '../protocol-types.js'
 
 export interface OpenAIChatCompletion {
   id: string

@@ -5,19 +5,15 @@ Hono HTTP 服务器，暴露 OpenAI Chat Completions 兼容 API。依赖 `@llm-p
 ## 请求流程
 
 ```
-Client → Hono app (/v1/chat/completions)
-  → validateOpenAIChatRequest（Zod 校验）
-  → RoutingTable.resolve(provider/model)
-  → mapOpenAIChatRequestToAISDKInput（OpenAI → AI SDK 格式）
-  → ProviderRegistry.languageModel()
-  → gateway.generate() / gateway.stream()
-  → renderOpenAIChatCompletion / renderOpenAIChatCompletionSSE
-  → Client
+Client → Hono app
+  ├─ /v1/chat/completions  → validateOpenAIChatRequest → resolve(openai-compatible) → OpenAI 协议渲染
+  └─ /v1/messages          → validateAnthropicMessagesRequest → resolve(anthropic) → Anthropic 协议渲染
 ```
 
 ## 关键架构
 
-- **server 的 `protocols/` 和 `routing.ts` 是独立实现**，非 core 重导出。core 提供同功能的通用版本供 CLI 使用，server 有自己的实现以适配 Hono 上下文。
+- **server 的 `protocols/` 是旧版独立实现**，app.ts 实际从 `@llm-proxy/core` 导入协议逻辑。server 本地副本已不再使用，后续可删除。
+- **端点隔离：** `/v1/messages` 仅路由到 `type: 'anthropic'` provider，`/v1/chat/completions` 仅路由到 `type: 'openai-compatible'`。错误响应格式也分别使用 Anthropic/OpenAI 风格。
 - **可注入依赖：** `createApp()` 接受 `ModelGateway`、`ProviderRegistry`、`TokenManager` 覆盖——这是主要测试接缝，通过 `app.fetch()` 直接测试，无需 HTTP 服务器。
 - **流首包检查：** `vendor_sse_error` 插件窥视第一个 SSE chunk，检测限流错误时中断流返回 429。
 - **Provider options 透传：** 不在 `mappedRequestKeys` 内的未知字段作为 `providerOptions.{providerName}` 转发。
@@ -25,8 +21,8 @@ Client → Hono app (/v1/chat/completions)
 
 ## 命令
 
-| 命令 | 作用 |
-|---|---|
+| 命令                   | 作用                                                 |
+| ---------------------- | ---------------------------------------------------- |
 | `pnpm generate:schema` | 从 Zod schema 重新生成 `config/settings.schema.json` |
 
 ## 敏感数据

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   mapOpenAIChatRequestToAISDKInput,
   validateOpenAIChatRequest,
-} from '../src/protocols/openai-chat.js'
+} from '../src/providers/openai/protocol.js'
 
 describe('OpenAI chat protocol mapping', () => {
   it('validates required model and messages', () => {
