@@ -2,9 +2,10 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadAuthPlugin } from '../src/auth/loader.js';
+import { loadPlugin, registerBuiltInPlugin } from '../src/plugins/loader.js';
+import type { Plugin } from '../src/plugins/types.js';
 
-describe('loadAuthPlugin', () => {
+describe('loadPlugin', () => {
   let tempDir: string;
 
   afterEach(async () => {
@@ -36,23 +37,19 @@ describe('loadAuthPlugin', () => {
       };
     `);
 
-    const result = await loadAuthPlugin(filePath, tempDir);
+    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir);
 
     expect(result.plugin.name).toBe('test-plugin');
-    expect(result.plugin.createFetch).toBeTypeOf('function');
     expect(result.modulePath).toBe(filePath);
   });
 
   it('should reject modules without default export', async () => {
-    // The loader falls back to mod.default ?? mod, so a module with named
-    // exports that happen to match the plugin shape would still pass.
-    // Use a module that exports nothing plugin-like to trigger the rejection.
     const filePath = await writePluginFile('no-default.mjs', `
       export const version = '1.0.0';
       export function doSomething() {}
     `);
 
-    await expect(loadAuthPlugin(filePath, tempDir)).rejects.toThrow(
+    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
       /must export a default object|must have a non-empty string 'name' property/,
     );
   });
@@ -69,20 +66,20 @@ describe('loadAuthPlugin', () => {
       };
     `);
 
-    await expect(loadAuthPlugin(filePath, tempDir)).rejects.toThrow(
+    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
       /must have a non-empty string 'name' property/,
     );
   });
 
-  it('should reject modules without createFetch method', async () => {
-    const filePath = await writePluginFile('no-createfetch.mjs', `
+  it('should reject modules without any hook', async () => {
+    const filePath = await writePluginFile('no-hook.mjs', `
       export default {
-        name: 'no-createfetch',
+        name: 'no-hook',
       };
     `);
 
-    await expect(loadAuthPlugin(filePath, tempDir)).rejects.toThrow(
-      /must have a 'createFetch' method/,
+    await expect(loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)).rejects.toThrow(
+      /must implement at least one hook/,
     );
   });
 
@@ -100,9 +97,11 @@ describe('loadAuthPlugin', () => {
       };
     `);
 
-    await expect(loadAuthPlugin(filePath, tempDir)).rejects.toThrow(
-      /'validateConfig' must be a function/,
-    );
+    // The new loader no longer validates validateConfig specifically;
+    // it just checks that at least one hook is present. Since createFetch
+    // is a hook, this module loads successfully — validateConfig is ignored.
+    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir);
+    expect(result.plugin.name).toBe('bad-validate');
   });
 
   it('should resolve relative paths against baseDir', async () => {
@@ -123,7 +122,7 @@ describe('loadAuthPlugin', () => {
       };
     `, 'utf8');
 
-    const result = await loadAuthPlugin('./plugins/relative-plugin.mjs', tempDir ?? pluginDir);
+    const result = await loadPlugin({ module: './plugins/relative-plugin.mjs', config: {}, providers: [] }, tempDir ?? pluginDir);
 
     expect(result.plugin.name).toBe('relative-plugin');
   });
@@ -141,9 +140,27 @@ describe('loadAuthPlugin', () => {
       };
     `);
 
-    const result = await loadAuthPlugin(filePath, '/irrelevant/basedir');
+    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, '/irrelevant/basedir');
 
     expect(result.plugin.name).toBe('absolute-plugin');
+  });
+
+  it('should load built-in plugin by name', async () => {
+    const builtIn: Plugin = {
+      name: 'test-built-in',
+      async init() {},
+    };
+    registerBuiltInPlugin(builtIn);
+
+    const result = await loadPlugin({ name: 'test-built-in', config: {}, providers: [] }, tempDir);
+    expect(result.plugin.name).toBe('test-built-in');
+    expect(result.modulePath).toBeUndefined();
+  });
+
+  it('should reject unknown built-in plugin name', async () => {
+    await expect(loadPlugin({ name: 'nonexistent-plugin', config: {}, providers: [] }, tempDir)).rejects.toThrow(
+      /Unknown built-in plugin/,
+    );
   });
 });
 

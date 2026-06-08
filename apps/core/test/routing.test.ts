@@ -8,19 +8,20 @@ function settings(enableFlatModelLookup = false): Settings {
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup },
+    plugins: [],
     providers: {
       openrouter: {
         type: 'openai-compatible',
         baseURL: 'https://openrouter.ai/api/v1',
         apiKey: 'secret',
         headers: { 'X-Provider': 'provider' },
-        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 3 } }],
+        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 3 }, providers: [] }],
         models: {
           chat: {
             upstreamModel: 'openrouter/chat',
             aliases: ['default'],
             headers: { 'X-Model': 'model' },
-            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 } }],
+            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
           },
         },
       },
@@ -37,7 +38,8 @@ describe('RoutingTable', () => {
     expect(route.modelKey).toBe('chat');
     expect(route.upstreamModel).toBe('openrouter/chat');
     expect(route.headers).toEqual({ 'X-Provider': 'provider', 'X-Model': 'model' });
-    expect(route.plugins).toEqual([{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 } }]);
+    // Without a PluginRegistry, resolvedPlugins is empty
+    expect(route.resolvedPlugins).toEqual([]);
   });
 
   it('resolves aliases inside an explicit provider', () => {

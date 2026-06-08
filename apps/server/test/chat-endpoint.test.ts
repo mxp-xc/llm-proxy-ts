@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createApp, type ModelGateway } from '../src/app.js';
-import type { Settings } from '@llm-proxy/core';
+import type { Settings, ProviderRegistry } from '@llm-proxy/core';
 
 const settings: Settings = {
   service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
   requestTimeoutMs: 30000,
   proxy: null,
   routing: { enableFlatModelLookup: false },
+  plugins: [],
   providers: {
     openrouter: {
       type: 'openai-compatible',
@@ -16,6 +17,15 @@ const settings: Settings = {
       plugins: [],
       models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
     },
+  },
+};
+
+const stubRegistry: ProviderRegistry = {
+  languageModel() {
+    return {} as never;
+  },
+  debugProviderConfig() {
+    return {} as never;
   },
 };
 
@@ -30,7 +40,7 @@ describe('chat endpoint', () => {
         throw new Error('not used');
       },
     };
-    const app = createApp({ settings: { ...settings, requestTimeoutMs: 5 }, gateway });
+    const app = createApp({ settings: { ...settings, requestTimeoutMs: 5 }, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -60,7 +70,7 @@ describe('chat endpoint', () => {
         return delayedFirstChunk();
       },
     };
-    const app = createApp({ settings: { ...settings, requestTimeoutMs: 5 }, gateway });
+    const app = createApp({ settings: { ...settings, requestTimeoutMs: 5 }, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -130,7 +140,7 @@ describe('chat endpoint', () => {
         throw new Error('not used');
       },
     };
-    const app = createApp({ settings, gateway });
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -157,7 +167,7 @@ describe('chat endpoint', () => {
         throw new Error('wrong');
       },
     };
-    const app = createApp({ settings, gateway });
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -178,7 +188,7 @@ describe('chat endpoint', () => {
         throw new Error('upstream secret token');
       },
     };
-    const app = createApp({ settings, gateway });
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -208,7 +218,7 @@ describe('chat endpoint', () => {
         return throwingFirstChunk();
       },
     };
-    const app = createApp({ settings, gateway });
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',

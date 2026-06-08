@@ -1,14 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { createSimpleAuthFetch } from '../src/auth/helpers.js';
-import type { AuthPluginContext } from '../src/auth/types.js';
-import type { SimpleAuthCredentials } from '../src/auth/helpers.js';
+import { createSimpleAuthFetch } from '../src/plugins/helpers.js';
+import type { ProviderContext } from '../src/plugins/types.js';
+import type { SimpleAuthCredentials } from '../src/plugins/helpers.js';
 
-function makeCtx(overrides?: Partial<AuthPluginContext>): AuthPluginContext {
+function makeCtx(overrides?: Partial<ProviderContext>): ProviderContext {
   return {
-    providerName: 'test-provider',
-    baseURL: 'https://api.example.com/v1',
+    id: 'test-provider',
+    provider: {
+      type: 'openai-compatible',
+      baseURL: 'https://api.example.com/v1',
+      apiKey: undefined,
+      headers: {},
+      plugins: [],
+      models: {},
+    },
     config: {},
-    store: undefined,
+    store: {
+      async get() { return undefined; },
+      async set() {},
+    },
     log: {
       info() {},
       warn() {},

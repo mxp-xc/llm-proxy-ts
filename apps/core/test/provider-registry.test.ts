@@ -39,6 +39,7 @@ const settings: Settings = {
   requestTimeoutMs: 30000,
   proxy: { url: 'http://127.0.0.1:7890', verify: false },
   routing: { enableFlatModelLookup: false },
+  plugins: [],
   providers: {
     openrouter: {
       type: 'openai-compatible',
@@ -64,8 +65,8 @@ describe('provider registry', () => {
     capturedLogs.length = 0;
   });
 
-  it('creates openai-compatible language models and filters auth header overrides', () => {
-    const registry = createProviderRegistry(settings, undefined, mockLogger);
+  it('creates openai-compatible language models and filters auth header overrides', async () => {
+    const registry = await createProviderRegistry(settings, undefined, mockLogger);
     const model = registry.languageModel('openrouter', 'openrouter/chat', {
       AUTHORIZATION: 'Bearer also-wrong',
       'X-API-Key': 'also-wrong',
@@ -79,8 +80,8 @@ describe('provider registry', () => {
     });
   });
 
-  it('rotates api key arrays per provider across requests', () => {
-    const registry = createProviderRegistry({
+  it('rotates api key arrays per provider across requests', async () => {
+    const registry = await createProviderRegistry({
       ...settings,
       providers: {
         openrouter: {
@@ -102,8 +103,8 @@ describe('provider registry', () => {
     expect(JSON.stringify(capturedLogs)).not.toContain('secret');
   });
 
-  it('does not log short api keys', () => {
-    const registry = createProviderRegistry({
+  it('does not log short api keys', async () => {
+    const registry = await createProviderRegistry({
       ...settings,
       providers: {
         openrouter: {
@@ -123,8 +124,8 @@ describe('provider registry', () => {
     expect(logs).not.toContain('12345678');
   });
 
-  it('does not pass api keys for unkeyed providers', () => {
-    const registry = createProviderRegistry({
+  it('does not pass api keys for unkeyed providers', async () => {
+    const registry = await createProviderRegistry({
       ...settings,
       providers: {
         openrouter: {

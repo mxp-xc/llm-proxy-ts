@@ -1,8 +1,8 @@
 import { generateText, streamText } from 'ai';
 import { Hono } from 'hono';
-import type { Settings, TokenManager, AuthStatus, ResolvedAuthPlugin } from '@llm-proxy/core';
-import { OAuthError, inspectVendorSseError, mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest, renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE, getModel, listModels, RoutingError, RoutingTable, createProviderRegistry } from '@llm-proxy/core';
-import type { ProviderRegistry } from '@llm-proxy/core';
+import type { Settings, TokenManager, AuthStatus } from '@llm-proxy/core';
+import { OAuthError, mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest, renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE, getModel, listModels, RoutingError, RoutingTable } from '@llm-proxy/core';
+import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse } from '@llm-proxy/core';
 import pino from 'pino';
 import { logger as defaultLogger, requestId } from './logging.js';
 import { createOAuthCallbackApp } from './oauth/callback.js';
@@ -23,7 +23,7 @@ export interface AppDependencies {
   tokenManager?: TokenManager;
   nonce?: string;
   authStatuses?: ProviderAuthStatus[];
-  authPlugins?: Map<string, ResolvedAuthPlugin>;
+  pluginRegistry?: PluginRegistry;
   authFilePath?: string;
 }
 
@@ -45,12 +45,15 @@ export function createApp({
   gateway = defaultGateway,
   nonce,
   authStatuses,
-  authPlugins,
+  pluginRegistry,
   authFilePath,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const routingTable = RoutingTable.fromSettings(settings);
-  const resolvedRegistry = providerRegistry ?? createProviderRegistry(settings, tokenManager, logger, authPlugins, authFilePath);
+  const routingTable = RoutingTable.fromSettings(settings, pluginRegistry);
+  if (!providerRegistry) {
+    throw new Error('providerRegistry is required — construct it with createProviderRegistry() before calling createApp()');
+  }
+  const resolvedRegistry = providerRegistry;
 
   // 挂载 OAuth 回调路由
   if (tokenManager && nonce) {
@@ -183,7 +186,7 @@ export function createApp({
       try {
         const stream = gateway.stream({ model, callInput, requestModel: request.model, abortSignal: abortController.signal });
         const inspection = await withRequestTimeout(
-          inspectFirstStreamChunk(route.plugins, stream),
+          inspectFirstStreamChunk(route.resolvedPlugins, stream),
           settings.requestTimeoutMs,
           abortController,
         );
@@ -318,27 +321,38 @@ function upstreamErrorResponse(): Response {
   );
 }
 
-async function inspectFirstStreamChunk(plugins: Settings['providers'][string]['plugins'], stream: AsyncIterable<unknown>) {
+// ─── Stream inspection (generic dispatch) ─────────────────────────
+
+import type { ResolvedPlugin } from '@llm-proxy/core';
+
+async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<unknown>) {
+  const inspectors = plugins.filter((rp) => typeof (rp.plugin as ProxyPlugin).inspectStreamChunk === 'function');
+
   const iterator = stream[Symbol.asyncIterator]();
   const first = await iterator.next();
   if (first.done) {
     return { stream: replayStream(undefined, iterator, plugins) };
   }
 
-  for (const plugin of plugins) {
-    if (plugin.name !== 'vendor_sse_error') {
-      continue;
-    }
-    const result = inspectVendorSseError(plugin.config, first.value);
-    if (result) {
-      return { error: result, stream: replayStream(undefined, iterator, plugins) };
+  if (inspectors.length > 0) {
+    for (const rp of inspectors) {
+      const result = await (rp.plugin as ProxyPlugin).inspectStreamChunk!({
+        requestId: '',
+        settings: {} as Settings,
+        provider: { id: '', provider: {} as any },
+        config: rp.config,
+        chunk: first.value,
+      });
+      if (result && typeof result === 'object' && 'status' in result) {
+        return { error: result as PluginResponse, stream: replayStream(undefined, iterator, plugins) };
+      }
     }
   }
 
   return { stream: replayStream(first.value, iterator, plugins) };
 }
 
-async function* replayStream(first: unknown, iterator: AsyncIterator<unknown>, plugins: Settings['providers'][string]['plugins'] = []): AsyncIterable<unknown> {
+async function* replayStream(first: unknown, iterator: AsyncIterator<unknown>, plugins: ResolvedPlugin[] = []): AsyncIterable<unknown> {
   if (first !== undefined) {
     yield first;
   }
@@ -347,7 +361,7 @@ async function* replayStream(first: unknown, iterator: AsyncIterator<unknown>, p
     if (next.done) {
       return;
     }
-    const error = inspectStreamChunk(plugins, next.value);
+    const error = await inspectStreamChunk(plugins, next.value);
     if (error) {
       yield { type: 'openai-error', body: error.body };
       return;
@@ -356,14 +370,18 @@ async function* replayStream(first: unknown, iterator: AsyncIterator<unknown>, p
   }
 }
 
-function inspectStreamChunk(plugins: Settings['providers'][string]['plugins'], chunk: unknown) {
-  for (const plugin of plugins) {
-    if (plugin.name !== 'vendor_sse_error') {
-      continue;
-    }
-    const result = inspectVendorSseError(plugin.config, chunk);
-    if (result) {
-      return result;
+async function inspectStreamChunk(plugins: ResolvedPlugin[], chunk: unknown): Promise<PluginResponse | undefined> {
+  for (const rp of plugins) {
+    if (typeof (rp.plugin as ProxyPlugin).inspectStreamChunk !== 'function') continue;
+    const result = await (rp.plugin as ProxyPlugin).inspectStreamChunk!({
+      requestId: '',
+      settings: {} as Settings,
+      provider: { id: '', provider: {} as any },
+      config: rp.config,
+      chunk,
+    });
+    if (result && typeof result === 'object' && 'status' in result) {
+      return result as PluginResponse;
     }
   }
   return undefined;

@@ -10,6 +10,18 @@
   "routing": {
     "enableFlatModelLookup": true
   },
+  "plugins": [
+    // Auth plugin example (custom token endpoint → Bearer header):
+    // {
+    //   "module": "./plugins/auth-demo/index.ts",
+    //   "providers": "my-provider",
+    //   "config": {
+    //     "tokenUrl": "https://auth.example.com/oauth2/token",
+    //     "clientId": "${MY_CLIENT_ID}",
+    //     "clientSecret": "${MY_CLIENT_SECRET}"
+    //   }
+    // }
+  ],
   "providers": {
     "local-openai": {
       "type": "openai-compatible",
@@ -27,10 +39,7 @@
       // If omitted, inherits from routing.enableFlatModelLookup.
       // "enableFlatModelLookup": false,
       "plugins": [
-        {
-          "name": "vendor_sse_error",
-          "config": {}
-        }
+        "vendor_sse_error"
       ],
       "models": {
         "gpt-5.5": {
@@ -65,19 +74,11 @@
     //   },
     //   "models": { "chat": { "upstreamModel": "model-y" } }
     // },
-    // Auth plugin example (custom token endpoint → Bearer header):
-    "my-provider": {
-      "type": "openai-compatible",
-      "baseURL": "https://api.example.com/v1",
-      "auth": {
-        "module": "./plugins/auth-demo/index.ts",
-        "config": {
-          "tokenUrl": "https://auth.example.com/oauth2/token",
-          "clientId": "${MY_CLIENT_ID}",
-          "clientSecret": "${MY_CLIENT_SECRET}"
-        }
-      },
-      "models": { "chat": { "upstreamModel": "model-x" } }
-    }
+    // Provider using auth plugin (configured in global plugins above):
+    // "my-provider": {
+    //   "type": "openai-compatible",
+    //   "baseURL": "https://api.example.com/v1",
+    //   "models": { "chat": { "upstreamModel": "model-x" } }
+    // }
   }
 }

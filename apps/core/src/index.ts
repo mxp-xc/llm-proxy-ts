@@ -1,13 +1,14 @@
 // Config exports
 export {
-  pluginConfigSchema,
+  pluginEntrySchema,
   modelRouteConfigSchema,
   oauthConfigSchema,
-  authConfigSchema,
   providerConfigSchema,
   settingsSchema,
 } from './config.js';
-export type { PluginConfig, ModelRouteConfig, ModelRouteInput, OAuthConfig, AuthConfig, ProviderConfig, Settings } from './config.js';
+export type { PluginEntry, ModelRouteConfig, ModelRouteInput, OAuthConfig, ProviderConfig, Settings } from './config.js';
+/** @deprecated 使用 PluginEntry */
+export type { PluginEntry as PluginConfig } from './config.js';
 export {
   resolveEnvPlaceholders,
   loadSettingsFromFile,
@@ -42,11 +43,20 @@ export {
 } from './oauth/index.js';
 export { loadTokenStore, saveTokenStore, getToken, setToken } from './oauth/index.js';
 
-// Plugin exports
-export type { PluginContext, PluginResponse, ProviderCallPatch, ProviderResultPatch, ProxyPlugin, ResolvedPluginConfig } from './plugins/types.js';
-export { BUILT_IN_PLUGIN_NAMES, resolvePluginConfigs, assertKnownPlugins } from './plugins/registry.js';
+// Plugin exports (unified)
+export type { Plugin, ProxyPlugin, AuthPlugin, PluginInitContext, ProviderContext, PluginContext, PluginStore, PluginResponse, ProviderCallPatch, ProviderResultPatch, DiscoveredModel, DiscoveredModelList, ResolvedPlugin } from './plugins/types.js';
+/** @deprecated 使用 PluginStore */
+export type { PluginStore as AuthPluginStore } from './plugins/types.js';
+export { PluginRegistry } from './plugins/registry.js';
+export type { ResolvedPlugin as ResolvedPluginFromRegistry } from './plugins/registry.js';
+export { registerBuiltInPlugin, loadPlugin } from './plugins/loader.js';
 export { inspectVendorSseError } from './plugins/vendor-sse-error.js';
 export type { VendorSseErrorConfig, VendorSseErrorResponse } from './plugins/vendor-sse-error.js';
+export { createSimpleAuthFetch } from './plugins/helpers.js';
+export type { SimpleAuthCredentials } from './plugins/helpers.js';
+export { createPluginStore } from './plugins/store-adapter.js';
+/** @deprecated 不再需要 */
+export { resolvePluginConfigs, assertKnownPlugins } from './plugins/registry.js';
 
 // Protocol type exports
 export type { OpenAIModel, OpenAIModelList } from './protocols/openai-types.js';
@@ -65,10 +75,3 @@ export type { RouteMatch } from './routing.js';
 // Provider registry exports
 export { createProviderRegistry, createOAuthFetch } from './providers/registry.js';
 export type { ProviderRegistry } from './providers/registry.js';
-
-// Auth plugin exports
-export type { AuthPlugin, AuthPluginContext, AuthPluginStore, ResolvedAuthPlugin } from './auth/types.js';
-export type { SimpleAuthCredentials } from './auth/helpers.js';
-export { createSimpleAuthFetch } from './auth/helpers.js';
-export { loadAuthPlugin } from './auth/loader.js';
-export { createPluginStore } from './auth/store-adapter.js';

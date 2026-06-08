@@ -69,6 +69,52 @@
       "additionalProperties": false,
       "default": {}
     },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "module": {
+                "type": "string",
+                "minLength": 1
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": {},
+                "default": {}
+              },
+              "providers": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "default": []
+    },
     "providers": {
       "type": "object",
       "additionalProperties": {
@@ -115,22 +161,46 @@
           "plugins": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "name": {
+              "anyOf": [
+                {
                   "type": "string",
                   "minLength": 1
                 },
-                "config": {
+                {
                   "type": "object",
-                  "additionalProperties": {},
-                  "default": {}
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "module": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "config": {
+                      "type": "object",
+                      "additionalProperties": {},
+                      "default": {}
+                    },
+                    "providers": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
                 }
-              },
-              "required": [
-                "name"
-              ],
-              "additionalProperties": false
+              ]
             },
             "default": []
           },
@@ -161,22 +231,46 @@
                 "plugins": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "properties": {
-                      "name": {
+                    "anyOf": [
+                      {
                         "type": "string",
                         "minLength": 1
                       },
-                      "config": {
+                      {
                         "type": "object",
-                        "additionalProperties": {},
-                        "default": {}
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "module": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "config": {
+                            "type": "object",
+                            "additionalProperties": {},
+                            "default": {}
+                          },
+                          "providers": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        "additionalProperties": false
                       }
-                    },
-                    "required": [
-                      "name"
-                    ],
-                    "additionalProperties": false
+                    ]
                   },
                   "default": []
                 }
@@ -238,24 +332,6 @@
               "clientId",
               "clientSecret",
               "tokenUrl"
-            ],
-            "additionalProperties": false
-          },
-          "auth": {
-            "type": "object",
-            "properties": {
-              "module": {
-                "type": "string",
-                "minLength": 1
-              },
-              "config": {
-                "type": "object",
-                "additionalProperties": {},
-                "default": {}
-              }
-            },
-            "required": [
-              "module"
             ],
             "additionalProperties": false
           },

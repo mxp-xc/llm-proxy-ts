@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
+import type { Settings, ProviderRegistry } from '@llm-proxy/core';
+
+const stubRegistry: ProviderRegistry = {
+  languageModel() {
+    return {} as never;
+  },
+  debugProviderConfig() {
+    return {} as never;
+  },
+};
 
 describe('health endpoint', () => {
   it('returns local service status without providers', async () => {
@@ -9,8 +19,10 @@ describe('health endpoint', () => {
         requestTimeoutMs: 30000,
         proxy: null,
         routing: { enableFlatModelLookup: false },
+        plugins: [],
         providers: {},
       },
+      providerRegistry: stubRegistry,
     });
 
     const response = await app.request('/health');

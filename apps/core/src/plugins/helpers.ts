@@ -1,4 +1,4 @@
-import type { AuthPluginContext } from './types.js';
+import type { ProviderContext } from './types.js';
 
 /**
  * 简单认证结果：只需注入 headers 和/或 query params。
@@ -21,7 +21,6 @@ export interface SimpleAuthCredentials {
  *
  * @example
  * ```typescript
- * // 注入 Bearer header
  * const plugin: AuthPlugin = {
  *   name: 'demo-auth',
  *   createFetch(ctx) {
@@ -34,8 +33,8 @@ export interface SimpleAuthCredentials {
  * ```
  */
 export function createSimpleAuthFetch(
-  acquireCredentials: (ctx: AuthPluginContext) => Promise<SimpleAuthCredentials>,
-  ctx: AuthPluginContext,
+  acquireCredentials: (ctx: ProviderContext) => Promise<SimpleAuthCredentials>,
+  ctx: ProviderContext,
 ): (baseFetch?: typeof fetch) => typeof fetch {
   return (baseFetch) => async (input, init) => {
     const credentials = await acquireCredentials(ctx);

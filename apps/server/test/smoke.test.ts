@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import type { Settings } from '@llm-proxy/core';
+import { createProviderRegistry } from '@llm-proxy/core';
 
 const BASE_URL = process.env.LLM_PROXY_TEST_BASE_URL;
 const API_KEY = process.env.LLM_PROXY_TEST_API_KEY;
@@ -14,6 +15,7 @@ describe('smoke test (streaming)', () => {
       requestTimeoutMs: 30000,
       proxy: null,
       routing: { enableFlatModelLookup: false },
+      plugins: [],
       providers: {
         smoke: {
           type: 'openai-compatible',
@@ -32,7 +34,8 @@ describe('smoke test (streaming)', () => {
         },
       },
     };
-    const app = createApp({ settings });
+    const providerRegistry = await createProviderRegistry(settings);
+    const app = createApp({ settings, providerRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',

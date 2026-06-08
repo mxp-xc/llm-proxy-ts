@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
-import type { Settings } from '@llm-proxy/core';
+import type { Settings, ProviderRegistry } from '@llm-proxy/core';
+
+const stubRegistry: ProviderRegistry = {
+  languageModel() {
+    return {} as never;
+  },
+  debugProviderConfig() {
+    return {} as never;
+  },
+};
 
 function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLookup = false): Settings {
   return {
@@ -8,6 +17,7 @@ function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLook
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup },
+    plugins: [],
     providers,
   };
 }
@@ -56,7 +66,7 @@ const multiProvider: Settings['providers'] = {
 
 describe('GET /v1/models', () => {
   it('returns empty list when no providers configured', async () => {
-    const app = createApp({ settings: makeSettings() });
+    const app = createApp({ settings: makeSettings(), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -67,7 +77,7 @@ describe('GET /v1/models', () => {
   });
 
   it('returns models from a single provider', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider) });
+    const app = createApp({ settings: makeSettings(singleProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -79,7 +89,7 @@ describe('GET /v1/models', () => {
   });
 
   it('returns models from multiple providers', async () => {
-    const app = createApp({ settings: makeSettings(multiProvider) });
+    const app = createApp({ settings: makeSettings(multiProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -96,7 +106,7 @@ describe('GET /v1/models', () => {
   });
 
   it('includes flat model names and aliases when enableFlatModelLookup is on', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider, true) });
+    const app = createApp({ settings: makeSettings(singleProvider, true), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -109,7 +119,7 @@ describe('GET /v1/models', () => {
   });
 
   it('excludes flat names when enableFlatModelLookup is off', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider, false) });
+    const app = createApp({ settings: makeSettings(singleProvider, false), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -122,7 +132,7 @@ describe('GET /v1/models', () => {
 
 describe('GET /v1/models/:id', () => {
   it('returns a single model by id', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider) });
+    const app = createApp({ settings: makeSettings(singleProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/openrouter/chat');
 
     expect(response.status).toBe(200);
@@ -135,7 +145,7 @@ describe('GET /v1/models/:id', () => {
   });
 
   it('returns 404 for unknown model', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider) });
+    const app = createApp({ settings: makeSettings(singleProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/openrouter/nonexistent');
 
     expect(response.status).toBe(404);
@@ -144,14 +154,14 @@ describe('GET /v1/models/:id', () => {
   });
 
   it('returns 404 for unknown provider', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider) });
+    const app = createApp({ settings: makeSettings(singleProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/unknown/model');
 
     expect(response.status).toBe(404);
   });
 
   it('returns 400 when model id is empty', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider) });
+    const app = createApp({ settings: makeSettings(singleProvider), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/');
 
     expect(response.status).toBe(400);
@@ -160,7 +170,7 @@ describe('GET /v1/models/:id', () => {
   });
 
   it('resolves flat model name when enableFlatModelLookup is on', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider, true) });
+    const app = createApp({ settings: makeSettings(singleProvider, true), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/chat');
 
     expect(response.status).toBe(200);
@@ -173,7 +183,7 @@ describe('GET /v1/models/:id', () => {
   });
 
   it('resolves alias when enableFlatModelLookup is on', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider, true) });
+    const app = createApp({ settings: makeSettings(singleProvider, true), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/default');
 
     expect(response.status).toBe(200);
@@ -186,7 +196,7 @@ describe('GET /v1/models/:id', () => {
   });
 
   it('returns 404 for flat name when enableFlatModelLookup is off', async () => {
-    const app = createApp({ settings: makeSettings(singleProvider, false) });
+    const app = createApp({ settings: makeSettings(singleProvider, false), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models/chat');
 
     expect(response.status).toBe(404);
@@ -216,7 +226,7 @@ describe('GET /v1/models/:id', () => {
         },
       },
     };
-    const app = createApp({ settings: makeSettings(providers, false) });
+    const app = createApp({ settings: makeSettings(providers, false), providerRegistry: stubRegistry });
     const response = await app.request('/v1/models');
 
     expect(response.status).toBe(200);
@@ -254,7 +264,7 @@ describe('GET /v1/models/:id', () => {
         },
       },
     };
-    const app = createApp({ settings: makeSettings(providers, false) });
+    const app = createApp({ settings: makeSettings(providers, false), providerRegistry: stubRegistry });
 
     // 'chat' resolves via openrouter's flat lookup
     const chatResponse = await app.request('/v1/models/chat');

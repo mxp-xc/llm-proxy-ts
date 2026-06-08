@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPluginStore } from '../src/auth/store-adapter.js';
+import { createPluginStore } from '../src/plugins/store-adapter.js';
 
 describe('createPluginStore', () => {
   let tempDir: string;
@@ -23,30 +23,30 @@ describe('createPluginStore', () => {
     return authFilePath;
   }
 
-  it('should read/write values under _plugins.{providerName}.{key}', async () => {
+  it('should read/write values under _plugins.{key}', async () => {
     const filePath = await setupAuthFile();
-    const store = createPluginStore(filePath, 'my-provider');
+    const store = createPluginStore(filePath);
 
-    await store.set('cachedToken', 'abc123');
-    const value = await store.get('cachedToken');
+    await store.set('my-auth:cachedToken', 'abc123');
+    const value = await store.get('my-auth:cachedToken');
 
     expect(value).toBe('abc123');
 
     // Verify the file has the expected structure
     const raw = await readFile(filePath, 'utf8');
     const data = JSON.parse(raw);
-    expect(data._plugins['my-provider'].cachedToken).toBe('abc123');
+    expect(data._plugins['my-auth:cachedToken']).toBe('abc123');
   });
 
   it('should return undefined for missing keys', async () => {
     const filePath = await setupAuthFile({
       _plugins: {
-        'my-provider': { otherKey: 'otherValue' },
+        'my-auth:otherKey': 'otherValue',
       },
     });
-    const store = createPluginStore(filePath, 'my-provider');
+    const store = createPluginStore(filePath);
 
-    const value = await store.get('nonexistent');
+    const value = await store.get('my-auth:nonexistent');
 
     expect(value).toBeUndefined();
   });
@@ -59,23 +59,23 @@ describe('createPluginStore', () => {
         expiresAt: Date.now() + 3600000,
       },
     });
-    const store = createPluginStore(filePath, 'plugin-provider');
+    const store = createPluginStore(filePath);
 
     // Write plugin data
-    await store.set('cachedToken', 'plugin-token');
+    await store.set('plugin-provider:cachedToken', 'plugin-token');
 
     // Verify OAuth data is preserved
     const raw = await readFile(filePath, 'utf8');
     const data = JSON.parse(raw);
     expect(data['oauth-provider'].accessToken).toBe('oauth-token-123');
-    expect(data._plugins['plugin-provider'].cachedToken).toBe('plugin-token');
+    expect(data._plugins['plugin-provider:cachedToken']).toBe('plugin-token');
   });
 
   it('should handle missing _plugins subtree', async () => {
     const filePath = await setupAuthFile({
       'some-provider': { accessToken: 'existing-token' },
     });
-    const store = createPluginStore(filePath, 'new-provider');
+    const store = createPluginStore(filePath);
 
     // get should return undefined when _plugins doesn't exist
     const value = await store.get('someKey');
@@ -86,28 +86,28 @@ describe('createPluginStore', () => {
 
     const raw = await readFile(filePath, 'utf8');
     const data = JSON.parse(raw);
-    expect(data._plugins['new-provider'].someKey).toBe('someValue');
+    expect(data._plugins.someKey).toBe('someValue');
     // Existing data preserved
     expect(data['some-provider'].accessToken).toBe('existing-token');
   });
 
-  it('should handle missing provider subtree within _plugins', async () => {
+  it('should handle existing _plugins subtree with other keys', async () => {
     const filePath = await setupAuthFile({
       _plugins: {
-        'other-provider': { key: 'val' },
+        'other-provider:key': 'val',
       },
     });
-    const store = createPluginStore(filePath, 'new-provider');
+    const store = createPluginStore(filePath);
 
     const value = await store.get('someKey');
     expect(value).toBeUndefined();
 
-    // Writing should create the provider subtree without clobbering others
+    // Writing should add to _plugins without clobbering other entries
     await store.set('newKey', 'newVal');
 
     const raw = await readFile(filePath, 'utf8');
     const data = JSON.parse(raw);
-    expect(data._plugins['new-provider'].newKey).toBe('newVal');
-    expect(data._plugins['other-provider'].key).toBe('val');
+    expect(data._plugins.newKey).toBe('newVal');
+    expect(data._plugins['other-provider:key']).toBe('val');
   });
 });

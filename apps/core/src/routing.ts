@@ -1,6 +1,7 @@
-import type { PluginConfig, ProviderConfig, Settings } from './config.js';
+import type { ProviderConfig, Settings } from './config.js';
 import { isFlatLookupEnabled } from './config-helpers.js';
-import { assertKnownPlugins, resolvePluginConfigs } from './plugins/registry.js';
+import type { PluginRegistry, ResolvedPlugin } from './plugins/registry.js';
+import { getBuiltInPlugin } from './plugins/loader.js';
 
 export interface RouteMatch {
   providerName: string;
@@ -9,7 +10,7 @@ export interface RouteMatch {
   modelSelector: string;
   upstreamModel: string;
   headers: Record<string, string>;
-  plugins: PluginConfig[];
+  resolvedPlugins: ResolvedPlugin[];
 }
 
 export class RoutingError extends Error {
@@ -40,17 +41,14 @@ export class RoutingTable {
     private readonly flatRoutes: Map<string, RouteMatch>,
   ) {}
 
-  static fromSettings(settings: Settings): RoutingTable {
+  static fromSettings(settings: Settings, pluginRegistry?: PluginRegistry): RoutingTable {
     const flatRoutes = new Map<string, RouteMatch>();
 
     for (const [providerName, provider] of Object.entries(settings.providers)) {
-      assertKnownPlugins(provider.plugins);
-
       const flatEnabled = isFlatLookupEnabled(provider, settings);
 
       for (const [modelKey, model] of Object.entries(provider.models)) {
-        const route = buildRoute(providerName, provider, modelKey, `${providerName}/${modelKey}`);
-        assertKnownPlugins(route.plugins);
+        const route = buildRoute(providerName, provider, modelKey, `${providerName}/${modelKey}`, pluginRegistry);
 
         if (flatEnabled) {
           for (const selector of [modelKey, ...model.aliases]) {
@@ -98,12 +96,12 @@ export class RoutingTable {
     }
 
     if (provider.models[requestedModel]) {
-      return buildRoute(providerName, provider, requestedModel, selector);
+      return buildRoute(providerName, provider, requestedModel, selector, undefined);
     }
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
       if (model.aliases.includes(requestedModel)) {
-        return buildRoute(providerName, provider, modelKey, selector);
+        return buildRoute(providerName, provider, modelKey, selector, undefined);
       }
     }
 
@@ -116,10 +114,20 @@ function buildRoute(
   provider: ProviderConfig,
   modelKey: string,
   modelSelector: string,
+  pluginRegistry?: PluginRegistry,
 ): RouteMatch {
   const model = provider.models[modelKey];
   if (!model) {
     throw new Error(`Missing model route '${modelKey}'`);
+  }
+
+  // 获取管道插件链（provider 级优先 → 全局级）
+  let resolvedPlugins: ResolvedPlugin[];
+  if (pluginRegistry) {
+    resolvedPlugins = pluginRegistry.getPipelinePlugins(providerName);
+  } else {
+    // 无 PluginRegistry 时，按名解析内置插件（保持向后兼容）
+    resolvedPlugins = resolveBuiltinPlugins(provider, model);
   }
 
   return {
@@ -129,6 +137,32 @@ function buildRoute(
     modelSelector,
     upstreamModel: model.upstreamModel,
     headers: { ...provider.headers, ...model.headers },
-    plugins: resolvePluginConfigs(provider.plugins, model.plugins),
+    resolvedPlugins,
   };
+}
+
+/** 无 PluginRegistry 时，按名解析内置插件 */
+function resolveBuiltinPlugins(
+  provider: ProviderConfig,
+  model: { plugins: ProviderConfig['plugins'] },
+): ResolvedPlugin[] {
+  const entries = [...provider.plugins, ...model.plugins];
+  const result: ResolvedPlugin[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.name && !entry.module) {
+      const plugin = getBuiltInPlugin(entry.name);
+      if (plugin && !seen.has(entry.name)) {
+        seen.add(entry.name);
+        result.push({
+          plugin,
+          config: entry.config,
+          providers: [],
+        });
+      }
+    }
+  }
+
+  return result;
 }

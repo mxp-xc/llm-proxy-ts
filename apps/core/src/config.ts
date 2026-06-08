@@ -4,10 +4,28 @@ import { parse, type ParseError } from 'jsonc-parser';
 import { z } from 'zod/v3';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
-export const pluginConfigSchema = z.object({
-  name: z.string().min(1),
+// ─── Plugin entry schema ────────────────────────────────────────
+
+/** 单个插件条目的完整结构（transform 后） */
+const pluginEntryObjectSchema = z.object({
+  name: z.string().min(1).optional(),
+  module: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).default({}),
+  /** 仅全局级：关联的 provider 列表 */
+  providers: z.union([z.string().min(1), z.array(z.string().min(1))]).optional()
+    .transform((v) => (typeof v === 'string' ? [v] : v ?? [])),
 });
+
+export const pluginEntrySchema = z.union([
+  z.string().min(1),
+  pluginEntryObjectSchema,
+]).transform((v) => (typeof v === 'string' ? { name: v, config: {} as Record<string, unknown>, providers: [] as string[] } : v))
+  .refine((v) => v.name || v.module, { message: 'Plugin must have name or module' });
+
+/** @deprecated 使用 pluginEntrySchema */
+export const pluginConfigSchema = pluginEntrySchema;
+
+// ─── Schemas ─────────────────────────────────────────────────────
 
 const apiKeySchema = z.union([z.string().min(1), z.array(z.string().min(1)).nonempty()]).nullable().optional();
 
@@ -15,7 +33,7 @@ export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
   aliases: z.array(z.string().min(1)).optional().default([]),
   headers: z.record(z.string(), z.string()).optional().default({}),
-  plugins: z.array(pluginConfigSchema).optional().default([]),
+  plugins: z.array(pluginEntrySchema).optional().default([]),
 });
 
 export const oauthConfigSchema = z.object({
@@ -29,28 +47,17 @@ export const oauthConfigSchema = z.object({
   authFile: z.string().optional(),
 });
 
-export const authConfigSchema = z.object({
-  /** 文件路径或 npm 包名，启动时动态 import 加载 */
-  module: z.string().min(1),
-  /** 插件自定义配置 */
-  config: z.record(z.string(), z.unknown()).default({}),
-});
-
 export const providerConfigSchema = z.object({
   type: z.literal('openai-compatible'),
   baseURL: z.string().url(),
   apiKey: apiKeySchema,
   headers: z.record(z.string(), z.string()).default({}),
-  plugins: z.array(pluginConfigSchema).default([]),
+  plugins: z.array(pluginEntrySchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
-  auth: authConfigSchema.optional(),
   modelsEndpoint: z.string().min(1).optional(),
-}).refine(
-  (data) => !(data.oauth && data.auth),
-  { message: 'Provider cannot have both oauth and auth; use one or the other', path: ['auth'] },
-);
+});
 
 export const settingsSchema = z.object({
   $schema: z.string().optional(),
@@ -74,15 +81,17 @@ export const settingsSchema = z.object({
       enableFlatModelLookup: z.boolean().default(false),
     })
     .default({}),
+  plugins: z.array(pluginEntrySchema).default([]),
   providers: z.record(z.string(), providerConfigSchema).default({}),
 });
 
-export type PluginConfig = z.infer<typeof pluginConfigSchema>;
+export type PluginEntry = z.infer<typeof pluginEntrySchema>;
+/** @deprecated 使用 PluginEntry */
+export type PluginConfig = PluginEntry;
 export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>;
 /** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
 export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>;
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>;
-export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 export type Settings = z.infer<typeof settingsSchema>;
 

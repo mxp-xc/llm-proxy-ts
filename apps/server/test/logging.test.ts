@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Writable } from 'node:stream';
 import { createApp, type ModelGateway } from '../src/app.js';
-import type { Settings } from '@llm-proxy/core';
+import type { Settings, ProviderRegistry } from '@llm-proxy/core';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const tempRoot = resolve(projectRoot, 'temp');
@@ -14,6 +14,7 @@ const settings: Settings = {
   requestTimeoutMs: 30000,
   proxy: null,
   routing: { enableFlatModelLookup: false },
+  plugins: [],
   providers: {
     openrouter: {
       type: 'openai-compatible',
@@ -23,6 +24,15 @@ const settings: Settings = {
       plugins: [],
       models: { chat: { upstreamModel: 'openrouter/actual-chat', aliases: [], headers: {}, plugins: [] } },
     },
+  },
+};
+
+const stubRegistry: ProviderRegistry = {
+  languageModel() {
+    return {} as never;
+  },
+  debugProviderConfig() {
+    return {} as never;
   },
 };
 
@@ -90,7 +100,7 @@ describe('logging', () => {
         throw new Error('not used');
       },
     };
-    const app = createApp({ settings, gateway, logger: recordingLogger(logs) });
+    const app = createApp({ settings, gateway, logger: recordingLogger(logs), providerRegistry: stubRegistry });
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',

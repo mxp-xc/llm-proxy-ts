@@ -1,18 +1,19 @@
-import type { AuthPlugin, AuthPluginContext, SimpleAuthCredentials } from '@llm-proxy/core';
+import type { AuthPlugin, ProviderContext, SimpleAuthCredentials } from '@llm-proxy/core';
 import { createSimpleAuthFetch } from '@llm-proxy/core';
 
 /**
  * 示例认证插件：从自定义 token 端点获取 access_token 并注入 Bearer header。
  *
  * 演示 AuthPlugin 的基本写法：
- * - validateConfig: 启动时校验必需配置
+ * - init: 启动时校验必需配置
  * - createFetch: 使用 createSimpleAuthFetch 辅助函数注入 credentials
  * - store: 利用持久化接口缓存 token
  */
 export default {
   name: 'demo-auth',
 
-  validateConfig(config: Record<string, unknown>): void {
+  async init(ctx) {
+    const config = ctx.config;
     if (typeof config.tokenUrl !== 'string' || !config.tokenUrl) {
       throw new Error('demo-auth requires config.tokenUrl');
     }
@@ -24,7 +25,7 @@ export default {
     }
   },
 
-  createFetch(ctx: AuthPluginContext) {
+  async createFetch(ctx: ProviderContext) {
     return createSimpleAuthFetch(
       (ctx) => acquireToken(ctx),
       ctx,
@@ -37,18 +38,18 @@ interface TokenResponse {
   expires_in: number;
 }
 
-async function acquireToken(ctx: AuthPluginContext): Promise<SimpleAuthCredentials> {
+async function acquireToken(ctx: ProviderContext): Promise<SimpleAuthCredentials> {
   const tokenUrl = ctx.config['tokenUrl'] as string;
   const clientId = ctx.config['clientId'] as string;
   const clientSecret = ctx.config['clientSecret'] as string;
 
   // 检查缓存的 token
-  const cachedToken = await ctx.store?.get('accessToken');
-  const cachedExpiry = await ctx.store?.get('expiresAt');
+  const cachedToken = await ctx.store.get('accessToken');
+  const cachedExpiry = await ctx.store.get('expiresAt');
   if (cachedToken && cachedExpiry) {
     const expiresAt = Number(cachedExpiry);
     if (expiresAt > Date.now() / 1000 + 60) {
-      ctx.log.info({ provider: ctx.providerName }, 'using cached demo-auth token');
+      ctx.log.info({ provider: ctx.id }, 'using cached demo-auth token');
       return { headers: { Authorization: `Bearer ${cachedToken}` } };
     }
   }
@@ -71,10 +72,10 @@ async function acquireToken(ctx: AuthPluginContext): Promise<SimpleAuthCredentia
 
   // 缓存 token
   const expiresAt = Date.now() / 1000 + (data.expires_in || 3600);
-  await ctx.store?.set('accessToken', data.access_token);
-  await ctx.store?.set('expiresAt', String(expiresAt));
+  await ctx.store.set('accessToken', data.access_token);
+  await ctx.store.set('expiresAt', String(expiresAt));
 
-  ctx.log.info({ provider: ctx.providerName }, 'demo-auth token acquired');
+  ctx.log.info({ provider: ctx.id }, 'demo-auth token acquired');
 
   return { headers: { Authorization: `Bearer ${data.access_token}` } };
 }

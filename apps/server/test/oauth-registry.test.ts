@@ -20,6 +20,7 @@ function makeSettings(providers: Settings['providers'] = {}): Settings {
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup: false },
+    plugins: [],
     providers,
   };
 }
@@ -98,7 +99,7 @@ describe('OAuth provider registry', () => {
     const tokenManager = new TokenManager(authFilePath);
     await tokenManager.load();
 
-    const registry = createProviderRegistry(settings, tokenManager);
+    const registry = await createProviderRegistry(settings, tokenManager);
     registry.languageModel('oauth-provider', 'm', {});
 
     expect(mocks.capturedOptions).toHaveLength(1);
@@ -107,7 +108,7 @@ describe('OAuth provider registry', () => {
     expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true);
   });
 
-  it('uses static apiKey when provider has no oauth', () => {
+  it('uses static apiKey when provider has no oauth', async () => {
     const settings = makeSettings({
       'static-provider': {
         type: 'openai-compatible',
@@ -119,7 +120,7 @@ describe('OAuth provider registry', () => {
       },
     });
 
-    const registry = createProviderRegistry(settings);
+    const registry = await createProviderRegistry(settings);
     registry.languageModel('static-provider', 'm', {});
 
     expect(mocks.capturedOptions).toHaveLength(1);
@@ -152,7 +153,7 @@ describe('OAuth provider registry', () => {
     const tokenManager = new TokenManager(authFilePath);
     await tokenManager.load();
 
-    const registry = createProviderRegistry(settings, tokenManager);
+    const registry = await createProviderRegistry(settings, tokenManager);
     registry.languageModel('both-provider', 'm', {});
 
     expect(mocks.capturedOptions).toHaveLength(1);
@@ -189,7 +190,7 @@ describe('OAuth provider registry', () => {
     // the fetch function calls ensureValidToken which throws OAuthError.
     // But languageModel() itself doesn't call ensureValidToken — the fetch
     // function does at request time. So languageModel() succeeds here.
-    const registry = createProviderRegistry(settings, tokenManager);
+    const registry = await createProviderRegistry(settings, tokenManager);
     const model = registry.languageModel('auth-code-provider', 'm', {});
     expect(model).toBeTruthy();
   });

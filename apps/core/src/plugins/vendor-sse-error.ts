@@ -1,3 +1,6 @@
+import type { ProxyPlugin, PluginContext, PluginResponse } from './types.js';
+import { registerBuiltInPlugin } from './loader.js';
+
 export interface VendorSseErrorConfig {
   maxPreviewEvents?: number;
   maxPreviewBytes?: number;
@@ -59,6 +62,25 @@ export function inspectVendorSseError(
 
   return undefined;
 }
+
+// ─── Built-in Plugin ─────────────────────────────────────────────
+
+const vendorSseErrorPlugin: ProxyPlugin = {
+  name: 'vendor_sse_error',
+
+  inspectStreamChunk(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse> {
+    const config = ctx.config as VendorSseErrorConfig;
+    const result = inspectVendorSseError(config, ctx.chunk);
+    if (result) {
+      return Promise.resolve(result);
+    }
+    return Promise.resolve();
+  },
+};
+
+registerBuiltInPlugin(vendorSseErrorPlugin);
+
+// ─── Internal helpers ────────────────────────────────────────────
 
 function extractRaw(chunk: unknown): string | undefined {
   if (typeof chunk === 'string') {

@@ -29,6 +29,7 @@ function makeSettings(providers: Settings['providers'] = {}): Settings {
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup: false },
+    plugins: [],
     providers,
   };
 }

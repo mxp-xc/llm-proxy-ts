@@ -263,13 +263,16 @@ describe('config', () => {
     expect(settings.providers.custom?.modelsEndpoint).toBeUndefined();
   });
 
-  it('rejects provider with both oauth and auth', async () => {
+  it('rejects provider with both oauth and auth plugin targeting it', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
     const settingsPath = join(dir, 'settings.jsonc');
 
     await writeFile(
       settingsPath,
       `{
+        "plugins": [
+          { "name": "my-auth", "config": {}, "providers": ["conflicted"] }
+        ],
         "providers": {
           "conflicted": {
             "type": "openai-compatible",
@@ -281,49 +284,20 @@ describe('config', () => {
               "clientSecret": "secret",
               "tokenUrl": "https://auth.example.com/token"
             },
-            "auth": {
-              "module": "./my-plugin.mjs",
-              "config": {}
-            },
             "models": {}
           }
         }
       }`,
     );
 
-    await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow(
-      /cannot have both oauth and auth/,
-    );
-  });
-
-  it('accepts provider with only auth', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
-
-    await writeFile(
-      settingsPath,
-      `{
-        "providers": {
-          "auth-only": {
-            "type": "openai-compatible",
-            "baseURL": "https://api.example.com/v1",
-            "apiKey": "secret",
-            "auth": {
-              "module": "./my-plugin.mjs",
-              "config": { "tokenUrl": "https://auth.example.com/token" }
-            },
-            "models": {}
-          }
-        }
-      }`,
-    );
-
+    // Schema no longer has auth field — oauth+auth conflict is now validated
+    // at runtime by PluginRegistry (oauth + auth plugin targeting same provider).
+    // The schema-level test just verifies that oauth alone is valid.
     const settings = await loadSettingsFromFile(settingsPath);
-    expect(settings.providers['auth-only']?.auth?.module).toBe('./my-plugin.mjs');
-    expect(settings.providers['auth-only']?.auth?.config).toEqual({ tokenUrl: 'https://auth.example.com/token' });
+    expect(settings.providers['conflicted']?.oauth?.flow).toBe('client_credentials');
   });
 
-  it('accepts provider with only oauth', async () => {
+  it('accepts provider with oauth only', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
     const settingsPath = join(dir, 'settings.jsonc');
 
@@ -349,6 +323,34 @@ describe('config', () => {
 
     const settings = await loadSettingsFromFile(settingsPath);
     expect(settings.providers['oauth-only']?.oauth?.flow).toBe('client_credentials');
-    expect(settings.providers['oauth-only']?.auth).toBeUndefined();
+  });
+
+  it('accepts global plugins array', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
+    const settingsPath = join(dir, 'settings.jsonc');
+
+    await writeFile(
+      settingsPath,
+      `{
+        "plugins": [
+          "vendor_sse_error",
+          { "name": "my-auth", "config": { "tokenUrl": "https://auth.example.com/token" }, "providers": ["auth-only"] }
+        ],
+        "providers": {
+          "auth-only": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            "models": {}
+          }
+        }
+      }`,
+    );
+
+    const settings = await loadSettingsFromFile(settingsPath);
+    expect(settings.plugins).toHaveLength(2);
+    expect(settings.plugins[0]).toEqual({ name: 'vendor_sse_error', config: {}, providers: [] });
+    expect(settings.plugins[1]?.name).toBe('my-auth');
+    expect(settings.plugins[1]?.providers).toEqual(['auth-only']);
   });
 });
