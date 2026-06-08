@@ -1,5 +1,6 @@
 import { createProxyFetch } from '../openai-compatible.js'
 import type { Settings } from '../config.js'
+import type { DiscoveredModelList } from '../plugins/types.js'
 
 /** OpenAI /models 端点返回的单个模型对象 */
 export interface OpenAIModel {
@@ -94,4 +95,11 @@ export async function fetchUpstreamModels({
   }
 
   return body.data.sort((a, b) => a.id.localeCompare(b.id))
+}
+
+/** 将 OpenAI 协议的模型列表转换为内部统一的 DiscoveredModel 格式 */
+export function openAIToDiscoveredModels(models: OpenAIModel[]): DiscoveredModelList {
+  return {
+    models: models.map((m) => ({ id: m.id })),
+  }
 }

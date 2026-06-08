@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fetchUpstreamModels, resolveModelsUrl } from '../src/cli/discover-models.js'
+import {
+  fetchUpstreamModels,
+  openAIToDiscoveredModels,
+  resolveModelsUrl,
+} from '../src/cli/discover-models.js'
 
 describe('resolveModelsUrl', () => {
   it('defaults to {baseURL}/models when modelsEndpoint is absent', () => {
@@ -361,5 +365,31 @@ describe('fetchUpstreamModels', () => {
     )
 
     vi.restoreAllMocks()
+  })
+})
+
+describe('openAIToDiscoveredModels', () => {
+  it('converts OpenAIModel[] to DiscoveredModelList', () => {
+    const openaiModels = [
+      { id: 'gpt-4o', object: 'model', created: 123, owned_by: 'openai' },
+      { id: 'claude-3-opus', object: 'model', owned_by: 'anthropic' },
+    ]
+    const result = openAIToDiscoveredModels(openaiModels)
+    expect(result).toEqual({
+      models: [{ id: 'gpt-4o' }, { id: 'claude-3-opus' }],
+    })
+  })
+
+  it('handles empty model list', () => {
+    const result = openAIToDiscoveredModels([])
+    expect(result).toEqual({ models: [] })
+  })
+
+  it('discards OpenAI-specific fields', () => {
+    const openaiModels = [
+      { id: 'model-a', object: 'model', created: 999, owned_by: 'org' },
+    ]
+    const result = openAIToDiscoveredModels(openaiModels)
+    expect(result.models[0]).toEqual({ id: 'model-a' })
   })
 })

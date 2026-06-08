@@ -5,7 +5,9 @@ import { parse, type ParseError } from 'jsonc-parser'
 import { loadSettingsFromFile, resolveEnvPlaceholders } from '../config.js'
 import type { ModelRouteInput, Settings } from '../config.js'
 import { TokenManager, OAuthError } from '../oauth/index.js'
-import { fetchUpstreamModels, type OpenAIModel } from './discover-models.js'
+import { PluginRegistry } from '../plugins/registry.js'
+import type { DiscoveredModel } from '../plugins/types.js'
+import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover-models.js'
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js'
 
 export interface ModelsSyncOptions {
@@ -16,7 +18,7 @@ export interface ModelsSyncOptions {
 
 interface ProviderModelsResult {
   providerName: string
-  models: OpenAIModel[]
+  models: DiscoveredModel[]
   existingModels: Record<string, ModelRouteInput>
 }
 
@@ -63,6 +65,23 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
     unknown
   >
 
+  // 初始化插件注册表（如果有插件配置）
+  const settingsDir = dirname(settingsPath)
+  const authFilePath = join(settingsDir, 'auth.json')
+  let pluginRegistry: PluginRegistry | undefined
+  if (settings.plugins.length > 0) {
+    try {
+      pluginRegistry = await PluginRegistry.fromSettings(settings, settingsDir, authFilePath)
+      await pluginRegistry.initAll(undefined, authFilePath)
+    } catch (err) {
+      clack.log.warn(
+        `Plugin initialization failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      clack.log.info('Falling back to direct model discovery for all providers')
+      pluginRegistry = undefined
+    }
+  }
+
   // 2. 选择 provider
   let selectedProviders: string[]
   if (providerFlag) {
@@ -98,11 +117,10 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
 
   // 3. 发现模型
 
-  // 延迟初始化 TokenManager（仅当存在 OAuth provider 时）
+  // 延迟初始化 TokenManager（仅当存在 OAuth provider 且无插件覆盖时）
   let tokenManager: TokenManager | undefined
   const hasOAuthProviders = selectedProviders.some((name) => settings.providers[name]?.oauth)
   if (hasOAuthProviders) {
-    const authFilePath = join(dirname(settingsPath), 'auth.json')
     tokenManager = new TokenManager(authFilePath)
     await tokenManager.load()
   }
@@ -115,6 +133,32 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
     s.start(`Fetching models from ${providerName}...`)
 
     try {
+      let models: DiscoveredModel[]
+
+      // 优先使用 auth 插件的 discoverModels
+      if (pluginRegistry) {
+        try {
+          const discovered = await pluginRegistry.discoverModels(
+            providerName,
+            undefined,
+            authFilePath,
+          )
+          if (discovered) {
+            models = discovered.models
+            s.stop(`Found ${models.length} models from ${providerName} (via auth plugin)`)
+            results.push({ providerName, models, existingModels: provider.models })
+            continue
+          }
+        } catch (err) {
+          s.stop(`Skipped ${providerName}`)
+          clack.log.warn(
+            `${providerName}: Auth plugin discoverModels failed — ${err instanceof Error ? err.message : String(err)}`,
+          )
+          continue
+        }
+      }
+
+      // 回退：通过 OpenAI 协议 HTTP 发现
       const rawProviders = rawParsed['providers'] as
         | Record<string, Record<string, unknown>>
         | undefined
@@ -151,7 +195,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         }
       }
 
-      const models = await fetchUpstreamModels({
+      const openaiModels = await fetchUpstreamModels({
         baseURL: provider.baseURL,
         apiKey: resolvedApiKey,
         proxySettings: settings.proxy,
@@ -159,6 +203,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         headers: provider.headers,
         oauthToken,
       })
+      models = openAIToDiscoveredModels(openaiModels).models
 
       s.stop(`Found ${models.length} models from ${providerName}`)
       results.push({
@@ -190,14 +235,10 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   for (const { providerName, models, existingModels } of results) {
     const existingKeys = Object.keys(existingModels)
 
-    const options = models.map((model) => {
-      const opt: { value: string; label: string; hint?: string } = {
-        value: model.id,
-        label: model.id,
-      }
-      if (model.owned_by) opt.hint = model.owned_by
-      return opt
-    })
+    const options = models.map((model) => ({
+      value: model.id,
+      label: model.id,
+    }))
 
     const initialValues: string[] = []
     for (const key of existingKeys) {
