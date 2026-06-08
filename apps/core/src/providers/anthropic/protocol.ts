@@ -134,7 +134,7 @@ export function mapAnthropicMessagesRequestToAISDKInput(
 ): AISDKInput {
   const messages: Array<Record<string, unknown>> = []
 
-  // System prompt → 前置 system message
+  // System prompt → AI SDK system 选项（不放入 messages，AI SDK v6 不允许 role: system）
   const systemParts: string[] = []
   if (request.system !== undefined) {
     systemParts.push(
@@ -144,7 +144,7 @@ export function mapAnthropicMessagesRequestToAISDKInput(
     )
   }
 
-  // Anthropic messages → AI SDK messages（提取 system 角色消息合并到 system）
+  // 提取 messages 中的 system 角色消息合并到 system
   for (const msg of request.messages) {
     if (msg.role === 'system') {
       systemParts.push(
@@ -155,16 +155,21 @@ export function mapAnthropicMessagesRequestToAISDKInput(
               .map((b) => b.text)
               .join('\n'),
       )
-    } else {
+    }
+  }
+
+  // Anthropic messages → AI SDK messages（仅 user/assistant）
+  for (const msg of request.messages) {
+    if (msg.role !== 'system') {
       messages.push(mapMessage(msg))
     }
   }
 
-  if (systemParts.length > 0) {
-    messages.unshift({ role: 'system', content: systemParts.join('\n') })
-  }
-
   const input: AISDKInput = { messages }
+
+  if (systemParts.length > 0) {
+    input.system = systemParts.join('\n')
+  }
 
   if (request.temperature !== undefined) input.temperature = request.temperature
   if (request.top_p !== undefined) input.topP = request.top_p

@@ -56,7 +56,6 @@ function formatTable(rows: ModelRow[]): void {
     id: string
     provider: string
     upstreamModel: string
-    flat: string
   }
 
   const displayRows: DisplayRow[] = rows.flatMap((r) =>
@@ -64,7 +63,6 @@ function formatTable(rows: ModelRow[]): void {
       id,
       provider: r.provider,
       upstreamModel: r.upstreamModel,
-      flat: r.flat ? '✓' : '✗',
     })),
   )
 
@@ -72,7 +70,6 @@ function formatTable(rows: ModelRow[]): void {
     { key: 'id', header: 'ID' },
     { key: 'provider', header: 'Provider' },
     { key: 'upstreamModel', header: 'Upstream Model' },
-    { key: 'flat', header: 'Flat' },
   ]
 
   const widths = new Map<string, number>()
