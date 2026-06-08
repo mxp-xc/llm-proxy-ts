@@ -15,6 +15,7 @@ interface ModelRow {
   upstreamModel: string
   aliases: string[]
   flat: boolean
+  ids: string[]
 }
 
 function collectRows(settings: Settings): ModelRow[] {
@@ -23,12 +24,20 @@ function collectRows(settings: Settings): ModelRow[] {
   for (const [providerName, provider] of Object.entries(settings.providers)) {
     const flat = isFlatLookupEnabled(provider as ProviderConfig, settings)
     for (const [modelKey, model] of Object.entries(provider.models)) {
+      const ids: string[] = [`${providerName}/${modelKey}`]
+      if (flat) {
+        ids.push(modelKey)
+        for (const alias of model.aliases) {
+          ids.push(alias)
+        }
+      }
       rows.push({
         provider: providerName,
         modelKey,
         upstreamModel: model.upstreamModel,
         aliases: model.aliases,
         flat,
+        ids,
       })
     }
   }
@@ -42,19 +51,37 @@ function formatTable(rows: ModelRow[]): void {
     return
   }
 
-  // Calculate column widths
-  const colDefs: Array<{ key: keyof ModelRow; header: string }> = [
+  // Expand each row into one row per ID
+  interface DisplayRow {
+    id: string
+    provider: string
+    upstreamModel: string
+    flat: string
+  }
+
+  const displayRows: DisplayRow[] = rows.flatMap((r) =>
+    r.ids.map((id) => ({
+      id,
+      provider: r.provider,
+      upstreamModel: r.upstreamModel,
+      flat: r.flat ? '✓' : '✗',
+    })),
+  )
+
+  const colDefs: Array<{ key: keyof DisplayRow; header: string }> = [
+    { key: 'id', header: 'ID' },
     { key: 'provider', header: 'Provider' },
-    { key: 'modelKey', header: 'Model Key' },
     { key: 'upstreamModel', header: 'Upstream Model' },
-    { key: 'aliases', header: 'Aliases' },
     { key: 'flat', header: 'Flat' },
   ]
 
   const widths = new Map<string, number>()
   for (const col of colDefs) {
     const headerLen = col.header.length
-    const maxDataLen = rows.reduce((max, r) => Math.max(max, formatCell(r, col.key).length), 0)
+    const maxDataLen = displayRows.reduce(
+      (max, r) => Math.max(max, String(r[col.key]).length),
+      0,
+    )
     widths.set(col.key, Math.max(headerLen, maxDataLen))
   }
 
@@ -66,16 +93,10 @@ function formatTable(rows: ModelRow[]): void {
   console.log(headerLine)
   console.log(sep)
 
-  for (const row of rows) {
-    const line = colDefs.map((c) => formatCell(row, c.key).padEnd(w(c.key))).join('  ')
+  for (const row of displayRows) {
+    const line = colDefs.map((c) => String(row[c.key]).padEnd(w(c.key))).join('  ')
     console.log(line)
   }
-}
-
-function formatCell(row: ModelRow, key: keyof Omit<ModelRow, never>): string {
-  if (key === 'aliases') return row.aliases.join(', ')
-  if (key === 'flat') return row.flat ? '✓' : '✗'
-  return String(row[key])
 }
 
 function formatJson(rows: ModelRow[]): void {
