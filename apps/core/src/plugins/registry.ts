@@ -1,3 +1,4 @@
+import type { PluginStore } from './types.js'
 import type {
   Plugin,
   ProxyPlugin,
@@ -108,10 +109,10 @@ export class PluginRegistry {
   /** 初始化所有插件。每个插件调用一次 init()。 */
   async initAll(logger?: Logger, authFilePath?: string): Promise<void> {
     const log = logger ?? noopLogger
-    const store = authFilePath ? createPluginStore(authFilePath) : noopStore
 
     for (const rp of this.allResolved()) {
       if (rp.plugin.init) {
+        const store = this.#resolveStore(authFilePath, rp)
         const ctx: PluginInitContext = {
           providers: new Map(Object.entries(this.settings.providers)),
           config: rp.config,
@@ -151,7 +152,6 @@ export class PluginRegistry {
     authFilePath?: string,
   ): Promise<((baseFetch?: typeof fetch) => typeof fetch) | undefined> {
     const log = logger ?? noopLogger
-    const store = authFilePath ? createPluginStore(authFilePath) : noopStore
 
     for (const rp of this.globalPlugins) {
       if (!isAuthPlugin(rp.plugin)) continue
@@ -160,6 +160,7 @@ export class PluginRegistry {
       const provider = this.settings.providers[providerId]
       if (!provider) continue
 
+      const store = this.#resolveStore(authFilePath, rp)
       const ctx: ProviderContext = {
         id: providerId,
         provider,
@@ -179,7 +180,6 @@ export class PluginRegistry {
     authFilePath?: string,
   ): Promise<DiscoveredModelList | undefined> {
     const log = logger ?? noopLogger
-    const store = authFilePath ? createPluginStore(authFilePath) : noopStore
 
     for (const rp of this.globalPlugins) {
       if (!isAuthPlugin(rp.plugin)) continue
@@ -189,6 +189,7 @@ export class PluginRegistry {
       const provider = this.settings.providers[providerId]
       if (!provider) continue
 
+      const store = this.#resolveStore(authFilePath, rp)
       const ctx: ProviderContext = {
         id: providerId,
         provider,
@@ -215,6 +216,10 @@ export class PluginRegistry {
   }
 
   // ─── Helpers ──────────────────────────────────────────────────
+
+  #resolveStore(authFilePath: string | undefined, rp: ResolvedPlugin): PluginStore {
+    return authFilePath ? createPluginStore(authFilePath, rp.plugin.name) : noopStore
+  }
 
   private allResolved(): ResolvedPlugin[] {
     const seen = new Set<Plugin>()
@@ -266,9 +271,9 @@ const noopLogger: Logger = {
   },
 }
 
-const noopStore = {
+const noopStore: PluginStore = {
   async get() {
-    return undefined
+    return {}
   },
   async set() {},
 }

@@ -41,8 +41,9 @@ async function acquireToken(ctx: ProviderContext): Promise<SimpleAuthCredentials
   const clientSecret = ctx.config['clientSecret'] as string
 
   // 检查缓存的 token
-  const cachedToken = await ctx.store.get('accessToken')
-  const cachedExpiry = await ctx.store.get('expiresAt')
+  const stored = await ctx.store.get()
+  const cachedToken = stored.accessToken as string | undefined
+  const cachedExpiry = stored.expiresAt as string | undefined
   if (cachedToken && cachedExpiry) {
     const expiresAt = Number(cachedExpiry)
     if (expiresAt > Date.now() / 1000 + 60) {
@@ -68,9 +69,8 @@ async function acquireToken(ctx: ProviderContext): Promise<SimpleAuthCredentials
   }
 
   // 缓存 token
-  const expiresAt = Date.now() / 1000 + (data.expires_in || 3600)
-  await ctx.store.set('accessToken', data.access_token)
-  await ctx.store.set('expiresAt', String(expiresAt))
+  const expiresAt = Date.now() / 1000 + (data.expires_in ?? 3600)
+  await ctx.store.set({ accessToken: data.access_token, expiresAt: String(expiresAt) })
 
   ctx.log.info({ provider: ctx.id }, 'demo-auth token acquired')
 

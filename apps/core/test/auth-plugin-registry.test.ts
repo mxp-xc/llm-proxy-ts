@@ -108,7 +108,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
             config: resolvedPlugins[0]!.config,
             store: {
               async get() {
-                return undefined
+                return {}
               },
               async set() {},
             },
@@ -198,11 +198,11 @@ describe('auth plugin integration with createProviderRegistry', () => {
               provider: settings.providers[providerId]!,
               config: rp.config,
               store: {
-                async get() {
-                  return undefined
-                },
-                async set() {},
+              async get() {
+                return {}
               },
+              async set() {},
+            },
               log: noopLogger,
             }
             return (rp.plugin as AuthPlugin).createFetch(ctx)

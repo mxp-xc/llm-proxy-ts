@@ -3,14 +3,17 @@ import type { Logger } from '../types.js'
 
 // ─── Store ───────────────────────────────────────────────────────
 
-/** 全局 key-value 持久化存储。插件用 key 命名空间管理隔离（如 `my-auth:baidu:token`）。 */
+/** 插件持久化存储。数据自动存储在 _plugins.{pluginName} 下。 */
 export interface PluginStore {
-  get(key: string): Promise<string | undefined>
-  set(key: string, value: string): Promise<void>
+  /** 读取当前插件的全部存储数据。无数据时返回空对象。返回值为浅拷贝。 */
+  get(): Promise<Record<string, unknown>>
+  /**
+   * 替换当前插件的全部存储数据（非合并）。
+   * 调用后之前存储的所有字段都会被丢弃，仅保留本次传入的数据。
+   * 如需保留已有字段，请先 get() 合并后再 set()。
+   */
+  set(data: Record<string, unknown>): Promise<void>
 }
-
-/** @deprecated 使用 PluginStore */
-export type AuthPluginStore = PluginStore
 
 // ─── Models ──────────────────────────────────────────────────────
 

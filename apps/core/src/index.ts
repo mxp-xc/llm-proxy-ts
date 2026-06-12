@@ -79,8 +79,6 @@ export type {
   DiscoveredModelList,
   ResolvedPlugin,
 } from './plugins/types.js'
-/** @deprecated 使用 PluginStore */
-export type { PluginStore as AuthPluginStore } from './plugins/types.js'
 export { PluginRegistry } from './plugins/registry.js'
 export type { ResolvedPlugin as ResolvedPluginFromRegistry } from './plugins/registry.js'
 export { registerBuiltInPlugin, loadPlugin } from './plugins/loader.js'

@@ -17,7 +17,7 @@ function makeCtx(overrides?: Partial<ProviderContext>): ProviderContext {
     config: {},
     store: {
       async get() {
-        return undefined
+        return {}
       },
       async set() {},
     },
