@@ -18,13 +18,21 @@ const easyInputMessageSchema = z.object({
   content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
 })
 
+const functionCallSchema = z.object({
+  type: z.literal('function_call'),
+  id: z.string().optional(),
+  call_id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.string(),
+})
+
 const functionCallOutputSchema = z.object({
   type: z.literal('function_call_output'),
   call_id: z.string().min(1),
   output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
 })
 
-const inputItemSchema = z.union([easyInputMessageSchema, functionCallOutputSchema])
+const inputItemSchema = z.union([easyInputMessageSchema, functionCallSchema, functionCallOutputSchema])
 
 export const openAIResponsesRequestSchema = z
   .object({
@@ -69,7 +77,7 @@ function mapEasyInputContent(
 ): string | Array<Record<string, unknown>> {
   if (typeof content === 'string') return content
   return content.map((item) => {
-    if (item.type === 'input_text') {
+    if (item.type === 'input_text' || item.type === 'output_text') {
       return { type: 'text', text: item.text ?? '' }
     }
     if (item.type === 'input_image') {
@@ -103,7 +111,24 @@ export function mapResponsesRequestToAISDKInput(
     messages.push({ role: 'user', content: request.input })
   } else {
     for (const item of request.input) {
-      if ('type' in item && item.type === 'function_call_output') {
+      if ('type' in item && item.type === 'function_call') {
+        // function_call → assistant message with tool-call content part
+        let args: unknown = {}
+        try {
+          args = JSON.parse(item.arguments)
+        } catch {
+          args = item.arguments
+        }
+        messages.push({
+          role: 'assistant',
+          content: [{
+            type: 'tool-call',
+            toolCallId: item.call_id,
+            toolName: item.name,
+            input: args,
+          }],
+        })
+      } else if ('type' in item && item.type === 'function_call_output') {
         const output = typeof item.output === 'string'
           ? item.output
           : JSON.stringify(item.output)

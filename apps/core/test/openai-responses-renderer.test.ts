@@ -136,8 +136,8 @@ describe('renderOpenAIResponse', () => {
 // ─── Streaming SSE Renderer Tests ─────────────────────────────
 
 async function* textStream() {
-  yield { type: 'text-delta', textDelta: 'Hello' }
-  yield { type: 'text-delta', textDelta: ' world' }
+  yield { type: 'text-delta', text: 'Hello' }
+  yield { type: 'text-delta', text: ' world' }
   yield {
     type: 'finish',
     finishReason: 'stop',
@@ -223,7 +223,7 @@ describe('renderOpenAIResponseSSE', () => {
 
   // Bug #2 — Error terminal behavior
   async function* errorStream() {
-    yield { type: 'text-delta', textDelta: 'Hello' }
+    yield { type: 'text-delta', text: 'Hello' }
     yield { type: 'error', error: new Error('upstream failed') }
   }
 
@@ -272,9 +272,9 @@ describe('renderOpenAIResponseSSE', () => {
 
   // Bug #12 — new msgId after tool call
   async function* textThenToolCallStream() {
-    yield { type: 'text-delta', textDelta: 'Hello' }
+    yield { type: 'text-delta', text: 'Hello' }
     yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'fn', input: {} }
-    yield { type: 'text-delta', textDelta: ' world' }
+    yield { type: 'text-delta', text: ' world' }
     yield { type: 'finish', finishReason: 'stop', usage: { promptTokens: 5, completionTokens: 5 }, response: { id: 'resp_multi' } }
   }
 

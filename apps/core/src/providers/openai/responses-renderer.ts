@@ -93,6 +93,9 @@ export async function* renderOpenAIResponseSSE(input: {
   let responseStarted = false
   let outputItemStarted = false
   let contentPartStarted = false
+  let reasoningItemStarted = false
+  let fullReasoning = ''
+  let reasoningItemId = ''
   const streamedToolCalls: ResponseFunctionToolCall[] = []
 
   // Bug #3 — tool-call delta tracking state
@@ -130,7 +133,8 @@ export async function* renderOpenAIResponseSSE(input: {
       const partType = (part as Record<string, unknown>).type
 
       if (partType === 'text-delta') {
-        const delta = String((part as Record<string, unknown>).textDelta ?? '')
+        // AI SDK fullStream uses `text` field (not `textDelta`); fall back to `delta` for other stream types
+        const delta = String((part as Record<string, unknown>).text ?? (part as Record<string, unknown>).delta ?? '')
 
         // Start output item if needed
         if (!outputItemStarted) {
@@ -162,6 +166,67 @@ export async function* renderOpenAIResponseSSE(input: {
           content_index: 0,
           delta,
         })
+      }
+
+      // Reasoning chunks — map to reasoning output item (OpenAI Responses API)
+      if (partType === 'reasoning-start') {
+        if (!reasoningItemStarted) {
+          reasoningItemStarted = true
+          reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+          yield sse('response.output_item.added', {
+            type: 'response.output_item.added',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: { id: reasoningItemId, type: 'reasoning', summary: [] },
+          })
+        }
+      }
+
+      if (partType === 'reasoning-delta') {
+        // AI SDK fullStream uses `text` field; fall back to `delta`
+        const delta = String((part as Record<string, unknown>).text ?? (part as Record<string, unknown>).delta ?? '')
+        if (!delta) continue
+
+        if (!reasoningItemStarted) {
+          reasoningItemStarted = true
+          reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+          yield sse('response.output_item.added', {
+            type: 'response.output_item.added',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: { id: reasoningItemId, type: 'reasoning', summary: [] },
+          })
+        }
+
+        fullReasoning += delta
+        yield sse('response.reasoning_summary_text.delta', {
+          type: 'response.reasoning_summary_text.delta',
+          sequence_number: nextSeq(),
+          item_id: reasoningItemId,
+          output_index: outputIndex,
+          delta,
+        })
+      }
+
+      if (partType === 'reasoning-end') {
+        if (reasoningItemStarted) {
+          yield sse('response.reasoning_summary_text.done', {
+            type: 'response.reasoning_summary_text.done',
+            sequence_number: nextSeq(),
+            item_id: reasoningItemId,
+            output_index: outputIndex,
+            text: fullReasoning,
+          })
+          yield sse('response.output_item.done', {
+            type: 'response.output_item.done',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
+          })
+          outputIndex++
+          reasoningItemStarted = false
+          fullReasoning = ''
+        }
       }
 
       // Bug #3 — Handler 1: tool-call-start / tool-input-start
@@ -290,6 +355,25 @@ export async function* renderOpenAIResponseSSE(input: {
       }
 
       if (partType === 'finish') {
+        // Close any open reasoning item
+        if (reasoningItemStarted) {
+          yield sse('response.reasoning_summary_text.done', {
+            type: 'response.reasoning_summary_text.done',
+            sequence_number: nextSeq(),
+            item_id: reasoningItemId,
+            output_index: outputIndex,
+            text: fullReasoning,
+          })
+          yield sse('response.output_item.done', {
+            type: 'response.output_item.done',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
+          })
+          outputIndex++
+          reasoningItemStarted = false
+          fullReasoning = ''
+        }
         // Close any open text content
         if (contentPartStarted) {
           yield sse('response.output_text.done', {
