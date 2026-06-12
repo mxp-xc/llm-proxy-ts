@@ -147,7 +147,7 @@ export function mapResponsesRequestToAISDKInput(
       } else {
         // EasyInputMessage
         const { role, content } = item
-        if (role === 'developer') {
+        if (role === 'developer' || role === 'system') {
           const text = typeof content === 'string' ? content : extractTextFromContent(content)
           if (text) systemParts.push(text)
         } else {
