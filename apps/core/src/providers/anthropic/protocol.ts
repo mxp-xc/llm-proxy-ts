@@ -1,6 +1,7 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod/v3'
-import type { AISDKInput } from '../openai/protocol.js'
+import type { AISDKInput } from '../shared/aisdk-types.js'
+import { mapProviderOptions } from '../shared/protocol-utils.js'
 
 // ─── Content Block Schemas ─────────────────────────────────────
 
@@ -210,7 +211,7 @@ export function mapAnthropicMessagesRequestToAISDKInput(
       providerOptions.stop_sequences = request.stop_sequences
 
     // passthrough 字段
-    const extraOptions = mapProviderOptions(request)
+    const extraOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
     Object.assign(providerOptions, extraOptions)
 
     if (Object.keys(providerOptions).length > 0) {
@@ -304,8 +305,4 @@ function mapToolChoice(
   if (choice.type === 'none') return 'none'
   // { type: 'tool', name } → { type: 'tool', toolName }
   return { type: 'tool', toolName: choice.name }
-}
-
-function mapProviderOptions(request: AnthropicMessagesRequest): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(request).filter(([key]) => !mappedRequestKeys.has(key)))
 }

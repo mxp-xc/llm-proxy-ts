@@ -38,7 +38,7 @@ export {
   createOpenAICompatibleProvider,
   createProxyFetch,
   sanitizeHeaders,
-} from './providers/openai/provider.js'
+} from './providers/shared/provider-factory.js'
 export { createAnthropicProvider } from './providers/anthropic/provider.js'
 
 // OAuth exports
@@ -93,7 +93,7 @@ export { createPluginStore } from './plugins/store-adapter.js'
 export { resolvePluginConfigs, assertKnownPlugins } from './plugins/registry.js'
 
 // Protocol type exports
-export type { OpenAIModel, OpenAIModelList } from './providers/openai/types.js'
+export type { OpenAIModel, OpenAIModelList } from './providers/model-types.js'
 export type {
   AnthropicStopReason,
   AnthropicErrorResponse,
@@ -106,19 +106,42 @@ export type {
   AnthropicMessage,
 } from './providers/anthropic/types.js'
 
-// Protocol exports — OpenAI
+// Protocol exports — OpenAI Compatible (Chat Completions)
 export {
   validateOpenAIChatRequest,
   openAIChatRequestSchema,
   mapOpenAIChatRequestToAISDKInput,
-} from './providers/openai/protocol.js'
-export type { OpenAIChatRequest, AISDKInput } from './providers/openai/protocol.js'
+} from './providers/openai-compatible/protocol.js'
+export type { OpenAIChatRequest, AISDKInput } from './providers/openai-compatible/protocol.js'
 export {
   renderOpenAIChatCompletion,
   renderOpenAIChatCompletionSSE,
-} from './providers/openai/renderer.js'
-export type { RenderResultInput, OpenAIChatCompletion } from './providers/openai/renderer.js'
-export { listModels, getModel } from './providers/openai/models.js'
+} from './providers/openai-compatible/renderer.js'
+export type { OpenAIChatCompletion } from './providers/openai-compatible/types.js'
+export type { RenderResultInput } from './providers/protocol-types.js'
+
+// Protocol exports — OpenAI Responses API
+export {
+  validateOpenAIResponsesRequest,
+  openAIResponsesRequestSchema,
+  mapResponsesRequestToAISDKInput,
+} from './providers/openai-responses/protocol.js'
+export type { OpenAIResponsesRequest } from './providers/openai-responses/protocol.js'
+export {
+  renderOpenAIResponse,
+  renderOpenAIResponseSSE,
+} from './providers/openai-responses/renderer.js'
+export type {
+  OpenAIResponse,
+  ResponseOutputItem,
+  ResponseOutputMessage,
+  ResponseFunctionToolCall,
+  ResponseOutputText,
+  ResponseUsage,
+} from './providers/openai-responses/types.js'
+
+// Models
+export { listModels, getModel } from './providers/models.js'
 
 // Protocol exports — Anthropic
 export {
@@ -131,25 +154,13 @@ export {
   renderAnthropicMessageSSE,
 } from './providers/anthropic/renderer.js'
 
-// Protocol exports — OpenAI Responses API
-export {
-  validateOpenAIResponsesRequest,
-  openAIResponsesRequestSchema,
-  mapResponsesRequestToAISDKInput,
-} from './providers/openai/responses-protocol.js'
-export type { OpenAIResponsesRequest } from './providers/openai/responses-protocol.js'
-export {
-  renderOpenAIResponse,
-  renderOpenAIResponseSSE,
-} from './providers/openai/responses-renderer.js'
-export type {
-  OpenAIResponse,
-  ResponseOutputItem,
-  ResponseOutputMessage,
-  ResponseFunctionToolCall,
-  ResponseOutputText,
-  ResponseUsage,
-} from './providers/openai/responses-renderer.js'
+// Strategy exports
+export type { ProtocolStrategy } from './providers/shared/strategy.js'
+export type { ProtocolErrorFormatter } from './providers/shared/error-format.js'
+export { openAIErrorFormat, anthropicErrorFormat } from './providers/shared/error-format.js'
+export { openaiCompatibleStrategy } from './providers/openai-compatible/strategy.js'
+export { openaiResponsesStrategy } from './providers/openai-responses/strategy.js'
+export { anthropicStrategy } from './providers/anthropic/strategy.js'
 
 // Routing exports
 export { RoutingTable, RoutingError } from './routing.js'

@@ -48,3 +48,4 @@ docs/superpowers/
 temp/
 .codegraph
 work-local/
+.claude/worktrees

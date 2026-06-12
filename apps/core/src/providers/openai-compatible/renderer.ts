@@ -1,29 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord } from '../protocol-types.js'
+import { stringValue, toolCallIdValue } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
+import type { OpenAIChatCompletion } from './types.js'
 
 export type { FinishReason, RenderResultInput } from '../protocol-types.js'
-
-export interface OpenAIChatCompletion {
-  id: string
-  object: 'chat.completion'
-  created: number
-  model: string
-  choices: Array<{
-    index: number
-    message: {
-      role: 'assistant'
-      content: string | null
-      tool_calls?: Array<{
-        id: string
-        type: 'function'
-        function: { name: string; arguments: string }
-      }>
-    }
-    finish_reason: string | null
-  }>
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
-}
+export type { OpenAIChatCompletion } from './types.js'
 
 export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChatCompletion {
   const message: OpenAIChatCompletion['choices'][number]['message'] = {
@@ -230,12 +212,4 @@ function toolIndex(indexes: Map<string, number>, toolCallId: string): number {
   const index = indexes.size
   indexes.set(toolCallId, index)
   return index
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function toolCallIdValue(part: Record<string, unknown>): string | undefined {
-  return stringValue(part.toolCallId ?? part.id)
 }

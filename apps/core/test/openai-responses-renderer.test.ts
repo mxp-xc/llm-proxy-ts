@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../src/providers/openai/responses-renderer.js'
+import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../src/providers/openai-responses/renderer.js'
 
 describe('renderOpenAIResponse', () => {
   it('renders text response', () => {

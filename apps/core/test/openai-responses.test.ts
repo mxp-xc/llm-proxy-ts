@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapResponsesRequestToAISDKInput, validateOpenAIResponsesRequest } from '../src/providers/openai/responses-protocol.js'
+import { mapResponsesRequestToAISDKInput, validateOpenAIResponsesRequest } from '../src/providers/openai-responses/protocol.js'
 
 describe('validateOpenAIResponsesRequest', () => {
   it('rejects request without model', () => {

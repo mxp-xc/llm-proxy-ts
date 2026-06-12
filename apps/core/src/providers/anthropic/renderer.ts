@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord, type FinishReason, type RenderResultInput } from '../protocol-types.js'
+import { stringValue, toolCallIdValue } from '../shared/renderer-utils.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -289,13 +290,4 @@ function mapStopReason(
   if (reason === 'length') return 'max_tokens'
   if (reason === 'content-filter') return 'refusal'
   return 'end_turn'
-}
-
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined
-}
-
-function toolCallIdValue(part: Record<string, unknown>): string | undefined {
-  return stringValue(part.toolCallId ?? part.id)
 }

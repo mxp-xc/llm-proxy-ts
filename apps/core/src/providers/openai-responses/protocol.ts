@@ -1,5 +1,6 @@
 import { jsonSchema, type ToolSet } from 'ai'
-import type { AISDKInput } from './protocol.js'
+import type { AISDKInput } from '../shared/aisdk-types.js'
+import { mapProviderOptions } from '../shared/protocol-utils.js'
 import { z } from 'zod/v3'
 
 // ─── Schemas ──────────────────────────────────────────────────
@@ -197,7 +198,7 @@ export function mapResponsesRequestToAISDKInput(
 
   // provider options passthrough
   if (providerName) {
-    const providerOptions = mapResponsesProviderOptions(request)
+    const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedResponsesRequestKeys)
     if (Object.keys(providerOptions).length > 0) {
       input.providerOptions = { [providerName]: providerOptions }
     }
@@ -223,12 +224,4 @@ function mapResponsesToolChoice(
 ): NonNullable<AISDKInput['toolChoice']> {
   if (typeof choice === 'string') return choice
   return { type: 'tool', toolName: choice.name }
-}
-
-function mapResponsesProviderOptions(
-  request: OpenAIResponsesRequest,
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(request).filter(([key]) => !mappedResponsesRequestKeys.has(key)),
-  )
 }

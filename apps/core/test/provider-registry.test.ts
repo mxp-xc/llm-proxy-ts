@@ -16,8 +16,8 @@ const mockLogger: Logger = {
   },
 }
 
-vi.mock('../src/providers/openai/provider.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../src/providers/openai/provider.js')>()
+vi.mock('../src/providers/shared/provider-factory.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/providers/shared/provider-factory.js')>()
   return {
     ...original,
     createOpenAICompatibleProvider(

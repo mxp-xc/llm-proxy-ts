@@ -4,24 +4,15 @@ import type { Context } from 'hono'
 import type { Settings, TokenManager, AuthStatus } from '@llm-proxy/core'
 import {
   OAuthError,
-  mapOpenAIChatRequestToAISDKInput,
-  validateOpenAIChatRequest,
-  renderOpenAIChatCompletion,
-  renderOpenAIChatCompletionSSE,
-  mapAnthropicMessagesRequestToAISDKInput,
-  validateAnthropicMessagesRequest,
-  renderAnthropicMessage,
-  renderAnthropicMessageSSE,
   getModel,
   listModels,
   RoutingError,
   RoutingTable,
-  mapResponsesRequestToAISDKInput,
-  validateOpenAIResponsesRequest,
-  renderOpenAIResponse,
-  renderOpenAIResponseSSE,
+  openaiCompatibleStrategy,
+  openaiResponsesStrategy,
+  anthropicStrategy,
 } from '@llm-proxy/core'
-import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection } from '@llm-proxy/core'
+import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection, ProtocolStrategy } from '@llm-proxy/core'
 import pino from 'pino'
 import { logger as defaultLogger, requestId } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
@@ -173,65 +164,63 @@ export function createApp({
     return c.json(model)
   })
 
-  app.post('/v1/chat/completions', async (c) => {
-    let request
+  // ─── Generic protocol request handler ─────────────────────────────
+
+  async function handleProtocolRequest<TRequest>(
+    c: import('hono').Context<AppEnv>,
+    strategy: ProtocolStrategy<TRequest>,
+  ): Promise<Response> {
+    const { formatErrors } = strategy
+
+    // 1. Validate request
+    let request: TRequest
     try {
-      request = validateOpenAIChatRequest(await c.req.json())
+      request = strategy.validate(await c.req.json())
     } catch {
-      return c.json(
-        {
-          error: {
-            type: 'invalid_request_error',
-            code: 'invalid_request',
-            message: 'Invalid OpenAI chat completion request',
-          },
-        },
-        400,
-      )
+      const { body, status } = formatErrors.validation()
+      return c.json(body, status as 400)
     }
 
+    // 2. Resolve route
     let route
     try {
-      route = routingTable.resolve(request.model)
+      route = routingTable.resolve(strategy.getModel(request))
     } catch (error) {
       if (error instanceof RoutingError) {
-        return c.json(error.toResponse(), error.status as 404)
+        const { body, status } = formatErrors.routing(error)
+        return c.json(body, status as 404)
       }
       throw error
     }
 
     c.set('provider', route.providerName)
-    c.set('requestedModel', request.model)
+    c.set('requestedModel', strategy.getModel(request))
     c.set('actualModel', route.upstreamModel)
 
-    const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName)
+    // 3. Map to AI SDK input
+    const callInput = strategy.mapToAISDKInput(request, route.providerName)
+
+    // 4. Get LanguageModel
     let model
     try {
       model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            error: {
-              type: 'auth_required',
-              code: 'oauth_login_needed',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
+        const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
+        const { body, status } = formatErrors.oauth(error.message, loginUrl)
+        return c.json(body, status as 503)
       }
       throw error
     }
     const abortController = new AbortController()
 
-    if (request.stream) {
+    // 5-6. Stream or generate + render
+    if (strategy.isStream(request)) {
       try {
         const stream = gateway.stream({
           model,
           callInput,
-          requestModel: request.model,
+          requestModel: strategy.getModel(request),
           abortSignal: abortController.signal,
         })
         const inspection = await withRequestTimeout(
@@ -240,12 +229,16 @@ export function createApp({
           abortController,
         )
         if (inspection.error) {
-          return c.json(inspection.error.body, inspection.error.status as 429)
+          const { body, status } = formatErrors.rateLimit(
+            inspection.error.body,
+            inspection.error.status,
+          )
+          return c.json(body, status as 429)
         }
         const reqLogger = c.get('logger')
         return new Response(
           readableStreamFromAsyncIterable(
-            renderOpenAIChatCompletionSSE({ model: request.model, stream: inspection.stream }),
+            strategy.renderStreamSSE({ model: strategy.getModel(request), stream: inspection.stream }),
             (error) => {
               reqLogger.error({ err: error }, 'stream consumption failed')
             },
@@ -257,22 +250,16 @@ export function createApp({
       } catch (error) {
         c.get('logger').error({ err: error }, 'stream request failed')
         if (error instanceof OAuthError && error.code === 'auth_required') {
-          return c.json(
-            {
-              error: {
-                type: 'auth_required',
-                code: 'oauth_login_needed',
-                message: error.message,
-                loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-              },
-            },
-            503,
-          )
+          const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
+          const { body, status } = formatErrors.oauth(error.message, loginUrl)
+          return c.json(body, status as 503)
         }
         if (error instanceof RequestTimeoutError) {
-          return upstreamTimeoutResponse()
+          const { body, status } = formatErrors.timeout()
+          return c.json(body, status as 504)
         }
-        return upstreamErrorResponse()
+        const { body, status } = formatErrors.upstream()
+        return c.json(body, status as 502)
       }
     }
 
@@ -281,15 +268,15 @@ export function createApp({
         gateway.generate({
           model,
           callInput,
-          requestModel: request.model,
+          requestModel: strategy.getModel(request),
           abortSignal: abortController.signal,
         }),
         settings.requestTimeoutMs,
         abortController,
       )
       return c.json(
-        renderOpenAIChatCompletion({
-          model: request.model,
+        strategy.renderResult({
+          model: strategy.getModel(request),
           text: result.text,
           finishReason: result.finishReason,
           usage: result.usage,
@@ -300,332 +287,28 @@ export function createApp({
     } catch (error) {
       c.get('logger').error({ err: error }, 'generation request failed')
       if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            error: {
-              type: 'auth_required',
-              code: 'oauth_login_needed',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
+        const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
+        const { body, status } = formatErrors.oauth(error.message, loginUrl)
+        return c.json(body, status as 503)
       }
       if (error instanceof RequestTimeoutError) {
-        return upstreamTimeoutResponse()
+        const { body, status } = formatErrors.timeout()
+        return c.json(body, status as 504)
       }
-      return upstreamErrorResponse()
+      const { body, status } = formatErrors.upstream()
+      return c.json(body, status as 502)
     }
-  })
+  }
 
-  // ─── Anthropic Messages API ──────────────────────────────────────
-
-  app.post('/v1/messages', async (c) => {
-    let request
-    try {
-      request = validateAnthropicMessagesRequest(await c.req.json())
-    } catch {
-      return c.json(
-        {
-          type: 'error',
-          error: { type: 'invalid_request_error', message: 'Invalid Anthropic Messages request' },
-        },
-        400,
-      )
-    }
-
-    let route
-    try {
-      route = routingTable.resolve(request.model)
-    } catch (error) {
-      if (error instanceof RoutingError) {
-        return c.json(
-          {
-            type: 'error',
-            error: {
-              type: 'not_found_error',
-              message: error.toResponse().error?.message ?? 'Model not found',
-            },
-          },
-          error.status as 404,
-        )
-      }
-      throw error
-    }
-
-    c.set('provider', route.providerName)
-    c.set('requestedModel', request.model)
-    c.set('actualModel', route.upstreamModel)
-
-    const callInput = mapAnthropicMessagesRequestToAISDKInput(request, route.providerName)
-    let model
-    try {
-      model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
-    } catch (error) {
-      if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            type: 'error',
-            error: {
-              type: 'authentication_error',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
-      }
-      throw error
-    }
-    const abortController = new AbortController()
-
-    if (request.stream) {
-      try {
-        const stream = gateway.stream({
-          model,
-          callInput,
-          requestModel: request.model,
-          abortSignal: abortController.signal,
-        })
-        const inspection = await withRequestTimeout(
-          inspectFirstStreamChunk(route.resolvedPlugins, stream),
-          settings.requestTimeoutMs,
-          abortController,
-        )
-        if (inspection.error) {
-          return c.json(
-            {
-              type: 'error',
-              error: { type: 'rate_limit_error', message: JSON.stringify(inspection.error.body) },
-            },
-            inspection.error.status as 429,
-          )
-        }
-        const reqLogger = c.get('logger')
-        return new Response(
-          readableStreamFromAsyncIterable(
-            renderAnthropicMessageSSE({ model: request.model, stream: inspection.stream }),
-            (error) => {
-              reqLogger.error({ err: error }, 'stream consumption failed')
-            },
-          ),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-          },
-        )
-      } catch (error) {
-        c.get('logger').error({ err: error }, 'stream request failed')
-        if (error instanceof OAuthError && error.code === 'auth_required') {
-          return c.json(
-            {
-              type: 'error',
-              error: {
-                type: 'authentication_error',
-                message: error.message,
-                loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-              },
-            },
-            503,
-          )
-        }
-        if (error instanceof RequestTimeoutError) {
-          return anthropicTimeoutResponse()
-        }
-        return anthropicErrorResponse()
-      }
-    }
-
-    try {
-      const result = await withRequestTimeout(
-        gateway.generate({
-          model,
-          callInput,
-          requestModel: request.model,
-          abortSignal: abortController.signal,
-        }),
-        settings.requestTimeoutMs,
-        abortController,
-      )
-      return c.json(
-        renderAnthropicMessage({
-          model: request.model,
-          text: result.text,
-          finishReason: result.finishReason,
-          usage: result.usage,
-          response: result.response,
-          toolCalls: result.toolCalls,
-        }),
-      )
-    } catch (error) {
-      c.get('logger').error({ err: error }, 'generation request failed')
-      if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            type: 'error',
-            error: {
-              type: 'authentication_error',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
-      }
-      if (error instanceof RequestTimeoutError) {
-        return anthropicTimeoutResponse()
-      }
-      return anthropicErrorResponse()
-    }
-  })
-
-  // ─── OpenAI Responses API ───────────────────────────────────
-
-  app.post('/v1/responses', async (c) => {
-    let request
-    try {
-      request = validateOpenAIResponsesRequest(await c.req.json())
-    } catch {
-      return c.json(
-        {
-          error: {
-            type: 'invalid_request_error',
-            code: 'invalid_request',
-            message: 'Invalid OpenAI Responses request',
-          },
-        },
-        400,
-      )
-    }
-
-    let route
-    try {
-      route = routingTable.resolve(request.model)
-    } catch (error) {
-      if (error instanceof RoutingError) {
-        return c.json(error.toResponse(), error.status as 404)
-      }
-      throw error
-    }
-
-    c.set('provider', route.providerName)
-    c.set('requestedModel', request.model)
-    c.set('actualModel', route.upstreamModel)
-
-    const callInput = mapResponsesRequestToAISDKInput(request, route.providerName)
-    let model
-    try {
-      model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
-    } catch (error) {
-      if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            error: {
-              type: 'auth_required',
-              code: 'oauth_login_needed',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
-      }
-      throw error
-    }
-    const abortController = new AbortController()
-
-    if (request.stream) {
-      try {
-        const stream = gateway.stream({
-          model,
-          callInput,
-          requestModel: request.model,
-          abortSignal: abortController.signal,
-        })
-        const inspection = await withRequestTimeout(
-          inspectFirstStreamChunk(route.resolvedPlugins, stream),
-          settings.requestTimeoutMs,
-          abortController,
-        )
-        if (inspection.error) {
-          return c.json(inspection.error.body, inspection.error.status as 429)
-        }
-        const reqLogger = c.get('logger')
-        return new Response(
-          readableStreamFromAsyncIterable(
-            renderOpenAIResponseSSE({ model: request.model, stream: inspection.stream }),
-            (error) => {
-              reqLogger.error({ err: error }, 'stream consumption failed')
-            },
-          ),
-          {
-            headers: { 'content-type': 'text/event-stream' },
-          },
-        )
-      } catch (error) {
-        c.get('logger').error({ err: error }, 'stream request failed')
-        if (error instanceof OAuthError && error.code === 'auth_required') {
-          return c.json(
-            {
-              error: {
-                type: 'auth_required',
-                code: 'oauth_login_needed',
-                message: error.message,
-                loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-              },
-            },
-            503,
-          )
-        }
-        if (error instanceof RequestTimeoutError) {
-          return upstreamTimeoutResponse()
-        }
-        return upstreamErrorResponse()
-      }
-    }
-
-    try {
-      const result = await withRequestTimeout(
-        gateway.generate({
-          model,
-          callInput,
-          requestModel: request.model,
-          abortSignal: abortController.signal,
-        }),
-        settings.requestTimeoutMs,
-        abortController,
-      )
-      return c.json(
-        renderOpenAIResponse({
-          model: request.model,
-          text: result.text,
-          finishReason: result.finishReason,
-          usage: result.usage,
-          response: result.response,
-          toolCalls: result.toolCalls,
-        }),
-      )
-    } catch (error) {
-      c.get('logger').error({ err: error }, 'generation request failed')
-      if (error instanceof OAuthError && error.code === 'auth_required') {
-        return c.json(
-          {
-            error: {
-              type: 'auth_required',
-              code: 'oauth_login_needed',
-              message: error.message,
-              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
-            },
-          },
-          503,
-        )
-      }
-      if (error instanceof RequestTimeoutError) {
-        return upstreamTimeoutResponse()
-      }
-      return upstreamErrorResponse()
-    }
-  })
+  app.post('/v1/chat/completions', (c) =>
+    handleProtocolRequest(c, openaiCompatibleStrategy),
+  )
+  app.post('/v1/messages', (c) =>
+    handleProtocolRequest(c, anthropicStrategy),
+  )
+  app.post('/v1/responses', (c) =>
+    handleProtocolRequest(c, openaiResponsesStrategy),
+  )
 
   return app
 }
@@ -675,51 +358,6 @@ async function withRequestTimeout<T>(
       clearTimeout(timeout)
     }
   }
-}
-
-function upstreamTimeoutResponse(): Response {
-  return Response.json(
-    {
-      error: {
-        type: 'upstream_error',
-        code: 'upstream_request_timeout',
-        message: 'Upstream provider request timed out',
-      },
-    },
-    { status: 504 },
-  )
-}
-
-function upstreamErrorResponse(): Response {
-  return Response.json(
-    {
-      error: {
-        type: 'upstream_error',
-        code: 'upstream_request_failed',
-        message: 'Upstream provider request failed',
-      },
-    },
-    { status: 502 },
-  )
-}
-
-// ─── Anthropic-style error responses ────────────────────────────────
-
-function anthropicTimeoutResponse(): Response {
-  return Response.json(
-    {
-      type: 'error',
-      error: { type: 'timeout_error', message: 'Upstream provider request timed out' },
-    },
-    { status: 504 },
-  )
-}
-
-function anthropicErrorResponse(): Response {
-  return Response.json(
-    { type: 'error', error: { type: 'api_error', message: 'Upstream provider request failed' } },
-    { status: 502 },
-  )
 }
 
 // ─── Stream inspection (generic dispatch) ─────────────────────────

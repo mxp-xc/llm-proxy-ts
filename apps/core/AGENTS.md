@@ -7,18 +7,32 @@
 ```
 src/providers/
 ├── registry.ts           Provider 注册表（按 provider.type 分派）
-├── protocol-types.ts     共享协议类型（FinishReason、RenderResultInput）
-├── openai/
-│   ├── provider.ts       OpenAI-compatible 工厂（@ai-sdk/openai-compatible）
-│   ├── protocol.ts       OpenAI 请求 schema + AI SDK 映射
-│   ├── renderer.ts       OpenAI 响应渲染（JSON + SSE）
-│   ├── models.ts         OpenAI 模型发现
-│   └── types.ts          OpenAI 类型定义
+├── protocol-types.ts     共享协议类型（FinishReason、RenderResultInput、toErrorMessage、isRecord）
+├── models.ts             模型发现（listModels、getModel）
+├── model-types.ts        模型列表类型（OpenAIModel、OpenAIModelList）
+├── shared/
+│   ├── aisdk-types.ts    AI SDK 统一输入类型（AISDKInput）
+│   ├── provider-factory.ts  共享 Provider 工厂（createOpenAICompatibleProvider、sanitizeHeaders、createProxyFetch）
+│   ├── renderer-utils.ts    共享 Renderer 工具（stringValue、toolCallIdValue）
+│   ├── protocol-utils.ts    共享协议映射工具（mapProviderOptions）
+│   ├── error-format.ts      协议错误格式化器（ProtocolErrorFormatter 接口 + openAI/anthropic 两种实现）
+│   └── strategy.ts          策略模式接口（ProtocolStrategy）
+├── openai-compatible/
+│   ├── protocol.ts       OpenAI Chat 请求 schema + AI SDK 映射
+│   ├── renderer.ts       OpenAI Chat 响应渲染（JSON + SSE）
+│   ├── types.ts          OpenAI Chat 响应类型（OpenAIChatCompletion）
+│   └── strategy.ts       openaiCompatibleStrategy 实例
+├── openai-responses/
+│   ├── protocol.ts       OpenAI Responses 请求 schema + AI SDK 映射
+│   ├── renderer.ts       OpenAI Responses 响应渲染（命名事件 SSE 状态机）
+│   ├── types.ts          OpenAI Responses 响应类型
+│   └── strategy.ts       openaiResponsesStrategy 实例
 └── anthropic/
     ├── provider.ts       Anthropic 工厂（@ai-sdk/anthropic）
     ├── protocol.ts       Anthropic 请求 schema + AI SDK 映射
     ├── renderer.ts       Anthropic 响应渲染（JSON + 命名事件 SSE）
-    └── types.ts          Anthropic 类型定义
+    ├── types.ts          Anthropic 类型定义
+    └── strategy.ts       anthropicStrategy 实例
 ```
 
 ## CLI 结构
@@ -46,6 +60,7 @@ src/cli/
 - **models 端点：** `modelsEndpoint` 仅对 `openai-compatible` 类型生效；`anthropic` 类型不支持 OpenAI 协议发现。
 - **Logger DI：** `createProviderRegistry` 通过依赖注入接收 `Logger`，不耦合日志实现。
 - **Anthropic tool_choice：** 始终是对象格式（`{ type: 'auto' }` 等），不兼容裸字符串。
+- **策略模式：** 每种协议格式实现 `ProtocolStrategy<TRequest>` 接口，封装验证、映射、渲染和错误格式化。Server 端通过 `handleProtocolRequest` 通用函数统一处理，消除三个 handler 的重复逻辑。
 
 ## 命令
 

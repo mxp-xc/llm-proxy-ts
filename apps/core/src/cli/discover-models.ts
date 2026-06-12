@@ -1,4 +1,4 @@
-import { createProxyFetch } from '../providers/openai/provider.js'
+import { createProxyFetch } from '../providers/shared/provider-factory.js'
 import type { Settings } from '../config.js'
 import type { DiscoveredModelList } from '../plugins/types.js'
 

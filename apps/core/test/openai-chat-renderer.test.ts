@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   renderOpenAIChatCompletion,
   renderOpenAIChatCompletionSSE,
-} from '../src/providers/openai/renderer.js'
+} from '../src/providers/openai-compatible/renderer.js'
 
 describe('OpenAI chat renderer', () => {
   it('renders text completions', () => {

@@ -1,5 +1,5 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
-import { sanitizeHeaders, createProxyFetch } from '../openai/provider.js'
+import { sanitizeHeaders, createProxyFetch } from '../shared/provider-factory.js'
 import type { AnthropicProviderConfig, Settings } from '../../config.js'
 
 export function createAnthropicProvider(

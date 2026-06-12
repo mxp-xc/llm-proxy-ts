@@ -1,5 +1,9 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod/v3'
+import type { AISDKInput } from '../shared/aisdk-types.js'
+import { mapProviderOptions } from '../shared/protocol-utils.js'
+
+export type { AISDKInput } from '../shared/aisdk-types.js'
 
 const openAIToolCallSchema = z.object({
   id: z.string().min(1),
@@ -75,20 +79,6 @@ export const openAIChatRequestSchema = z
 
 export type OpenAIChatRequest = z.infer<typeof openAIChatRequestSchema>
 
-export interface AISDKInput {
-  system?: string
-  messages: Array<Record<string, unknown>>
-  temperature?: number
-  topP?: number
-  presencePenalty?: number
-  frequencyPenalty?: number
-  maxOutputTokens?: number
-  stopSequences?: string[]
-  tools?: ToolSet
-  toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string }
-  providerOptions?: Record<string, Record<string, unknown>>
-}
-
 const mappedRequestKeys = new Set([
   'model',
   'messages',
@@ -133,7 +123,7 @@ export function mapOpenAIChatRequestToAISDKInput(
     input.toolChoice = mapToolChoice(request.tool_choice)
   }
   if (providerName) {
-    const providerOptions = mapProviderOptions(request)
+    const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
     if (Object.keys(providerOptions).length > 0) {
       input.providerOptions = { [providerName]: providerOptions }
     }
@@ -210,8 +200,4 @@ function mapToolChoice(
 ): NonNullable<AISDKInput['toolChoice']> {
   if (typeof choice === 'string') return choice
   return { type: 'tool', toolName: choice.function.name }
-}
-
-function mapProviderOptions(request: OpenAIChatRequest): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(request).filter(([key]) => !mappedRequestKeys.has(key)))
 }

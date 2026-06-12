@@ -3,7 +3,7 @@ import type { Settings, OAuthConfig, ProviderConfig } from '../config.js'
 import type { TokenManager } from '../oauth/index.js'
 import type { Logger } from '../types.js'
 import type { PluginRegistry } from '../plugins/registry.js'
-import { createOpenAICompatibleProvider, sanitizeHeaders } from './openai/provider.js'
+import { createOpenAICompatibleProvider, sanitizeHeaders } from './shared/provider-factory.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
 
 const noopLogger: Logger = {
