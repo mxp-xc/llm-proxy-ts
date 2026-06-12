@@ -31,7 +31,7 @@ const settings: Settings = {
 
 const stubRegistry: ProviderRegistry = {
   languageModel() {
-    return {} as never
+    return { model: {} as never }
   },
   debugProviderConfig() {
     return {} as never
@@ -53,7 +53,7 @@ describe('logging', () => {
       const logger = createLogger()
 
       logger.info(
-        { method: 'GET', path: '/health', status: 200, durationMs: 3 },
+        { method: 'GET', path: '/health', status: 200, duration: '0.01s' },
         'request completed',
       )
       logger.warn({ provider: 'openrouter', keyIndex: 1, keyCount: 3 }, 'provider key selected')
@@ -62,7 +62,7 @@ describe('logging', () => {
       const lines = stdout.output.trimEnd().split('\n')
       expect(lines).toHaveLength(2)
       expect(lines[0]).toMatch(
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO\s+llm-proxy - request completed method=GET path=\/health status=200 durationMs=3$/,
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO\s+llm-proxy - request completed method=GET path=\/health status=200 duration=0\.01s$/,
       )
       expect(lines[1]).toMatch(
         /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} WARN\s+llm-proxy - provider key selected provider=openrouter keyIndex=1 keyCount=3$/,
@@ -83,7 +83,7 @@ describe('logging', () => {
       const logger = createLogger()
 
       logger.info(
-        { method: 'GET', path: '/health', status: 200, durationMs: 3 },
+        { method: 'GET', path: '/health', status: 200, duration: '0.01s' },
         'request completed',
       )
       logger.warn({ provider: 'openrouter', keyIndex: 1, keyCount: 3 }, 'provider key selected')
@@ -94,7 +94,7 @@ describe('logging', () => {
       const lines = fileContent.trimEnd().split('\n')
       expect(lines).toHaveLength(2)
       expect(lines[0]).toMatch(
-        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO\s+llm-proxy - request completed method=GET path=\/health status=200 durationMs=3$/,
+        /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} INFO\s+llm-proxy - request completed method=GET path=\/health status=200 duration=0\.01s$/,
       )
       expect(lines[1]).toMatch(
         /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} WARN\s+llm-proxy - provider key selected provider=openrouter keyIndex=1 keyCount=3$/,

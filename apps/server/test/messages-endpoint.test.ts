@@ -23,7 +23,7 @@ const settings: Settings = {
 
 const stubRegistry: ProviderRegistry = {
   languageModel() {
-    return {} as never
+    return { model: {} as never }
   },
   debugProviderConfig() {
     return {} as never

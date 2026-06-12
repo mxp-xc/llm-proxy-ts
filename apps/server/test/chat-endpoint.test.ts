@@ -22,7 +22,7 @@ const settings: Settings = {
 
 const stubRegistry: ProviderRegistry = {
   languageModel() {
-    return {} as never
+    return { model: {} as never }
   },
   debugProviderConfig() {
     return {} as never
@@ -124,7 +124,7 @@ describe('chat endpoint', () => {
       providerRegistry: {
         languageModel(providerName, upstreamModel) {
           modelSelections.push(`${providerName}/${upstreamModel}`)
-          return { providerName, upstreamModel } as never
+          return { model: { providerName, upstreamModel } as never }
         },
         debugProviderConfig() {
           throw new Error('not used')

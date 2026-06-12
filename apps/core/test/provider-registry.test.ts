@@ -78,12 +78,12 @@ describe('provider registry', () => {
 
   it('creates openai-compatible language models and filters auth header overrides', async () => {
     const registry = await createProviderRegistry(settings, undefined, mockLogger)
-    const model = registry.languageModel('openrouter', 'openrouter/chat', {
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {
       AUTHORIZATION: 'Bearer also-wrong',
       'X-API-Key': 'also-wrong',
     })
 
-    expect(model).toBeTruthy()
+    expect(result.model).toBeTruthy()
     expect(registry.debugProviderConfig('openrouter')).toEqual({
       baseURL: 'https://openrouter.ai/api/v1',
       headers: { 'X-Test': 'yes' },
@@ -106,19 +106,18 @@ describe('provider registry', () => {
       mockLogger,
     )
 
-    registry.languageModel('openrouter', 'openrouter/chat', {})
-    registry.languageModel('openrouter', 'openrouter/chat', {})
-    registry.languageModel('openrouter', 'openrouter/chat', {})
+    const r1 = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const r2 = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const r3 = registry.languageModel('openrouter', 'openrouter/chat', {})
 
-    expect(capturedLogs).toEqual([
-      { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
-      { provider: 'openrouter', keyIndex: 1, keyCount: 2 },
-      { provider: 'openrouter', keyIndex: 0, keyCount: 2 },
-    ])
-    expect(JSON.stringify(capturedLogs)).not.toContain('secret')
+    expect(r1.keySelection).toEqual({ index: 0, count: 2 })
+    expect(r2.keySelection).toEqual({ index: 1, count: 2 })
+    expect(r3.keySelection).toEqual({ index: 0, count: 2 })
+    // registry should NOT emit separate key-selection logs
+    expect(capturedLogs).toEqual([])
   })
 
-  it('does not log short api keys', async () => {
+  it('does not log api keys', async () => {
     const registry = await createProviderRegistry(
       {
         ...settings,
@@ -133,17 +132,18 @@ describe('provider registry', () => {
       mockLogger,
     )
 
-    registry.languageModel('openrouter', 'openrouter/chat', {})
-    registry.languageModel('openrouter', 'openrouter/chat', {})
+    const r1 = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const r2 = registry.languageModel('openrouter', 'openrouter/chat', {})
 
+    expect(r1.keySelection).toEqual({ index: 0, count: 2 })
+    expect(r2.keySelection).toEqual({ index: 1, count: 2 })
+    // No logs should contain the actual key values
     const logs = JSON.stringify(capturedLogs)
-    expect(logs).toContain('"keyIndex":0')
-    expect(logs).toContain('"keyIndex":1')
     expect(logs).not.toContain('key-1')
     expect(logs).not.toContain('12345678')
   })
 
-  it('does not pass api keys for unkeyed providers', async () => {
+  it('does not return keySelection for unkeyed providers', async () => {
     const registry = await createProviderRegistry(
       {
         ...settings,
@@ -158,8 +158,7 @@ describe('provider registry', () => {
       mockLogger,
     )
 
-    registry.languageModel('openrouter', 'openrouter/chat', {})
-
-    expect(capturedLogs).toEqual([])
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    expect(result.keySelection).toBeUndefined()
   })
 })

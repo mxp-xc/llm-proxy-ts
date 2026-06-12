@@ -29,7 +29,7 @@ const orderedFieldKeys = [
   'method',
   'path',
   'status',
-  'durationMs',
+  'duration',
   'provider',
   'requestedModel',
   'actualModel',

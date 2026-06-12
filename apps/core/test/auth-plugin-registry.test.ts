@@ -121,11 +121,12 @@ describe('auth plugin integration with createProviderRegistry', () => {
     } as unknown as import('../src/plugins/registry.js').PluginRegistry
 
     const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry)
-    const model = registry.languageModel(
+    const result = registry.languageModel(
       'auth-provider',
       'upstream-model',
       {},
-    ) as unknown as Record<string, unknown>
+    )
+    const model = result.model as unknown as Record<string, unknown>
 
     // authFetch should be present, apiKey should not be passed
     expect(model.authFetch).toBe('present')
@@ -152,11 +153,12 @@ describe('auth plugin integration with createProviderRegistry', () => {
     }
 
     const registry = await createProviderRegistry(settings, undefined, noopLogger)
-    const model = registry.languageModel(
+    const result = registry.languageModel(
       'simple-provider',
       'upstream-model',
       {},
-    ) as unknown as Record<string, unknown>
+    )
+    const model = result.model as unknown as Record<string, unknown>
 
     expect(model.authFetch).toBe('absent')
     expect(model.selectedApiKey).toBe('my-api-key')
@@ -211,11 +213,12 @@ describe('auth plugin integration with createProviderRegistry', () => {
     } as unknown as import('../src/plugins/registry.js').PluginRegistry
 
     const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry)
-    const model = registry.languageModel(
+    const result = registry.languageModel(
       'auth-provider',
       'upstream-model',
       {},
-    ) as unknown as Record<string, unknown>
+    )
+    const model = result.model as unknown as Record<string, unknown>
 
     // No authFetch for 'auth-provider' since plugin targets 'other-provider'
     expect(model.authFetch).toBe('absent')

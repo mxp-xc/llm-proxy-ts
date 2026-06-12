@@ -62,6 +62,8 @@ type AppEnv = {
     requestedModel?: string
     actualModel?: string
     provider?: string
+    keyIndex?: number
+    keyCount?: number
   }
 }
 
@@ -93,25 +95,25 @@ export function createApp({
 
   app.use('*', async (c, next) => {
     const id = requestId()
-    const reqLogger = logger.child({ requestId: id })
     c.set('requestId', id)
-    c.set('logger', reqLogger)
+    c.set('logger', logger)
 
     const start = performance.now()
-    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request started')
-
     await next()
 
     const duration = performance.now() - start
-    reqLogger.info(
+    logger.info(
       {
+        requestId: id,
         method: c.req.method,
         path: c.req.path,
         status: c.res.status,
-        durationMs: Math.round(duration),
+        duration: `${(duration / 1000).toFixed(2)}s`,
         provider: c.get('provider'),
         requestedModel: c.get('requestedModel'),
         actualModel: c.get('actualModel'),
+        keyIndex: c.get('keyIndex'),
+        keyCount: c.get('keyCount'),
       },
       'request completed',
     )
@@ -191,7 +193,12 @@ export function createApp({
     const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      model = result.model
+      if (result.keySelection) {
+        c.set('keyIndex', result.keySelection.index)
+        c.set('keyCount', result.keySelection.count)
+      }
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
@@ -345,7 +352,12 @@ export function createApp({
     const callInput = mapAnthropicMessagesRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      model = result.model
+      if (result.keySelection) {
+        c.set('keyIndex', result.keySelection.index)
+        c.set('keyCount', result.keySelection.count)
+      }
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
@@ -499,7 +511,12 @@ export function createApp({
     const callInput = mapResponsesRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+      model = result.model
+      if (result.keySelection) {
+        c.set('keyIndex', result.keySelection.index)
+        c.set('keyCount', result.keySelection.count)
+      }
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(

@@ -114,8 +114,9 @@ describe('OAuth provider registry', () => {
     await tokenManager.load()
 
     const registry = await createProviderRegistry(settings, tokenManager)
-    registry.languageModel('oauth-provider', 'm', {})
+    const result = registry.languageModel('oauth-provider', 'm', {})
 
+    expect(result.model).toBeTruthy()
     expect(mocks.capturedOptions).toHaveLength(1)
     expect(mocks.capturedOptions[0]!.providerName).toBe('oauth-provider')
     expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
@@ -135,8 +136,9 @@ describe('OAuth provider registry', () => {
     })
 
     const registry = await createProviderRegistry(settings)
-    registry.languageModel('static-provider', 'm', {})
+    const result = registry.languageModel('static-provider', 'm', {})
 
+    expect(result.model).toBeTruthy()
     expect(mocks.capturedOptions).toHaveLength(1)
     expect(mocks.capturedOptions[0]!.selectedApiKey).toBe('static-key')
     expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(false)
@@ -172,8 +174,9 @@ describe('OAuth provider registry', () => {
     await tokenManager.load()
 
     const registry = await createProviderRegistry(settings, tokenManager)
-    registry.languageModel('both-provider', 'm', {})
+    const result = registry.languageModel('both-provider', 'm', {})
 
+    expect(result.model).toBeTruthy()
     expect(mocks.capturedOptions).toHaveLength(1)
     expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
     expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true)
@@ -209,7 +212,7 @@ describe('OAuth provider registry', () => {
     // But languageModel() itself doesn't call ensureValidToken — the fetch
     // function does at request time. So languageModel() succeeds here.
     const registry = await createProviderRegistry(settings, tokenManager)
-    const model = registry.languageModel('auth-code-provider', 'm', {})
-    expect(model).toBeTruthy()
+    const result = registry.languageModel('auth-code-provider', 'm', {})
+    expect(result.model).toBeTruthy()
   })
 })

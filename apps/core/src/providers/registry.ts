@@ -16,12 +16,22 @@ const noopLogger: Logger = {
   },
 }
 
+export interface KeySelection {
+  index: number
+  count: number
+}
+
+export interface LanguageModelResult {
+  model: LanguageModel
+  keySelection?: KeySelection
+}
+
 export interface ProviderRegistry {
   languageModel(
     providerName: string,
     upstreamModel: string,
     modelHeaders: Record<string, string>,
-  ): LanguageModel
+  ): LanguageModelResult
   debugProviderConfig(providerName: string): {
     baseURL: string
     headers: Record<string, string>
@@ -62,25 +72,24 @@ export async function createProviderRegistry(
       // Auth 插件路径：使用预构建的 fetch wrapper
       const authFetch = authFetchMap.get(providerName)
       if (authFetch) {
-        return factory(undefined, authFetch)(upstreamModel)
+        return { model: factory(undefined, authFetch)(upstreamModel) }
       }
 
       // OAuth 路径：使用动态 fetch 注入 token
       if (provider.oauth && tokenManager) {
         const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
-        return factory(undefined, oauthFetch)(upstreamModel)
+        return { model: factory(undefined, oauthFetch)(upstreamModel) }
       }
 
       // 静态 API Key 路径
       const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
-      if (selection) {
-        log.info(
-          { provider: providerName, keyIndex: selection.index, keyCount: selection.count },
-          'selected api key for provider',
-        )
+      const result: LanguageModelResult = {
+        model: factory(selection?.apiKey)(upstreamModel),
       }
-
-      return factory(selection?.apiKey)(upstreamModel)
+      if (selection) {
+        result.keySelection = { index: selection.index, count: selection.count }
+      }
+      return result
     },
     debugProviderConfig(providerName) {
       const provider = settings.providers[providerName]

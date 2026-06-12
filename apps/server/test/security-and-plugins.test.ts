@@ -10,7 +10,7 @@ import { inspectVendorSseError } from '@llm-proxy/core'
 
 const stubRegistry: ProviderRegistry = {
   languageModel() {
-    return {} as never
+    return { model: {} as never }
   },
   debugProviderConfig() {
     return {} as never
