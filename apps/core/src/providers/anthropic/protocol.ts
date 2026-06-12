@@ -158,10 +158,24 @@ export function mapAnthropicMessagesRequestToAISDKInput(
     }
   }
 
-  // Anthropic messages → AI SDK messages（仅 user/assistant）
+  // 构建 tool_use_id → tool name 的查找表（用于补全 tool_result 缺失的 toolName）
+  const toolUseIdToName = new Map<string, string>()
+  for (const msg of request.messages) {
+    if (typeof msg.content !== 'string') {
+      for (const block of msg.content) {
+        if (block.type === 'tool_use') {
+          toolUseIdToName.set(block.id, block.name)
+        }
+      }
+    }
+  }
+
+  // Anthropic messages → AI SDK messages（user/assistant/tool）
+  // Anthropic 协议中 tool_result 在 role:'user' 消息里，
+  // 但 AI SDK 要求 tool-result 在 role:'tool' 消息里，因此需要拆分。
   for (const msg of request.messages) {
     if (msg.role !== 'system') {
-      messages.push(mapMessage(msg))
+      messages.push(...mapMessage(msg, toolUseIdToName))
     }
   }
 
@@ -209,45 +223,67 @@ export function mapAnthropicMessagesRequestToAISDKInput(
 
 // ─── Internal Helpers ──────────────────────────────────────────
 
-function mapMessage(message: z.infer<typeof messageSchema>): Record<string, unknown> {
+function mapMessage(
+  message: z.infer<typeof messageSchema>,
+  toolUseIdToName: Map<string, string>,
+): Array<Record<string, unknown>> {
   if (typeof message.content === 'string') {
-    return { role: message.role, content: message.content }
+    return [{ role: message.role, content: message.content }]
   }
 
   // 处理 content block 数组
-  const content: Array<Record<string, unknown>> = []
+  const textParts: Array<Record<string, unknown>> = []
+  const toolResultParts: Array<Record<string, unknown>> = []
+  const toolCallParts: Array<Record<string, unknown>> = []
 
   for (const block of message.content) {
     if (block.type === 'text') {
-      content.push({ type: 'text', text: block.text })
+      textParts.push({ type: 'text', text: block.text })
     } else if (block.type === 'tool_use') {
-      content.push({
+      toolCallParts.push({
         type: 'tool-call',
         toolCallId: block.id,
         toolName: block.name,
         input: block.input,
       })
     } else if (block.type === 'tool_result') {
-      content.push({
+      toolResultParts.push({
         type: 'tool-result',
         toolCallId: block.tool_use_id,
-        toolName: block.tool_use_id,
-        output: mapToolResultOutput(block.content),
+        toolName: toolUseIdToName.get(block.tool_use_id) ?? block.tool_use_id,
+        output: mapToolResultOutput(block.content, block.is_error),
       })
     }
   }
 
-  return { role: message.role, content }
+  // AI SDK 要求 tool-result 必须在 role:'tool' 消息里。
+  // 当消息包含 tool_result 时，拆分为 role:'tool' + 原角色两条消息。
+  if (toolResultParts.length > 0) {
+    const result: Array<Record<string, unknown>> = []
+    // tool-result 部分放在 role:'tool' 消息里（排在前面）
+    result.push({ role: 'tool', content: toolResultParts })
+    // 非 tool-result 部分保留原角色（仅在有内容时）
+    const remainingParts = [...textParts, ...toolCallParts]
+    if (remainingParts.length > 0) {
+      result.push({ role: message.role, content: remainingParts })
+    }
+    return result
+  }
+
+  // 无 tool_result 的场景，合并所有部分
+  return [{ role: message.role, content: [...textParts, ...toolCallParts] }]
 }
 
 function mapToolResultOutput(
   content: string | Array<{ type: 'text'; text: string }> | undefined,
-): { type: 'text'; value: string } | { type: 'json'; value: unknown } {
-  if (content === undefined) return { type: 'text', value: '' }
-  if (typeof content === 'string') return { type: 'text', value: content }
+  isError?: boolean,
+): { type: 'text'; value: string } | { type: 'error-text'; value: string } | { type: 'json'; value: unknown } {
+  const outputType = isError ? 'error-text' : 'text'
+  if (content === undefined) return { type: outputType, value: '' }
+  if (typeof content === 'string') return { type: outputType, value: content }
   // 数组形式的 text blocks → 拼接文本
   const text = content.map((block) => block.text).join('')
-  return { type: 'text', value: text }
+  return { type: outputType, value: text }
 }
 
 function mapAnthropicTool(tool: z.infer<typeof anthropicToolSchema>): ToolSet[string] {

@@ -102,11 +102,17 @@ describe('Anthropic Messages protocol mapping', () => {
     })
   })
 
-  it('maps tool_result content blocks to AI SDK tool-result parts', () => {
+  it('maps tool_result content blocks to AI SDK tool-result parts in role:tool', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
       max_tokens: 1024,
       messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'NYC' } },
+          ],
+        },
         {
           role: 'user',
           content: [
@@ -120,24 +126,33 @@ describe('Anthropic Messages protocol mapping', () => {
       ],
     })
 
-    expect(input.messages[0]).toEqual({
-      role: 'user',
+    // Anthropic 的 tool_result 在 role:'user' 中，映射到 AI SDK 的 role:'tool'
+    // toolName 从同请求的 tool_use 块中查找得到
+    expect(input.messages).toHaveLength(2)
+    expect(input.messages[1]).toEqual({
+      role: 'tool',
       content: [
         {
           type: 'tool-result',
           toolCallId: 'toolu_1',
-          toolName: 'toolu_1',
+          toolName: 'get_weather',
           output: { type: 'text', value: 'Sunny, 72°F' },
         },
       ],
     })
   })
 
-  it('maps tool_result with array content', () => {
+  it('maps tool_result with array content to role:tool', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
       max_tokens: 1024,
       messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'test' } },
+          ],
+        },
         {
           role: 'user',
           content: [
@@ -151,9 +166,119 @@ describe('Anthropic Messages protocol mapping', () => {
       ],
     })
 
-    const content = input.messages[0] as Record<string, unknown>
-    const parts = content.content as Array<Record<string, unknown>>
+    // tool_result 在 user 消息中映射为 role:'tool'
+    expect(input.messages).toHaveLength(2)
+    expect(input.messages[1]!.role).toBe('tool')
+    const msg = input.messages[1]! as Record<string, unknown>
+    const parts = msg.content as Array<Record<string, unknown>>
     expect(parts[0]?.output).toEqual({ type: 'text', value: 'Part 1Part 2' })
+    expect(parts[0]?.toolName).toBe('search')
+  })
+
+  it('splits user message with mixed tool_result and text into tool + user messages', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'lookup', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_1', content: 'result data' },
+            { type: 'text', text: 'What does this mean?' },
+          ],
+        },
+      ],
+    })
+
+    // tool_result 部分映射为 role:'tool'，text 部分映射为 role:'user'
+    expect(input.messages).toHaveLength(3)
+    expect(input.messages[1]!.role).toBe('tool')
+    expect(input.messages[2]!.role).toBe('user')
+  })
+
+  it('does not emit user message when tool_result has no text blocks', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'query', input: {} },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_1', content: 'result only' },
+          ],
+        },
+      ],
+    })
+
+    // 纯 tool_result 的 user 消息只生成一条 role:'tool' 消息
+    expect(input.messages).toHaveLength(2)
+    expect(input.messages[1]!.role).toBe('tool')
+  })
+
+  it('maps is_error:true tool_result to error-text output type', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'NYC' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: 'Rate limit exceeded',
+              is_error: true,
+            },
+          ],
+        },
+      ],
+    })
+
+    const toolMsg = input.messages[1]! as Record<string, unknown>
+    const parts = toolMsg.content as Array<Record<string, unknown>>
+    expect(parts[0]?.output).toEqual({ type: 'error-text', value: 'Rate limit exceeded' })
+  })
+
+  it('falls back to tool_use_id as toolName when no matching tool_use block exists', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_orphan',
+              content: 'orphan result',
+            },
+          ],
+        },
+      ],
+    })
+
+    const toolMsg = input.messages[0]! as Record<string, unknown>
+    const parts = toolMsg.content as Array<Record<string, unknown>>
+    // 无对应 tool_use 块时，回退到 tool_use_id
+    expect(parts[0]?.toolName).toBe('toolu_orphan')
   })
 
   it('maps Anthropic tools to AI SDK ToolSet', () => {
