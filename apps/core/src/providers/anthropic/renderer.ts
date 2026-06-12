@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { FinishReason, RenderResultInput } from '../protocol-types.js'
+import { toErrorMessage, type FinishReason, type RenderResultInput } from '../protocol-types.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -226,6 +226,22 @@ export async function* renderAnthropicMessageSSE(input: {
             error: { type: 'api_error', message: JSON.stringify(part.body) },
           }),
         )
+        yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+        return
+      } else if (part.type === 'error') {
+        if (!messageStarted) yield emitMessageStart()
+        const stopChunk = emitBlockStop()
+        if (stopChunk) yield stopChunk
+        yield encoder.encode(
+          anthropicSSE('error', {
+            type: 'error',
+            error: {
+              type: 'api_error',
+              message: toErrorMessage(part.error),
+            },
+          }),
+        )
+        yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
         return
       }
     }
@@ -246,13 +262,14 @@ export async function* renderAnthropicMessageSSE(input: {
     if (!messageStarted) yield emitMessageStart()
     const stopChunk = emitBlockStop()
     if (stopChunk) yield stopChunk
-    const message = error instanceof Error ? error.message : String(error)
+    const message = toErrorMessage(error)
     yield encoder.encode(
       anthropicSSE('error', {
         type: 'error',
         error: { type: 'api_error', message },
       }),
     )
+    yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
   }
 }
 

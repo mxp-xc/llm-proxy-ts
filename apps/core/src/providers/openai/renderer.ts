@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { toErrorMessage } from '../protocol-types.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 
 export type { FinishReason, RenderResultInput } from '../protocol-types.js'
@@ -190,6 +191,19 @@ export async function* renderOpenAIChatCompletionSSE(input: {
       )
     } else if (part.type === 'openai-error') {
       yield encoder.encode(sse(part.body))
+      yield encoder.encode('data: [DONE]\n\n')
+      return
+    } else if (part.type === 'error') {
+      yield encoder.encode(
+        sse({
+          error: {
+            type: 'upstream_error',
+            code: 'stream_internal_error',
+            message: toErrorMessage(part.error),
+          },
+        }),
+      )
+      yield encoder.encode('data: [DONE]\n\n')
       return
     }
   }

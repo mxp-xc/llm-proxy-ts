@@ -19,3 +19,16 @@ export interface RenderResultInput {
   response?: { id?: string; timestamp?: Date }
   toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
 }
+
+/**
+ * 将任意错误值安全转换为人类可读的错误消息。
+ *
+ * 比 `String(err)` 更健壮——普通对象不会产生 `[object Object]`。
+ * 供 renderer 及其他需要显示错误信息的模块共用。
+ */
+export function toErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err === null || err === undefined) return 'Unknown error'
+  try { return JSON.stringify(err) } catch { return String(err) }
+}
