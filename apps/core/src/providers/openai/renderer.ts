@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { toErrorMessage } from '../protocol-types.js'
+import { toErrorMessage, isRecord } from '../protocol-types.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 
 export type { FinishReason, RenderResultInput } from '../protocol-types.js'
@@ -223,9 +223,6 @@ function mapFinishReason(reason?: FinishReason | unknown, toolCalls?: unknown[])
   return null
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object'
-}
 
 function toolIndex(indexes: Map<string, number>, toolCallId: string): number {
   const existing = indexes.get(toolCallId)

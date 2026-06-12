@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { toErrorMessage, type FinishReason, type RenderResultInput } from '../protocol-types.js'
+import { toErrorMessage, isRecord, type FinishReason, type RenderResultInput } from '../protocol-types.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -291,9 +291,6 @@ function mapStopReason(
   return 'end_turn'
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object'
-}
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined

@@ -131,6 +131,26 @@ export {
   renderAnthropicMessageSSE,
 } from './providers/anthropic/renderer.js'
 
+// Protocol exports — OpenAI Responses API
+export {
+  validateOpenAIResponsesRequest,
+  openAIResponsesRequestSchema,
+  mapResponsesRequestToAISDKInput,
+} from './providers/openai/responses-protocol.js'
+export type { OpenAIResponsesRequest } from './providers/openai/responses-protocol.js'
+export {
+  renderOpenAIResponse,
+  renderOpenAIResponseSSE,
+} from './providers/openai/responses-renderer.js'
+export type {
+  OpenAIResponse,
+  ResponseOutputItem,
+  ResponseOutputMessage,
+  ResponseFunctionToolCall,
+  ResponseOutputText,
+  ResponseUsage,
+} from './providers/openai/responses-renderer.js'
+
 // Routing exports
 export { RoutingTable, RoutingError } from './routing.js'
 export type { RouteMatch } from './routing.js'

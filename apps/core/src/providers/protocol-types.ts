@@ -32,3 +32,11 @@ export function toErrorMessage(err: unknown): string {
   if (err === null || err === undefined) return 'Unknown error'
   try { return JSON.stringify(err) } catch { return String(err) }
 }
+
+/**
+ * Type guard: checks if a value is a non-null object (not an array check needed for this use case).
+ * Shared across all renderers.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object'
+}

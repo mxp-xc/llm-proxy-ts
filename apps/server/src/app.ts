@@ -15,6 +15,10 @@ import {
   listModels,
   RoutingError,
   RoutingTable,
+  mapResponsesRequestToAISDKInput,
+  validateOpenAIResponsesRequest,
+  renderOpenAIResponse,
+  renderOpenAIResponseSSE,
 } from '@llm-proxy/core'
 import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse } from '@llm-proxy/core'
 import pino from 'pino'
@@ -456,6 +460,154 @@ export function createApp({
         return anthropicTimeoutResponse()
       }
       return anthropicErrorResponse()
+    }
+  })
+
+  // ─── OpenAI Responses API ───────────────────────────────────
+
+  app.post('/v1/responses', async (c) => {
+    let request
+    try {
+      request = validateOpenAIResponsesRequest(await c.req.json())
+    } catch {
+      return c.json(
+        {
+          error: {
+            type: 'invalid_request_error',
+            code: 'invalid_request',
+            message: 'Invalid OpenAI Responses request',
+          },
+        },
+        400,
+      )
+    }
+
+    let route
+    try {
+      route = routingTable.resolve(request.model)
+    } catch (error) {
+      if (error instanceof RoutingError) {
+        return c.json(error.toResponse(), error.status as 404)
+      }
+      throw error
+    }
+
+    c.set('provider', route.providerName)
+    c.set('requestedModel', request.model)
+    c.set('actualModel', route.upstreamModel)
+
+    const callInput = mapResponsesRequestToAISDKInput(request, route.providerName)
+    let model
+    try {
+      model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+    } catch (error) {
+      if (error instanceof OAuthError && error.code === 'auth_required') {
+        return c.json(
+          {
+            error: {
+              type: 'auth_required',
+              code: 'oauth_login_needed',
+              message: error.message,
+              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+            },
+          },
+          503,
+        )
+      }
+      throw error
+    }
+    const abortController = new AbortController()
+
+    if (request.stream) {
+      try {
+        const stream = gateway.stream({
+          model,
+          callInput,
+          requestModel: request.model,
+          abortSignal: abortController.signal,
+        })
+        const inspection = await withRequestTimeout(
+          inspectFirstStreamChunk(route.resolvedPlugins, stream),
+          settings.requestTimeoutMs,
+          abortController,
+        )
+        if (inspection.error) {
+          return c.json(inspection.error.body, inspection.error.status as 429)
+        }
+        const reqLogger = c.get('logger')
+        return new Response(
+          readableStreamFromAsyncIterable(
+            renderOpenAIResponseSSE({ model: request.model, stream: inspection.stream }),
+            (error) => {
+              reqLogger.error({ err: error }, 'stream consumption failed')
+            },
+          ),
+          {
+            headers: { 'content-type': 'text/event-stream' },
+          },
+        )
+      } catch (error) {
+        c.get('logger').error({ err: error }, 'stream request failed')
+        if (error instanceof OAuthError && error.code === 'auth_required') {
+          return c.json(
+            {
+              error: {
+                type: 'auth_required',
+                code: 'oauth_login_needed',
+                message: error.message,
+                loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+              },
+            },
+            503,
+          )
+        }
+        if (error instanceof RequestTimeoutError) {
+          return upstreamTimeoutResponse()
+        }
+        return upstreamErrorResponse()
+      }
+    }
+
+    try {
+      const result = await withRequestTimeout(
+        gateway.generate({
+          model,
+          callInput,
+          requestModel: request.model,
+          abortSignal: abortController.signal,
+        }),
+        settings.requestTimeoutMs,
+        abortController,
+      )
+      return c.json(
+        renderOpenAIResponse({
+          model: request.model,
+          text: result.text,
+          finishReason: result.finishReason,
+          usage: result.usage,
+          response: result.response,
+          toolCalls: result.toolCalls,
+        }),
+      )
+    } catch (error) {
+      c.get('logger').error({ err: error }, 'generation request failed')
+      if (error instanceof OAuthError && error.code === 'auth_required') {
+        return c.json(
+          {
+            error: {
+              type: 'auth_required',
+              code: 'oauth_login_needed',
+              message: error.message,
+              loginUrl: `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`,
+            },
+          },
+          503,
+        )
+      }
+      if (error instanceof RequestTimeoutError) {
+        return upstreamTimeoutResponse()
+      }
+      return upstreamErrorResponse()
     }
   })
 
