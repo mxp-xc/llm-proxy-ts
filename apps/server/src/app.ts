@@ -1,5 +1,6 @@
 import { generateText, streamText } from 'ai'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import type { Settings, TokenManager, AuthStatus } from '@llm-proxy/core'
 import {
   OAuthError,
@@ -20,7 +21,7 @@ import {
   renderOpenAIResponse,
   renderOpenAIResponseSSE,
 } from '@llm-proxy/core'
-import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse } from '@llm-proxy/core'
+import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection } from '@llm-proxy/core'
 import pino from 'pino'
 import { logger as defaultLogger, requestId } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
@@ -62,8 +63,7 @@ type AppEnv = {
     requestedModel?: string
     actualModel?: string
     provider?: string
-    keyIndex?: number
-    keyCount?: number
+    keySelection?: KeySelection
   }
 }
 
@@ -87,6 +87,19 @@ export function createApp({
   }
   const resolvedRegistry = providerRegistry
 
+  function resolveModel(
+    providerName: string,
+    upstreamModel: string,
+    headers: Record<string, string>,
+    c: Context<AppEnv>,
+  ) {
+    const result = resolvedRegistry.languageModel(providerName, upstreamModel, headers)
+    if (result.keySelection) {
+      c.set('keySelection', result.keySelection)
+    }
+    return result.model
+  }
+
   // 挂载 OAuth 回调路由
   if (tokenManager && nonce) {
     const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce })
@@ -96,24 +109,25 @@ export function createApp({
   app.use('*', async (c, next) => {
     const id = requestId()
     c.set('requestId', id)
-    c.set('logger', logger)
+    const reqLogger = logger.child({ requestId: id })
+    c.set('logger', reqLogger)
+
+    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request started')
 
     const start = performance.now()
     await next()
 
     const duration = performance.now() - start
-    logger.info(
+    reqLogger.info(
       {
-        requestId: id,
         method: c.req.method,
         path: c.req.path,
         status: c.res.status,
-        duration: `${(duration / 1000).toFixed(2)}s`,
+        durationMs: Math.round(duration),
         provider: c.get('provider'),
         requestedModel: c.get('requestedModel'),
         actualModel: c.get('actualModel'),
-        keyIndex: c.get('keyIndex'),
-        keyCount: c.get('keyCount'),
+        keySelection: c.get('keySelection'),
       },
       'request completed',
     )
@@ -193,12 +207,7 @@ export function createApp({
     const callInput = mapOpenAIChatRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
-      model = result.model
-      if (result.keySelection) {
-        c.set('keyIndex', result.keySelection.index)
-        c.set('keyCount', result.keySelection.count)
-      }
+      model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
@@ -352,12 +361,7 @@ export function createApp({
     const callInput = mapAnthropicMessagesRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
-      model = result.model
-      if (result.keySelection) {
-        c.set('keyIndex', result.keySelection.index)
-        c.set('keyCount', result.keySelection.count)
-      }
+      model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(
@@ -511,12 +515,7 @@ export function createApp({
     const callInput = mapResponsesRequestToAISDKInput(request, route.providerName)
     let model
     try {
-      const result = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
-      model = result.model
-      if (result.keySelection) {
-        c.set('keyIndex', result.keySelection.index)
-        c.set('keyCount', result.keySelection.count)
-      }
+      model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
         return c.json(

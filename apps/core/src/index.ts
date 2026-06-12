@@ -157,4 +157,4 @@ export type { RouteMatch } from './routing.js'
 
 // Provider registry exports
 export { createProviderRegistry, createOAuthFetch } from './providers/registry.js'
-export type { ProviderRegistry } from './providers/registry.js'
+export type { ProviderRegistry, KeySelection, LanguageModelResult } from './providers/registry.js'
