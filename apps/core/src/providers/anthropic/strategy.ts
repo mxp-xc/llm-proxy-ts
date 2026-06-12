@@ -6,6 +6,7 @@ import type { AnthropicMessagesRequest } from './protocol.js'
 
 export const anthropicStrategy: ProtocolStrategy<AnthropicMessagesRequest> = {
   validate: validateAnthropicMessagesRequest,
+  validationMessage: 'Invalid Anthropic Messages request',
   getModel: (req) => req.model,
   isStream: (req) => req.stream ?? false,
   mapToAISDKInput: mapAnthropicMessagesRequestToAISDKInput,

@@ -6,6 +6,7 @@ import type { OpenAIChatRequest } from './protocol.js'
 
 export const openaiCompatibleStrategy: ProtocolStrategy<OpenAIChatRequest> = {
   validate: validateOpenAIChatRequest,
+  validationMessage: 'Invalid OpenAI chat completion request',
   getModel: (req) => req.model,
   isStream: (req) => req.stream ?? false,
   mapToAISDKInput: mapOpenAIChatRequestToAISDKInput,

@@ -9,6 +9,8 @@ import type { ProtocolErrorFormatter } from './error-format.js'
 export interface ProtocolStrategy<TRequest = unknown> {
   /** 验证请求体，无效时抛出 Zod 错误 */
   validate(body: unknown): TRequest
+  /** 验证失败时的错误消息（用于 formatErrors.validation） */
+  validationMessage?: string
   /** 从已验证的请求中提取模型名（用于路由） */
   getModel(request: TRequest): string
   /** 判断请求是否要求流式响应 */

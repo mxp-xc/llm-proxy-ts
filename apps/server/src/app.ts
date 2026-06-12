@@ -12,7 +12,7 @@ import {
   openaiResponsesStrategy,
   anthropicStrategy,
 } from '@llm-proxy/core'
-import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection, ProtocolStrategy } from '@llm-proxy/core'
+import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection, ProtocolStrategy, ProtocolErrorFormatter } from '@llm-proxy/core'
 import pino from 'pino'
 import { logger as defaultLogger, requestId } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
@@ -177,14 +177,15 @@ export function createApp({
     try {
       request = strategy.validate(await c.req.json())
     } catch {
-      const { body, status } = formatErrors.validation()
+      const { body, status } = formatErrors.validation(strategy.validationMessage)
       return c.json(body, status as 400)
     }
 
     // 2. Resolve route
+    const requestModel = strategy.getModel(request)
     let route
     try {
-      route = routingTable.resolve(strategy.getModel(request))
+      route = routingTable.resolve(requestModel)
     } catch (error) {
       if (error instanceof RoutingError) {
         const { body, status } = formatErrors.routing(error)
@@ -194,19 +195,19 @@ export function createApp({
     }
 
     c.set('provider', route.providerName)
-    c.set('requestedModel', strategy.getModel(request))
+    c.set('requestedModel', requestModel)
     c.set('actualModel', route.upstreamModel)
 
     // 3. Map to AI SDK input
     const callInput = strategy.mapToAISDKInput(request, route.providerName)
 
     // 4. Get LanguageModel
+    const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
     let model
     try {
       model = resolveModel(route.providerName, route.upstreamModel, route.headers, c)
     } catch (error) {
       if (error instanceof OAuthError && error.code === 'auth_required') {
-        const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
         const { body, status } = formatErrors.oauth(error.message, loginUrl)
         return c.json(body, status as 503)
       }
@@ -220,7 +221,7 @@ export function createApp({
         const stream = gateway.stream({
           model,
           callInput,
-          requestModel: strategy.getModel(request),
+          requestModel,
           abortSignal: abortController.signal,
         })
         const inspection = await withRequestTimeout(
@@ -238,7 +239,7 @@ export function createApp({
         const reqLogger = c.get('logger')
         return new Response(
           readableStreamFromAsyncIterable(
-            strategy.renderStreamSSE({ model: strategy.getModel(request), stream: inspection.stream }),
+            strategy.renderStreamSSE({ model: requestModel, stream: inspection.stream }),
             (error) => {
               reqLogger.error({ err: error }, 'stream consumption failed')
             },
@@ -248,18 +249,7 @@ export function createApp({
           },
         )
       } catch (error) {
-        c.get('logger').error({ err: error }, 'stream request failed')
-        if (error instanceof OAuthError && error.code === 'auth_required') {
-          const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
-          const { body, status } = formatErrors.oauth(error.message, loginUrl)
-          return c.json(body, status as 503)
-        }
-        if (error instanceof RequestTimeoutError) {
-          const { body, status } = formatErrors.timeout()
-          return c.json(body, status as 504)
-        }
-        const { body, status } = formatErrors.upstream()
-        return c.json(body, status as 502)
+        return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream request failed')
       }
     }
 
@@ -268,7 +258,7 @@ export function createApp({
         gateway.generate({
           model,
           callInput,
-          requestModel: strategy.getModel(request),
+          requestModel,
           abortSignal: abortController.signal,
         }),
         settings.requestTimeoutMs,
@@ -276,7 +266,7 @@ export function createApp({
       )
       return c.json(
         strategy.renderResult({
-          model: strategy.getModel(request),
+          model: requestModel,
           text: result.text,
           finishReason: result.finishReason,
           usage: result.usage,
@@ -285,19 +275,28 @@ export function createApp({
         }),
       )
     } catch (error) {
-      c.get('logger').error({ err: error }, 'generation request failed')
-      if (error instanceof OAuthError && error.code === 'auth_required') {
-        const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`
-        const { body, status } = formatErrors.oauth(error.message, loginUrl)
-        return c.json(body, status as 503)
-      }
-      if (error instanceof RequestTimeoutError) {
-        const { body, status } = formatErrors.timeout()
-        return c.json(body, status as 504)
-      }
-      const { body, status } = formatErrors.upstream()
-      return c.json(body, status as 502)
+      return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
     }
+  }
+
+  function handleUpstreamError(
+    c: import('hono').Context<AppEnv>,
+    error: unknown,
+    formatErrors: ProtocolErrorFormatter,
+    loginUrl: string,
+    logMessage: string,
+  ): Response {
+    c.get('logger').error({ err: error }, logMessage)
+    if (error instanceof OAuthError && error.code === 'auth_required') {
+      const { body, status } = formatErrors.oauth(error.message, loginUrl)
+      return c.json(body, status as 503)
+    }
+    if (error instanceof RequestTimeoutError) {
+      const { body, status } = formatErrors.timeout()
+      return c.json(body, status as 504)
+    }
+    const { body, status } = formatErrors.upstream()
+    return c.json(body, status as 502)
   }
 
   app.post('/v1/chat/completions', (c) =>

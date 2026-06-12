@@ -5,8 +5,8 @@ import type { RoutingError } from '../../routing.js'
  * OpenAI 兼容协议和 Anthropic 协议的错误格式不同。
  */
 export interface ProtocolErrorFormatter {
-  /** 请求验证失败 */
-  validation(): { body: unknown; status: number }
+  /** 请求验证失败 — 可传入协议特定的消息文本 */
+  validation(message?: string): { body: unknown; status: number }
   /** 模型路由失败（模型不存在） */
   routing(error: RoutingError): { body: unknown; status: number }
   /** OAuth 认证失败（需要登录） */
@@ -24,13 +24,13 @@ export interface ProtocolErrorFormatter {
  * openai-compatible 和 openai-responses 共用同一风格。
  */
 export const openAIErrorFormat: ProtocolErrorFormatter = {
-  validation() {
+  validation(message?: string) {
     return {
       body: {
         error: {
           type: 'invalid_request_error',
           code: 'invalid_request',
-          message: 'Invalid request',
+          message: message ?? 'Invalid request',
         },
       },
       status: 400,
@@ -90,11 +90,11 @@ export const openAIErrorFormat: ProtocolErrorFormatter = {
  * Anthropic 风格错误格式化器。
  */
 export const anthropicErrorFormat: ProtocolErrorFormatter = {
-  validation() {
+  validation(message?: string) {
     return {
       body: {
         type: 'error',
-        error: { type: 'invalid_request_error', message: 'Invalid request' },
+        error: { type: 'invalid_request_error', message: message ?? 'Invalid request' },
       },
       status: 400,
     }

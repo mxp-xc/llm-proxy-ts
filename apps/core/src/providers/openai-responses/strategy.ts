@@ -6,6 +6,7 @@ import type { OpenAIResponsesRequest } from './protocol.js'
 
 export const openaiResponsesStrategy: ProtocolStrategy<OpenAIResponsesRequest> = {
   validate: validateOpenAIResponsesRequest,
+  validationMessage: 'Invalid OpenAI Responses request',
   getModel: (req) => req.model,
   isStream: (req) => req.stream ?? false,
   mapToAISDKInput: mapResponsesRequestToAISDKInput,

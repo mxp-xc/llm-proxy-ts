@@ -4,9 +4,6 @@ import { stringValue, toolCallIdValue } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type { OpenAIChatCompletion } from './types.js'
 
-export type { FinishReason, RenderResultInput } from '../protocol-types.js'
-export type { OpenAIChatCompletion } from './types.js'
-
 export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChatCompletion {
   const message: OpenAIChatCompletion['choices'][number]['message'] = {
     role: 'assistant',

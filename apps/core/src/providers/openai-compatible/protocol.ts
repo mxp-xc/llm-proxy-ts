@@ -92,6 +92,7 @@ const mappedRequestKeys = new Set([
   'stop',
   'tools',
   'tool_choice',
+  'parallel_tool_calls',
 ])
 
 export function validateOpenAIChatRequest(value: unknown): OpenAIChatRequest {
@@ -124,6 +125,8 @@ export function mapOpenAIChatRequestToAISDKInput(
   }
   if (providerName) {
     const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
+    // parallel_tool_calls: AI SDK openai-compatible 不原生支持，通过 providerOptions 透传
+    if (request.parallel_tool_calls !== undefined) providerOptions.parallel_tool_calls = request.parallel_tool_calls
     if (Object.keys(providerOptions).length > 0) {
       input.providerOptions = { [providerName]: providerOptions }
     }
