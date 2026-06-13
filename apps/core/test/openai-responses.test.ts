@@ -190,6 +190,13 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.providerOptions).toEqual({ openai: { custom_param: 'value' } })
   })
 
+  it('maps parallel_tool_calls to providerOptions.openai.parallelToolCalls', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o', input: 'hi', parallel_tool_calls: false,
+    })
+    expect(result.providerOptions).toEqual({ openai: { parallelToolCalls: false } })
+  })
+
   it('omits providerOptions when no unknown fields', () => {
     const result = mapResponsesRequestToAISDKInput({ model: 'gpt-4o', input: 'hi' })
     expect(result.providerOptions).toBeUndefined()

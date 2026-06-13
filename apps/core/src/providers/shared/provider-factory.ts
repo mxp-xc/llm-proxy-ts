@@ -35,23 +35,40 @@ export function createOpenAICompatibleProvider(
     includeUsage: provider.includeUsage ?? true,
   }
 
-  // 有 apiKey 就设，让 AI SDK 注入认证头
-  // 如果调用方同时提供 customFetch 且该 fetch 自己管理认证（如 OAuth），
-  // 调用方应传 selectedApiKey=undefined 以避免双重认证头
+  applyProviderAuth(options, selectedApiKey, customFetch, settings.proxy)
+
+  return createOpenAICompatible(options)
+}
+
+/**
+ * Apply provider authentication and fetch composition to SDK provider options.
+ * Centralizes the pattern shared by openai, anthropic, and openai-compatible providers:
+ * 1. Set apiKey if provided
+ * 2. Set oauth-placeholder if customFetch is present but no apiKey (bypasses loadApiKey)
+ * 3. Compose customFetch with proxy fetch if applicable
+ */
+export function applyProviderAuth(
+  options: { apiKey?: string; fetch?: typeof fetch },
+  selectedApiKey: string | undefined,
+  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+  proxySettings: { url: string; verify: boolean } | null,
+): void {
   if (selectedApiKey !== undefined) {
     options.apiKey = selectedApiKey
   }
 
-  // fetch 组合：customFetch → proxy fetch → global fetch
-  if (customFetch) {
-    options.fetch = settings.proxy
-      ? customFetch(createProxyFetch(settings.proxy.url, settings.proxy.verify))
-      : customFetch()
-  } else if (settings.proxy) {
-    options.fetch = createProxyFetch(settings.proxy.url, settings.proxy.verify)
+  // OAuth/auth-plugin 路径下，customFetch 管理认证，占位 apiKey 仅绕过 loadApiKey()
+  if (selectedApiKey === undefined && customFetch) {
+    options.apiKey = 'oauth-placeholder'
   }
 
-  return createOpenAICompatible(options)
+  if (customFetch) {
+    options.fetch = proxySettings
+      ? customFetch(createProxyFetch(proxySettings.url, proxySettings.verify))
+      : customFetch()
+  } else if (proxySettings) {
+    options.fetch = createProxyFetch(proxySettings.url, proxySettings.verify)
+  }
 }
 
 export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {

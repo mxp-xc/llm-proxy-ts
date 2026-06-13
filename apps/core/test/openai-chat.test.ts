@@ -224,6 +224,9 @@ describe('OpenAI chat protocol mapping', () => {
         reasoning: { effort: 'high' },
         extra_body: { include_reasoning: true },
       },
+      openai: {
+        parallelToolCalls: false,
+      },
     })
   })
 

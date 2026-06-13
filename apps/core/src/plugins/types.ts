@@ -96,7 +96,12 @@ export interface ProxyPlugin extends Plugin {
 
 /** 认证 + models 能力：自定义 fetch wrapper、模型发现 */
 export interface AuthPlugin extends Plugin {
-  /** 为指定 provider 创建认证 fetch wrapper。per-provider 调用一次。 */
+  /** 为指定 provider 创建认证 fetch wrapper。per-provider 调用一次。
+   *
+   * 注意：如果插件的 fetch wrapper 设置了 Authorization 或 x-api-key 头，
+   * 请确保对应 provider 的 apiKey 未配置，否则会同时发送两套认证信息。
+   * OAuth 路径自动传 apiKey=undefined 以避免此冲突。
+   */
   createFetch(ctx: ProviderContext): Promise<(baseFetch?: typeof fetch) => typeof fetch>
   /** 自定义获取上游模型列表 */
   discoverModels?(ctx: ProviderContext): Promise<DiscoveredModelList>

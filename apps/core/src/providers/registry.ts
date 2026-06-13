@@ -134,6 +134,11 @@ export function createOAuthFetch(
   return (baseFetch) => async (input, init) => {
     const token = await tokenManager.ensureValidToken(providerName, oauthConfig)
     const headers = new Headers(init?.headers)
+    // 清理 SDK 注入的占位/过期认证头，防止 oauth-placeholder 泄漏到上游
+    // @ai-sdk/openai 注入 Authorization: Bearer oauth-placeholder
+    // @ai-sdk/anthropic 注入 x-api-key: oauth-placeholder
+    headers.delete('Authorization')
+    headers.delete('x-api-key')
     headers.set('Authorization', `${token.tokenType} ${token.accessToken}`)
     const fetchFn = baseFetch ?? globalThis.fetch
     return fetchFn(input, { ...init, headers })

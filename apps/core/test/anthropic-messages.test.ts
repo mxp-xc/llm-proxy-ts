@@ -393,6 +393,21 @@ describe('Anthropic Messages protocol mapping', () => {
     expect(input.providerOptions).toBeUndefined()
   })
 
+  it('maps thinking-only to providerOptions.anthropic without other fields', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: 'think' }],
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+    })
+
+    expect(input.providerOptions).toEqual({
+      anthropic: {
+        thinking: { type: 'enabled', budget_tokens: 10000 },
+      },
+    })
+  })
+
   it('maps string content messages directly', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',

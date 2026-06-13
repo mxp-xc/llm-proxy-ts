@@ -132,6 +132,22 @@ export function mapOpenAIChatRequestToAISDKInput(
     input.providerOptions = { openaiCompatible: providerOptions }
   }
 
+  // 同时设置 providerOptions.openai 以支持跨路由兼容：
+  // 当 /v1/chat/completions 请求路由到 openai-type provider 时，
+  // @ai-sdk/openai 读 providerOptions.openai（而非 openaiCompatible）。
+  // 仅包含显式映射的 camelCase 字段，因为 @ai-sdk/openai 会 schema 校验并剥离未知 key。
+  const openaiOptions: Record<string, unknown> = {}
+  if (request.parallel_tool_calls !== undefined) {
+    openaiOptions.parallelToolCalls = request.parallel_tool_calls
+  }
+  if (Object.keys(openaiOptions).length > 0) {
+    if (input.providerOptions) {
+      input.providerOptions.openai = openaiOptions
+    } else {
+      input.providerOptions = { openai: openaiOptions }
+    }
+  }
+
   return input
 }
 

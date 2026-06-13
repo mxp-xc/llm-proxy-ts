@@ -199,6 +199,11 @@ export function mapResponsesRequestToAISDKInput(
   // @ai-sdk/openai 始终读此 key，passthrough 正常工作；
   // 其他 provider（如 @ai-sdk/openai-compatible）不认识此 key，自动忽略 → 不泄漏
   const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedResponsesRequestKeys)
+  // parallel_tool_calls 在 mappedResponsesRequestKeys 中被排除（不走 passthrough），
+  // 但 @ai-sdk/openai 期望 providerOptions.openai.parallelToolCalls（camelCase）
+  if (request.parallel_tool_calls !== undefined) {
+    providerOptions.parallelToolCalls = request.parallel_tool_calls
+  }
   if (Object.keys(providerOptions).length > 0) {
     input.providerOptions = { openai: providerOptions }
   }
