@@ -69,15 +69,23 @@ export async function createProviderRegistry(
 
       const factory = createProviderModelFactory(providerName, provider, settings, modelHeaders)
 
-      // Auth 插件路径：使用预构建的 fetch wrapper
+      // Auth 插件路径：使用预构建的 fetch wrapper，但保留内置 API Key 注入
       const authFetch = authFetchMap.get(providerName)
       if (authFetch) {
-        return { model: factory(undefined, authFetch)(upstreamModel) }
+        const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
+        const result: LanguageModelResult = {
+          model: factory(selection?.apiKey, authFetch)(upstreamModel),
+        }
+        if (selection) {
+          result.keySelection = { index: selection.index, count: selection.count }
+        }
+        return result
       }
 
       // OAuth 路径：使用动态 fetch 注入 token
       if (provider.oauth && tokenManager) {
         const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
+        // OAuth fetch 自己注入 Authorization 头，apiKey 传 undefined 避免双重认证
         return { model: factory(undefined, oauthFetch)(upstreamModel) }
       }
 
@@ -140,27 +148,27 @@ function createProviderModelFactory(
   modelHeaders: Record<string, string>,
 ): (
   selectedApiKey?: string,
-  oauthFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) => (upstreamModel: string) => LanguageModel {
   if (provider.type === 'anthropic') {
-    return (selectedApiKey, oauthFetch) =>
+    return (selectedApiKey, customFetch) =>
       createAnthropicProvider(
         providerName,
         provider,
         settings,
         modelHeaders,
         selectedApiKey,
-        oauthFetch,
+        customFetch,
       )
   }
-  return (selectedApiKey, oauthFetch) =>
+  return (selectedApiKey, customFetch) =>
     createOpenAICompatibleProvider(
       providerName,
       provider,
       settings,
       modelHeaders,
       selectedApiKey,
-      oauthFetch,
+      customFetch,
     )
 }
 

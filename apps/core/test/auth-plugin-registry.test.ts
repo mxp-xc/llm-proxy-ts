@@ -48,13 +48,13 @@ vi.mock('../src/providers/shared/provider-factory.js', async (importOriginal) =>
       settings: unknown,
       modelHeaders: unknown,
       selectedApiKey: string | undefined,
-      authFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+      customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
     ) {
       return (upstreamModel: string) => ({
         upstreamModel,
         providerName,
         selectedApiKey,
-        authFetch: authFetch ? 'present' : 'absent',
+        customFetch: customFetch ? 'present' : 'absent',
       })
     },
     sanitizeHeaders(headers: Record<string, string>) {
@@ -64,7 +64,7 @@ vi.mock('../src/providers/shared/provider-factory.js', async (importOriginal) =>
 })
 
 describe('auth plugin integration with createProviderRegistry', () => {
-  it('Provider with auth plugin should use authFetch (not apiKey)', async () => {
+  it('Provider with auth plugin should use both authFetch and apiKey', async () => {
     const { plugin: mockPlugin } = createMockAuthPlugin()
 
     const settings: Settings = {
@@ -83,7 +83,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
         'auth-provider': {
           type: 'openai-compatible',
           baseURL: 'https://api.example.com/v1',
-          apiKey: 'should-not-be-used',
+          apiKey: 'test-api-key',
           headers: {},
           plugins: [],
           models: {},
@@ -128,9 +128,9 @@ describe('auth plugin integration with createProviderRegistry', () => {
     )
     const model = result.model as unknown as Record<string, unknown>
 
-    // authFetch should be present, apiKey should not be passed
-    expect(model.authFetch).toBe('present')
-    expect(model.selectedApiKey).toBeUndefined()
+    // authFetch should be present; apiKey should still be passed (plugin only extends fetch)
+    expect(model.customFetch).toBe('present')
+    expect(model.selectedApiKey).toBe('test-api-key')
   })
 
   it('Provider without auth/oauth should use apiKey as before', async () => {
@@ -160,7 +160,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
     )
     const model = result.model as unknown as Record<string, unknown>
 
-    expect(model.authFetch).toBe('absent')
+    expect(model.customFetch).toBe('absent')
     expect(model.selectedApiKey).toBe('my-api-key')
   })
 
@@ -221,7 +221,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
     const model = result.model as unknown as Record<string, unknown>
 
     // No authFetch for 'auth-provider' since plugin targets 'other-provider'
-    expect(model.authFetch).toBe('absent')
+    expect(model.customFetch).toBe('absent')
     expect(model.selectedApiKey).toBe('fallback-key')
   })
 })

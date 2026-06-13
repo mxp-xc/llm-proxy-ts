@@ -23,7 +23,7 @@ export function createOpenAICompatibleProvider(
   settings: Settings,
   modelHeaders: Record<string, string>,
   selectedApiKey: string | undefined,
-  oauthFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) {
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
   const options: Parameters<typeof createOpenAICompatible>[0] = {
@@ -32,16 +32,18 @@ export function createOpenAICompatibleProvider(
     headers,
   }
 
-  // OAuth 激活时不设 apiKey，避免与 OAuth fetch 注入的 Authorization 冲突
-  if (!oauthFetch && selectedApiKey !== undefined) {
+  // 有 apiKey 就设，让 AI SDK 注入认证头
+  // 如果调用方同时提供 customFetch 且该 fetch 自己管理认证（如 OAuth），
+  // 调用方应传 selectedApiKey=undefined 以避免双重认证头
+  if (selectedApiKey !== undefined) {
     options.apiKey = selectedApiKey
   }
 
-  // fetch 组合：OAuth fetch → proxy fetch → global fetch
-  if (oauthFetch) {
+  // fetch 组合：customFetch → proxy fetch → global fetch
+  if (customFetch) {
     options.fetch = settings.proxy
-      ? oauthFetch(createProxyFetch(settings.proxy.url, settings.proxy.verify))
-      : oauthFetch()
+      ? customFetch(createProxyFetch(settings.proxy.url, settings.proxy.verify))
+      : customFetch()
   } else if (settings.proxy) {
     options.fetch = createProxyFetch(settings.proxy.url, settings.proxy.verify)
   }
