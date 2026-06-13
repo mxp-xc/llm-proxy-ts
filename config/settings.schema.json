@@ -340,6 +340,18 @@
               "modelsEndpoint": {
                 "type": "string",
                 "minLength": 1
+              },
+              "includeUsage": {
+                "type": "boolean"
+              },
+              "options": {
+                "type": "object",
+                "properties": {
+                  "streamOnly": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -569,6 +581,15 @@
               "anthropicVersion": {
                 "type": "string",
                 "minLength": 1
+              },
+              "options": {
+                "type": "object",
+                "properties": {
+                  "streamOnly": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -801,6 +822,15 @@
               "project": {
                 "type": "string",
                 "minLength": 1
+              },
+              "options": {
+                "type": "object",
+                "properties": {
+                  "streamOnly": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [

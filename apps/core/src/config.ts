@@ -55,6 +55,10 @@ export const oauthConfigSchema = z.object({
   authFile: z.string().optional(),
 })
 
+const providerOptionsSchema = z.object({
+  streamOnly: z.boolean().optional(),
+})
+
 const openAICompatibleProviderSchema = z.object({
   type: z.literal('openai-compatible'),
   baseURL: z.string().url(),
@@ -66,6 +70,7 @@ const openAICompatibleProviderSchema = z.object({
   oauth: oauthConfigSchema.optional(),
   modelsEndpoint: z.string().min(1).optional(),
   includeUsage: z.boolean().optional(),
+  options: providerOptionsSchema.optional(),
 })
 
 const anthropicProviderSchema = z.object({
@@ -78,6 +83,7 @@ const anthropicProviderSchema = z.object({
   enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
   anthropicVersion: z.string().min(1).optional(),
+  options: providerOptionsSchema.optional(),
 })
 
 const openaiProviderSchema = z.object({
@@ -91,6 +97,7 @@ const openaiProviderSchema = z.object({
   oauth: oauthConfigSchema.optional(),
   organization: z.string().min(1).optional(),
   project: z.string().min(1).optional(),
+  options: providerOptionsSchema.optional(),
 })
 
 export const providerConfigSchema = z.discriminatedUnion('type', [
@@ -132,6 +139,7 @@ export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>
 /** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
 export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>
+export type ProviderOptions = z.infer<typeof providerOptionsSchema>
 export type OpenAICompatibleProviderConfig = z.infer<typeof openAICompatibleProviderSchema>
 export type AnthropicProviderConfig = z.infer<typeof anthropicProviderSchema>
 export type OpenAIProviderConfig = z.infer<typeof openaiProviderSchema>

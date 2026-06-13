@@ -281,3 +281,122 @@ async function* delayedFirstChunk(): AsyncIterable<unknown> {
   await new Promise((resolve) => setTimeout(resolve, 50))
   yield { type: 'text-delta', text: 'late' }
 }
+
+describe('streamOnly provider', () => {
+  const streamOnlySettings: Settings = {
+    ...settings,
+    providers: {
+      openrouter: {
+        ...settings.providers.openrouter!,
+        options: { streamOnly: true },
+      },
+    },
+  }
+
+  it('returns non-stream JSON when streamOnly and client sends stream: false', async () => {
+    const gateway: ModelGateway = {
+      async generate() {
+        throw new Error('generate should not be called for streamOnly provider')
+      },
+      stream() {
+        return (async function* () {
+          yield { type: 'text-delta', textDelta: 'Hello' }
+          yield { type: 'text-delta', textDelta: ' world' }
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+            response: { id: 'chatcmpl-streamonly' },
+          }
+        })()
+      },
+    }
+
+    const app = createApp({ settings: streamOnlySettings, gateway, providerRegistry: stubRegistry })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    const body = await response.json()
+    expect(body.object).toBe('chat.completion')
+    expect(body.choices[0].message.content).toBe('Hello world')
+    expect(body.choices[0].finish_reason).toBe('stop')
+    expect(body.usage.prompt_tokens).toBe(10)
+    expect(body.usage.completion_tokens).toBe(5)
+  })
+
+  it('still returns SSE when streamOnly and client sends stream: true', async () => {
+    const gateway: ModelGateway = {
+      async generate() {
+        throw new Error('should not be called')
+      },
+      stream() {
+        return (async function* () {
+          yield { type: 'text-delta', textDelta: 'Hello' }
+          yield { type: 'text-delta', textDelta: ' world' }
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+          }
+        })()
+      },
+    }
+
+    const app = createApp({ settings: streamOnlySettings, gateway, providerRegistry: stubRegistry })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/event-stream')
+  })
+
+  it('does not affect non-streamOnly providers', async () => {
+    const gateway: ModelGateway = {
+      async generate() {
+        return {
+          text: 'from generate',
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        }
+      },
+      stream() {
+        throw new Error('stream should not be called')
+      },
+    }
+
+    // 使用原始 settings（无 streamOnly）
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.choices[0].message.content).toBe('from generate')
+  })
+})

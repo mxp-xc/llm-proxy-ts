@@ -12,6 +12,7 @@ import {
   openaiResponsesStrategy,
   anthropicStrategy,
   flattenUsage,
+  collectStreamResult,
 } from '@llm-proxy/core'
 import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection, ProtocolStrategy, ProtocolErrorFormatter } from '@llm-proxy/core'
 import pino from 'pino'
@@ -254,6 +255,36 @@ export function createApp({
       }
     }
 
+    // streamOnly: provider 仅支持流式 API，内部走 stream + 收集
+    if (route.provider.options?.streamOnly) {
+      try {
+        const stream = gateway.stream({
+          model,
+          callInput,
+          requestModel,
+          abortSignal: abortController.signal,
+        })
+        // 注意：streamOnly 模式不检查首包（无 SSE 输出给客户端）
+        const collected = await withRequestTimeout(
+          collectStreamResult(stream),
+          settings.requestTimeoutMs,
+          abortController,
+        )
+        const renderInput: Parameters<typeof strategy.renderResult>[0] = {
+          model: requestModel,
+          text: collected.text,
+          finishReason: collected.finishReason,
+        }
+        if (collected.response) renderInput.response = collected.response
+        if (collected.toolCalls) renderInput.toolCalls = collected.toolCalls
+        if (collected.usage) renderInput.usage = flattenUsage(collected.usage as Parameters<typeof flattenUsage>[0])
+        return c.json(strategy.renderResult(renderInput))
+      } catch (error) {
+        return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
+      }
+    }
+
+    // 正常非流式路径
     try {
       const result = await withRequestTimeout(
         gateway.generate({

@@ -359,4 +359,101 @@ describe('config', () => {
     expect(settings.plugins[1]?.name).toBe('my-auth')
     expect(settings.plugins[1]?.providers).toEqual(['auth-only'])
   })
+
+  it('accepts provider options.streamOnly', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "openrouter": {
+            "type": "openai-compatible",
+            "baseURL": "https://openrouter.ai/api/v1",
+            "apiKey": "secret",
+            "options": { "streamOnly": true },
+            "models": {}
+          }
+        }
+      }`,
+    )
+
+    const settings = await loadSettingsFromFile(settingsPath)
+    const p = settings.providers.openrouter
+    expect(p?.type).toBe('openai-compatible')
+    if (p?.type === 'openai-compatible') expect(p.options?.streamOnly).toBe(true)
+  })
+
+  it('accepts options.streamOnly for anthropic provider', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "claude": {
+            "type": "anthropic",
+            "apiKey": "secret",
+            "options": { "streamOnly": true },
+            "models": {}
+          }
+        }
+      }`,
+    )
+
+    const settings = await loadSettingsFromFile(settingsPath)
+    const p = settings.providers.claude
+    expect(p?.type).toBe('anthropic')
+    if (p?.type === 'anthropic') expect(p.options?.streamOnly).toBe(true)
+  })
+
+  it('accepts options.streamOnly for openai provider', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "gpt": {
+            "type": "openai",
+            "apiKey": "secret",
+            "options": { "streamOnly": true },
+            "models": {}
+          }
+        }
+      }`,
+    )
+
+    const settings = await loadSettingsFromFile(settingsPath)
+    const p = settings.providers.gpt
+    expect(p?.type).toBe('openai')
+    if (p?.type === 'openai') expect(p.options?.streamOnly).toBe(true)
+  })
+
+  it('defaults options to undefined when omitted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+
+    await writeFile(
+      settingsPath,
+      `{
+        "providers": {
+          "openrouter": {
+            "type": "openai-compatible",
+            "baseURL": "https://openrouter.ai/api/v1",
+            "apiKey": "secret",
+            "models": {}
+          }
+        }
+      }`,
+    )
+
+    const settings = await loadSettingsFromFile(settingsPath)
+    const p = settings.providers.openrouter
+    expect(p?.type).toBe('openai-compatible')
+    if (p?.type === 'openai-compatible') expect(p.options).toBeUndefined()
+  })
 })

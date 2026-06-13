@@ -15,6 +15,7 @@ export type {
   AnthropicProviderConfig,
   OpenAIProviderConfig,
   ProviderConfig,
+  ProviderOptions,
   Settings,
 } from './config.js'
 /** @deprecated 使用 PluginEntry */
@@ -43,6 +44,8 @@ export {
 export { createAnthropicProvider } from './providers/anthropic/provider.js'
 export { createOpenAIProvider } from './providers/openai/provider.js'
 export { flattenUsage } from './providers/shared/renderer-utils.js'
+export { collectStreamResult } from './providers/shared/stream-collector.js'
+export type { CollectedResult } from './providers/shared/stream-collector.js'
 
 // OAuth exports
 export type { OAuthToken, TokenStore, AuthStatus } from './oauth/types.js'
