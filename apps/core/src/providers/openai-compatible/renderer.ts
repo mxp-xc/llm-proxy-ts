@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord } from '../protocol-types.js'
-import { stringValue, toolCallIdValue } from '../shared/renderer-utils.js'
+import { stringValue, toolCallIdValue, extractUsageFromFinishPart } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type { OpenAIChatCompletion } from './types.js'
 
@@ -159,6 +159,7 @@ export async function* renderOpenAIChatCompletionSSE(input: {
         }),
       )
     } else if (part.type === 'finish') {
+      const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
       yield encoder.encode(
         sse({
           id,
@@ -166,6 +167,11 @@ export async function* renderOpenAIChatCompletionSSE(input: {
           created,
           model: input.model,
           choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(part.finishReason) }],
+          usage: {
+            prompt_tokens: inputTokens,
+            completion_tokens: outputTokens,
+            total_tokens: inputTokens + outputTokens,
+          },
         }),
       )
     } else if (part.type === 'openai-error') {

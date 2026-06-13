@@ -141,7 +141,7 @@ async function* textStream() {
   yield {
     type: 'finish',
     finishReason: 'stop',
-    usage: { promptTokens: 10, completionTokens: 5 },
+    totalUsage: { inputTokens: 10, outputTokens: 5 },
     response: { id: 'resp_test123' },
   }
 }
@@ -196,6 +196,13 @@ describe('renderOpenAIResponseSSE', () => {
     expect(completed).toBeDefined()
     expect(completed?.data.response.object).toBe('response')
     expect(completed?.data.response.status).toBe('completed')
+    expect(completed?.data.response.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 15,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    })
   })
 
   it('includes sequence_number in events', async () => {
@@ -208,7 +215,7 @@ describe('renderOpenAIResponseSSE', () => {
   // Bug #3 / #1 — Streaming tool-call with complete part (no deltas)
   async function* toolCallStream() {
     yield { type: 'tool-call', toolCallId: 'call_123', toolName: 'get_weather', input: { location: 'Paris' } }
-    yield { type: 'finish', finishReason: 'tool-calls', usage: { promptTokens: 10, completionTokens: 5 }, response: { id: 'resp_test' } }
+    yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 10, outputTokens: 5 }, response: { id: 'resp_test' } }
   }
 
   it('emits tool-call events for complete tool-call part', async () => {
@@ -253,7 +260,7 @@ describe('renderOpenAIResponseSSE', () => {
     yield { type: 'tool-call-delta', toolCallId: 'call_abc', argsTextDelta: '{"q":"h' }
     yield { type: 'tool-call-delta', toolCallId: 'call_abc', argsTextDelta: 'ello"}' }
     yield { type: 'tool-call', toolCallId: 'call_abc', toolName: 'search', input: '{"q":"hello"}' }
-    yield { type: 'finish', finishReason: 'tool-calls', usage: { promptTokens: 5, completionTokens: 10 }, response: { id: 'resp_delta' } }
+    yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 10 }, response: { id: 'resp_delta' } }
   }
 
   it('handles tool-call-start and tool-call-delta incremental events', async () => {
@@ -275,7 +282,7 @@ describe('renderOpenAIResponseSSE', () => {
     yield { type: 'text-delta', text: 'Hello' }
     yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'fn', input: {} }
     yield { type: 'text-delta', text: ' world' }
-    yield { type: 'finish', finishReason: 'stop', usage: { promptTokens: 5, completionTokens: 5 }, response: { id: 'resp_multi' } }
+    yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_multi' } }
   }
 
   it('uses different msgId for text after tool call', async () => {

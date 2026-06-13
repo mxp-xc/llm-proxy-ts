@@ -48,7 +48,7 @@ describe('OpenAI chat renderer', () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hel' }
       yield { type: 'text-delta', text: 'lo' }
-      yield { type: 'finish', finishReason: 'stop' }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
     }
 
     const chunks: string[] = []
@@ -62,6 +62,15 @@ describe('OpenAI chat renderer', () => {
     expect(chunks.join('')).toContain('"content":"hel"')
     expect(chunks.join('')).toContain('"content":"lo"')
     expect(chunks.at(-1)).toBe('data: [DONE]\n\n')
+
+    // Verify usage in the finish chunk
+    const events = chunks
+      .join('')
+      .split('\n\n')
+      .filter((e) => e.startsWith('data: {'))
+      .map((e) => JSON.parse(e.slice('data: '.length)))
+    const finishEvent = events.find((e: any) => e.choices?.[0]?.finish_reason === 'stop')
+    expect(finishEvent.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
   })
 
   it('keeps a stable SSE tool call index across complete tool call events', async () => {
@@ -78,7 +87,7 @@ describe('OpenAI chat renderer', () => {
         toolName: 'get_weather',
         input: { unit: 'fahrenheit' },
       }
-      yield { type: 'finish', finishReason: 'tool-calls' }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
     const events = await collectSseEvents(parts())
@@ -99,7 +108,7 @@ describe('OpenAI chat renderer', () => {
         toolName: 'get_weather',
         input: { city: 'NYC' },
       }
-      yield { type: 'finish', finishReason: 'tool-calls' }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
     const events = await collectSseEvents(parts())
@@ -129,7 +138,7 @@ describe('OpenAI chat renderer', () => {
         toolName: 'get_weather',
         input: { city: 'NYC' },
       }
-      yield { type: 'finish', finishReason: 'tool-calls' }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
     const events = await collectSseEvents(parts())
@@ -153,7 +162,7 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'tool-input-delta', id: 'call_1', delta: ':"NYC"}' }
       yield { type: 'tool-input-end', id: 'call_1' }
       yield { type: 'tool-call', id: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } }
-      yield { type: 'finish', finishReason: 'tool-calls' }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
     const events = await collectSseEvents(parts())

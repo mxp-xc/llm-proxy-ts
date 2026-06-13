@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord, type FinishReason, type RenderResultInput } from '../protocol-types.js'
-import { stringValue, toolCallIdValue } from '../shared/renderer-utils.js'
+import { stringValue, toolCallIdValue, extractUsageFromFinishPart } from '../shared/renderer-utils.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -200,10 +200,7 @@ export async function* renderAnthropicMessageSSE(input: {
         if (stopChunk) yield stopChunk
 
         const stopReason = mapStopReason(part.finishReason as FinishReason | undefined)
-        // AI SDK v6: finish part has totalUsage: LanguageModelUsage (not top-level outputTokens/totalTokens)
-        const totalUsage = (part as Record<string, unknown>).totalUsage as Record<string, unknown> | undefined
-        const inputTokens = typeof totalUsage?.inputTokens === 'number' ? totalUsage.inputTokens : 0
-        const outputTokens = typeof totalUsage?.outputTokens === 'number' ? totalUsage.outputTokens : 0
+        const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
 
         yield encoder.encode(
           anthropicSSE('message_delta', {

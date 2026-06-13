@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord } from '../protocol-types.js'
+import { extractUsageFromFinishPart } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type {
   ResponseOutputText,
@@ -366,7 +367,7 @@ export async function* renderOpenAIResponseSSE(input: {
         const finishReason = (part as Record<string, unknown>).finishReason as FinishReason
         // Bug #8 — pass streamedToolCalls to mapResponseStatus
         const status = mapResponseStatus(finishReason, streamedToolCalls)
-        const usage = (part as Record<string, unknown>).usage as Record<string, unknown> | undefined
+        const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
         const finishResponse = (part as Record<string, unknown>).response as { id?: string } | undefined
 
         // Bug #1 — build output from both text and accumulated tool calls
@@ -392,14 +393,12 @@ export async function* renderOpenAIResponseSSE(input: {
           truncation: 'disabled',
         }
 
-        if (usage) {
-          completedResponse.usage = {
-            input_tokens: (usage.promptTokens as number) ?? 0,
-            output_tokens: (usage.completionTokens as number) ?? 0,
-            total_tokens: ((usage.promptTokens as number) ?? 0) + ((usage.completionTokens as number) ?? 0),
-            input_tokens_details: { cached_tokens: 0 },
-            output_tokens_details: { reasoning_tokens: 0 },
-          }
+        completedResponse.usage = {
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
         }
 
         yield sse('response.completed', {

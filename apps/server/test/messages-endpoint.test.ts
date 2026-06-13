@@ -260,5 +260,5 @@ async function* textDeltaStream(text: string): AsyncIterable<unknown> {
   for (const word of words) {
     yield { type: 'text-delta', text: word + ' ' }
   }
-  yield { type: 'finish', finishReason: 'stop', outputTokens: 5 }
+  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 0, outputTokens: 5 } }
 }
