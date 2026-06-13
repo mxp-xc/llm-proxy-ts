@@ -96,6 +96,32 @@ describe('renderOpenAIResponse', () => {
     expect(result.id).toMatch(/^resp_/)
   })
 
+  it('omits usage in non-streaming when all tokens are zero', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-4o',
+      text: 'hi',
+      finishReason: 'stop',
+      usage: { inputTokens: 0, outputTokens: 0 },
+    })
+    expect(result.usage).toBeUndefined()
+  })
+
+  it('passes cacheReadTokens and reasoningTokens through in non-streaming response', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-4o',
+      text: 'hi',
+      finishReason: 'stop',
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 20, cacheReadTokens: 3, reasoningTokens: 7 },
+    })
+    expect(result.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 20,
+      input_tokens_details: { cached_tokens: 3 },
+      output_tokens_details: { reasoning_tokens: 7 },
+    })
+  })
+
   it('generates msg_ prefixed id for message output items', () => {
     const result = renderOpenAIResponse({ model: 'gpt-4o', text: 'hi', finishReason: 'stop' })
     expect(result.output[0]!.id).toMatch(/^msg_/)
@@ -202,6 +228,43 @@ describe('renderOpenAIResponseSSE', () => {
       total_tokens: 15,
       input_tokens_details: { cached_tokens: 0 },
       output_tokens_details: { reasoning_tokens: 0 },
+    })
+  })
+
+  it('omits usage in completed response when usage is all zeros', async () => {
+    async function* noUsageStream() {
+      yield { type: 'text-delta', text: 'hi' }
+      yield { type: 'finish', finishReason: 'stop', response: { id: 'resp_no_usage' } }
+    }
+    const events = await collectSSEEvents(renderOpenAIResponseSSE({ model: 'gpt-4o', stream: noUsageStream() }))
+    const completed = events.find(e => e.event === 'response.completed')
+    expect(completed?.data.response.usage).toBeUndefined()
+  })
+
+  it('passes cacheReadTokens and reasoningTokens through in SSE response.completed', async () => {
+    async function* detailStream() {
+      yield { type: 'text-delta', text: 'hi' }
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          totalTokens: 20,
+          inputTokenDetails: { cacheReadTokens: 3 },
+          outputTokenDetails: { reasoningTokens: 7 },
+        },
+        response: { id: 'resp_detail' },
+      }
+    }
+    const events = await collectSSEEvents(renderOpenAIResponseSSE({ model: 'gpt-4o', stream: detailStream() }))
+    const completed = events.find(e => e.event === 'response.completed')
+    expect(completed?.data.response.usage).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 20,
+      input_tokens_details: { cached_tokens: 3 },
+      output_tokens_details: { reasoning_tokens: 7 },
     })
   })
 

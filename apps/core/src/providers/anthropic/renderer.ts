@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord, type FinishReason, type RenderResultInput } from '../protocol-types.js'
-import { stringValue, toolCallIdValue, extractUsageFromFinishPart } from '../shared/renderer-utils.js'
+import { stringValue, toolCallIdValue, extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -29,10 +29,10 @@ export function renderAnthropicMessage(input: RenderResultInput): AnthropicMessa
     }
   }
 
-  const usage: AnthropicMessageResponse['usage'] = {
-    input_tokens: input.usage?.inputTokens ?? 0,
-    output_tokens: input.usage?.outputTokens ?? 0,
-  }
+  // Anthropic API 要求 usage 字段始终存在；无数据时使用默认零值
+  const usage: AnthropicMessageResponse['usage'] = hasUsageData(input.usage)
+    ? { input_tokens: input.usage!.inputTokens ?? 0, output_tokens: input.usage!.outputTokens ?? 0 }
+    : { input_tokens: 0, output_tokens: 0 }
 
   return {
     id: input.response?.id ?? `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
@@ -200,14 +200,18 @@ export async function* renderAnthropicMessageSSE(input: {
         if (stopChunk) yield stopChunk
 
         const stopReason = mapStopReason(part.finishReason as FinishReason | undefined)
-        const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
+        const usage = extractUsageFromFinishPart(part)
+
+        const messageDelta: Record<string, unknown> = {
+          type: 'message_delta',
+          delta: { stop_reason: stopReason, stop_sequence: null },
+        }
+        if (usage && hasUsageData(usage)) {
+          messageDelta.usage = { input_tokens: usage.inputTokens ?? 0, output_tokens: usage.outputTokens ?? 0 }
+        }
 
         yield encoder.encode(
-          anthropicSSE('message_delta', {
-            type: 'message_delta',
-            delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-          }),
+          anthropicSSE('message_delta', messageDelta),
         )
 
         yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
@@ -250,7 +254,6 @@ export async function* renderAnthropicMessageSSE(input: {
       anthropicSSE('message_delta', {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
-        usage: { input_tokens: 0, output_tokens: 0 },
       }),
     )
     yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))

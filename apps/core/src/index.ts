@@ -42,6 +42,7 @@ export {
 } from './providers/shared/provider-factory.js'
 export { createAnthropicProvider } from './providers/anthropic/provider.js'
 export { createOpenAIProvider } from './providers/openai/provider.js'
+export { flattenUsage } from './providers/shared/renderer-utils.js'
 
 // OAuth exports
 export type { OAuthToken, TokenStore, AuthStatus } from './oauth/types.js'

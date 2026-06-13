@@ -104,6 +104,30 @@ describe('Anthropic Messages renderer', () => {
     expect(events[5]!.usage.output_tokens).toBe(5)
   })
 
+  it('omits usage in streaming message_delta when usage is all zeros', async () => {
+    async function* parts() {
+      yield { type: 'text-delta', text: 'hi' }
+      yield { type: 'finish', finishReason: 'stop' }
+    }
+
+    const events = await collectAnthropicSSEEvents(parts())
+    const messageDelta = events.find((e) => e.type === 'message_delta')
+    expect(messageDelta!.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta!.usage).toBeUndefined()
+  })
+
+  it('omits usage in fallback message_delta when stream ends without finish part', async () => {
+    async function* parts() {
+      yield { type: 'text-delta', text: 'hi' }
+      // no finish part — stream just ends
+    }
+
+    const events = await collectAnthropicSSEEvents(parts())
+    const messageDelta = events.find((e) => e.type === 'message_delta')
+    expect(messageDelta!.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta!.usage).toBeUndefined()
+  })
+
   it('renders streaming tool use SSE events', async () => {
     async function* parts() {
       yield { type: 'tool-call-start', toolCallId: 'toolu_1', toolName: 'get_weather' }

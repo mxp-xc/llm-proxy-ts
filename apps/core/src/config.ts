@@ -65,6 +65,7 @@ const openAICompatibleProviderSchema = z.object({
   enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
   modelsEndpoint: z.string().min(1).optional(),
+  includeUsage: z.boolean().optional(),
 })
 
 const anthropicProviderSchema = z.object({

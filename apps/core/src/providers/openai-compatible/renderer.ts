@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord } from '../protocol-types.js'
-import { stringValue, toolCallIdValue, extractUsageFromFinishPart } from '../shared/renderer-utils.js'
+import { stringValue, toolCallIdValue, extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type { OpenAIChatCompletion } from './types.js'
 
@@ -28,12 +28,17 @@ export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChat
     ],
   }
 
-  if (input.usage) {
+  if (input.usage && hasUsageData(input.usage)) {
+    const promptTokens = input.usage.inputTokens
+    const completionTokens = input.usage.outputTokens
+    const totalTokens =
+      input.usage.totalTokens ??
+      (promptTokens != null && completionTokens != null ? promptTokens + completionTokens : undefined)
+
     body.usage = {}
-    if (input.usage.inputTokens !== undefined) body.usage.prompt_tokens = input.usage.inputTokens
-    if (input.usage.outputTokens !== undefined)
-      body.usage.completion_tokens = input.usage.outputTokens
-    if (input.usage.totalTokens !== undefined) body.usage.total_tokens = input.usage.totalTokens
+    if (promptTokens !== undefined) body.usage.prompt_tokens = promptTokens
+    if (completionTokens !== undefined) body.usage.completion_tokens = completionTokens
+    if (totalTokens !== undefined) body.usage.total_tokens = totalTokens
   }
 
   return body
@@ -159,21 +164,24 @@ export async function* renderOpenAIChatCompletionSSE(input: {
         }),
       )
     } else if (part.type === 'finish') {
-      const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
-      yield encoder.encode(
-        sse({
-          id,
-          object: 'chat.completion.chunk',
-          created,
-          model: input.model,
-          choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(part.finishReason) }],
-          usage: {
-            prompt_tokens: inputTokens,
-            completion_tokens: outputTokens,
-            total_tokens: inputTokens + outputTokens,
-          },
-        }),
-      )
+      const usage = extractUsageFromFinishPart(part)
+      const finishChunk: Record<string, unknown> = {
+        id,
+        object: 'chat.completion.chunk',
+        created,
+        model: input.model,
+        choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(part.finishReason) }],
+      }
+      if (usage && hasUsageData(usage)) {
+        const promptTokens = usage.inputTokens ?? 0
+        const completionTokens = usage.outputTokens ?? 0
+        finishChunk.usage = {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
+        }
+      }
+      yield encoder.encode(sse(finishChunk))
     } else if (part.type === 'openai-error') {
       yield encoder.encode(sse(part.body))
       yield encoder.encode('data: [DONE]\n\n')

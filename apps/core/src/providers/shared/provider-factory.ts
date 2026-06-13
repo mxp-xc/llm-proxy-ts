@@ -30,6 +30,9 @@ export function createOpenAICompatibleProvider(
     name: providerName,
     baseURL: provider.baseURL,
     headers,
+    // 让上游在流式响应中返回 usage（stream_options: { include_usage: true }）
+    // 可在 provider 配置中设 includeUsage: false 禁用（适用于不支持 stream_options 的上游）
+    includeUsage: provider.includeUsage ?? true,
   }
 
   // 有 apiKey 就设，让 AI SDK 注入认证头

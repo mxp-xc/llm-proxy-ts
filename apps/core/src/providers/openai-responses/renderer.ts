@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, isRecord } from '../protocol-types.js'
-import { extractUsageFromFinishPart } from '../shared/renderer-utils.js'
+import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type {
   ResponseOutputText,
@@ -367,7 +367,7 @@ export async function* renderOpenAIResponseSSE(input: {
         const finishReason = (part as Record<string, unknown>).finishReason as FinishReason
         // Bug #8 — pass streamedToolCalls to mapResponseStatus
         const status = mapResponseStatus(finishReason, streamedToolCalls)
-        const { inputTokens, outputTokens } = extractUsageFromFinishPart(part)
+        const usage = extractUsageFromFinishPart(part)
         const finishResponse = (part as Record<string, unknown>).response as { id?: string } | undefined
 
         // Bug #1 — build output from both text and accumulated tool calls
@@ -393,12 +393,17 @@ export async function* renderOpenAIResponseSSE(input: {
           truncation: 'disabled',
         }
 
-        completedResponse.usage = {
-          input_tokens: inputTokens,
-          output_tokens: outputTokens,
-          total_tokens: inputTokens + outputTokens,
-          input_tokens_details: { cached_tokens: 0 },
-          output_tokens_details: { reasoning_tokens: 0 },
+        // 只在有实际 usage 数据时才包含 usage（避免全 0 误导）
+        if (usage && hasUsageData(usage)) {
+          const promptTokens = usage.inputTokens ?? 0
+          const completionTokens = usage.outputTokens ?? 0
+          completedResponse.usage = {
+            input_tokens: promptTokens,
+            output_tokens: completionTokens,
+            total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
+            input_tokens_details: { cached_tokens: usage.cacheReadTokens ?? 0 },
+            output_tokens_details: { reasoning_tokens: usage.reasoningTokens ?? 0 },
+          }
         }
 
         yield sse('response.completed', {
@@ -499,13 +504,13 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
     truncation: 'disabled',
   }
 
-  if (input.usage) {
+  if (input.usage && hasUsageData(input.usage)) {
     response.usage = {
       input_tokens: input.usage.inputTokens ?? 0,
       output_tokens: input.usage.outputTokens ?? 0,
-      total_tokens: input.usage.totalTokens ?? 0,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: input.usage.totalTokens ?? (input.usage.inputTokens ?? 0) + (input.usage.outputTokens ?? 0),
+      input_tokens_details: { cached_tokens: input.usage.cacheReadTokens ?? 0 },
+      output_tokens_details: { reasoning_tokens: input.usage.reasoningTokens ?? 0 },
     }
   }
 

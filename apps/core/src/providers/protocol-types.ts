@@ -15,7 +15,13 @@ export interface RenderResultInput {
   model: string
   text: string
   finishReason?: FinishReason
-  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+  usage?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    reasoningTokens?: number
+  }
   response?: { id?: string; timestamp?: Date }
   toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
 }

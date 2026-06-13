@@ -11,6 +11,7 @@ import {
   openaiCompatibleStrategy,
   openaiResponsesStrategy,
   anthropicStrategy,
+  flattenUsage,
 } from '@llm-proxy/core'
 import type { ProviderRegistry, PluginRegistry, ProxyPlugin, PluginResponse, KeySelection, ProtocolStrategy, ProtocolErrorFormatter } from '@llm-proxy/core'
 import pino from 'pino'
@@ -264,16 +265,15 @@ export function createApp({
         settings.requestTimeoutMs,
         abortController,
       )
-      return c.json(
-        strategy.renderResult({
+      const renderInput: Parameters<typeof strategy.renderResult>[0] = {
           model: requestModel,
           text: result.text,
           finishReason: result.finishReason,
-          usage: result.usage,
           response: result.response,
           toolCalls: result.toolCalls,
-        }),
-      )
+        }
+        if (result.usage) renderInput.usage = flattenUsage(result.usage)
+        return c.json(strategy.renderResult(renderInput))
     } catch (error) {
       return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
     }
