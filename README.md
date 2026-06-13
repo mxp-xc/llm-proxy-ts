@@ -2,8 +2,6 @@
 
 本地优先的 LLM 反向代理，暴露 OpenAI Chat Completions 兼容 API，通过 Vercel AI SDK 转发到上游 OpenAI-compatible provider。
 
-Python/FastAPI 原版：[llm-proxy](https://github.com/mxp-xc/llm-proxy)
-
 ## 快速开始
 
 ```bash

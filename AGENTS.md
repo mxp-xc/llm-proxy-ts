@@ -4,9 +4,7 @@
 
 ## 项目概述
 
-`llm-proxy-ts` 是 `llm-proxy`（Python/FastAPI）的 TypeScript 迁移版本。本地优先的 LLM 反向代理，暴露 OpenAI Chat Completions 兼容 API，通过 Vercel AI SDK 转发到上游 OpenAI-compatible provider。
-
-**原始行为参考：** `D:\code\github\llm-proxy`（本机 Python 版本）。
+`llm-proxy-ts` 是本地优先的 LLM 反向代理，暴露 OpenAI Chat Completions 兼容 API，通过 Vercel AI SDK 转发到上游 OpenAI-compatible provider。
 
 ## Monorepo 结构
 
@@ -54,8 +52,3 @@ llm-proxy-ts/
 - 不做下游客户端鉴权、计费、配额、多租户、数据库或 Web UI。
 - 响应形状以 OpenAI Chat Completions 兼容为目标，不保证逐字段原样透传上游响应。
 
-## 迁移原则
-
-- 先迁移行为和测试，再做 TypeScript 生态优化。
-- 保持 OpenAI-compatible API 的客户端兼容性。
-- 本地配置和密钥只保留在未提交文件中。
