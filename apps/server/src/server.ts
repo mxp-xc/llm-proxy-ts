@@ -92,14 +92,13 @@ async function main(): Promise<void> {
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      logger.fatal(
-        { host: settings.service.host, port: settings.service.port, err },
+      fatalAndExit(
+        err,
         `Port ${settings.service.port} is already in use`,
       )
     } else {
-      logger.fatal({ err }, 'Server failed to start')
+      fatalAndExit(err, 'Server failed to start')
     }
-    process.exit(1)
   })
 
   // 插件 afterServerStart（非阻塞后台任务）
@@ -108,17 +107,36 @@ async function main(): Promise<void> {
   })
 }
 
+/**
+ * 同步写入 stderr 并退出。
+ *
+ * pino 通过异步 stream 写入日志；process.exit() 会立即终止进程，
+ * 导致 logger.fatal / logger.flush() 的输出可能丢失。
+ * 对启动阶段的致命错误，用 console.error（同步写 stderr）保底输出。
+ */
+function fatalAndExit(err: unknown, message: string): never {
+  console.error(`FATAL: ${message}`, err)
+  process.exit(1)
+}
+
+async function start(): Promise<void> {
+  try {
+    await main()
+  } catch (err) {
+    fatalAndExit(err, 'startup failed')
+  }
+}
+
 // Global uncaught error handlers — ensure anything that escapes per-request
 // error handling still reaches pino instead of silently disappearing to stderr.
 process.on('uncaughtException', (error) => {
-  logger.fatal({ err: error }, 'uncaught exception')
-  process.exit(1)
+  fatalAndExit(error, 'uncaught exception')
 })
 
 process.on('unhandledRejection', (reason) => {
-  logger.error({ err: reason }, 'unhandled rejection')
+  console.error('unhandled rejection', reason)
 })
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  await main()
+  await start()
 }

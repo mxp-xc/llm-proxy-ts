@@ -49,3 +49,4 @@ temp/
 .codegraph
 work-local/
 .claude/worktrees
+CLAUDE.local.md
