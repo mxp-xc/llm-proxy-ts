@@ -183,15 +183,15 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' })
   })
 
-  it('passes unknown fields as providerOptions when providerName given', () => {
+  it('passes unknown fields as providerOptions.openai', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o', input: 'hi', custom_param: 'value',
-    }, 'openai')
+    })
     expect(result.providerOptions).toEqual({ openai: { custom_param: 'value' } })
   })
 
   it('omits providerOptions when no unknown fields', () => {
-    const result = mapResponsesRequestToAISDKInput({ model: 'gpt-4o', input: 'hi' }, 'openai')
+    const result = mapResponsesRequestToAISDKInput({ model: 'gpt-4o', input: 'hi' })
     expect(result.providerOptions).toBeUndefined()
   })
 })

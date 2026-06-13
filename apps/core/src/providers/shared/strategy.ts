@@ -16,7 +16,7 @@ export interface ProtocolStrategy<TRequest = unknown> {
   /** 判断请求是否要求流式响应 */
   isStream(request: TRequest): boolean
   /** 将协议特定请求映射到 AI SDK 输入格式 */
-  mapToAISDKInput(request: TRequest, providerName?: string): AISDKInput
+  mapToAISDKInput(request: TRequest): AISDKInput
   /** 非流式渲染：将 AI SDK 结果渲染为协议特定响应 */
   renderResult(input: RenderResultInput): unknown
   /** 流式渲染：将 AI SDK 流渲染为 SSE Uint8Array 异步迭代 */

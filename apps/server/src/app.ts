@@ -199,7 +199,7 @@ export function createApp({
     c.set('actualModel', route.upstreamModel)
 
     // 3. Map to AI SDK input
-    const callInput = strategy.mapToAISDKInput(request, route.providerName)
+    const callInput = strategy.mapToAISDKInput(request)
 
     // 4. Get LanguageModel
     const loginUrl = `http://127.0.0.1:${settings.service.port}/oauth/login/${route.providerName}`

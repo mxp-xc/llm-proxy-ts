@@ -160,10 +160,10 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         }
       }
 
-      // Anthropic 类型不支持 OpenAI 协议发现，跳过
-      if (provider.type === 'anthropic') {
+      // Anthropic / OpenAI 类型不支持 OpenAI 协议发现，跳过
+      if (provider.type === 'anthropic' || provider.type === 'openai') {
         s.stop(
-          `Skipped ${providerName} (anthropic provider does not support OpenAI model discovery)`,
+          `Skipped ${providerName} (${provider.type} provider does not support OpenAI model discovery)`,
         )
         continue
       }

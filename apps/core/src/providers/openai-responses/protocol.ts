@@ -97,7 +97,6 @@ const mappedResponsesRequestKeys = new Set([
 
 export function mapResponsesRequestToAISDKInput(
   request: OpenAIResponsesRequest,
-  providerName?: string,
 ): AISDKInput {
   const messages: Array<Record<string, unknown>> = []
   const systemParts: string[] = []
@@ -196,12 +195,12 @@ export function mapResponsesRequestToAISDKInput(
     }
   }
 
-  // provider options passthrough
-  if (providerName) {
-    const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedResponsesRequestKeys)
-    if (Object.keys(providerOptions).length > 0) {
-      input.providerOptions = { [providerName]: providerOptions }
-    }
+  // providerOptions key 固定为 "openai"：
+  // @ai-sdk/openai 始终读此 key，passthrough 正常工作；
+  // 其他 provider（如 @ai-sdk/openai-compatible）不认识此 key，自动忽略 → 不泄漏
+  const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedResponsesRequestKeys)
+  if (Object.keys(providerOptions).length > 0) {
+    input.providerOptions = { openai: providerOptions }
   }
 
   return input

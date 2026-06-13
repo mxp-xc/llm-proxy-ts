@@ -13,6 +13,7 @@ export type {
   OAuthConfig,
   OpenAICompatibleProviderConfig,
   AnthropicProviderConfig,
+  OpenAIProviderConfig,
   ProviderConfig,
   Settings,
 } from './config.js'
@@ -40,6 +41,7 @@ export {
   sanitizeHeaders,
 } from './providers/shared/provider-factory.js'
 export { createAnthropicProvider } from './providers/anthropic/provider.js'
+export { createOpenAIProvider } from './providers/openai/provider.js'
 
 // OAuth exports
 export type { OAuthToken, TokenStore, AuthStatus } from './oauth/types.js'

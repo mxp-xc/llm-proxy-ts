@@ -357,7 +357,6 @@ describe('Anthropic Messages protocol mapping', () => {
         top_k: 50,
         metadata: { user_id: 'user-123' },
       },
-      'anthropic',
     )
 
     expect(input.providerOptions).toEqual({
@@ -377,7 +376,6 @@ describe('Anthropic Messages protocol mapping', () => {
         messages: [{ role: 'user', content: 'hi' }],
         custom_field: 'value',
       },
-      'anthropic',
     )
 
     expect(input.providerOptions?.anthropic).toMatchObject({
@@ -385,12 +383,11 @@ describe('Anthropic Messages protocol mapping', () => {
     })
   })
 
-  it('does not set providerOptions when provider is unknown', () => {
+  it('does not set providerOptions when no Anthropic-specific or passthrough fields', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
       max_tokens: 1024,
       messages: [{ role: 'user', content: 'hi' }],
-      thinking: { type: 'enabled', budget_tokens: 10000 },
     })
 
     expect(input.providerOptions).toBeUndefined()

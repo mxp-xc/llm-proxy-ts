@@ -131,7 +131,6 @@ const mappedRequestKeys = new Set([
 
 export function mapAnthropicMessagesRequestToAISDKInput(
   request: AnthropicMessagesRequest,
-  providerName?: string,
 ): AISDKInput {
   const messages: Array<Record<string, unknown>> = []
 
@@ -202,21 +201,19 @@ export function mapAnthropicMessagesRequestToAISDKInput(
   }
 
   // Anthropic 特有字段 → providerOptions.anthropic
-  if (providerName) {
-    const providerOptions: Record<string, unknown> = {}
-    if (request.thinking !== undefined) providerOptions.thinking = request.thinking
-    if (request.top_k !== undefined) providerOptions.topK = request.top_k
-    if (request.metadata !== undefined) providerOptions.metadata = request.metadata
-    if (request.stop_sequences !== undefined)
-      providerOptions.stop_sequences = request.stop_sequences
+  // key 固定为 "anthropic"：AI SDK 的 @ai-sdk/anthropic 始终读此 key，
+  // 其他 provider（如 @ai-sdk/openai-compatible）不认识此 key，自动忽略 → 不泄漏
+  const providerOptions: Record<string, unknown> = {}
+  if (request.thinking !== undefined) providerOptions.thinking = request.thinking
+  if (request.top_k !== undefined) providerOptions.topK = request.top_k
+  if (request.metadata !== undefined) providerOptions.metadata = request.metadata
 
-    // passthrough 字段
-    const extraOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
-    Object.assign(providerOptions, extraOptions)
+  // passthrough 字段
+  const extraOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
+  Object.assign(providerOptions, extraOptions)
 
-    if (Object.keys(providerOptions).length > 0) {
-      input.providerOptions = { [providerName]: providerOptions }
-    }
+  if (Object.keys(providerOptions).length > 0) {
+    input.providerOptions = { anthropic: providerOptions }
   }
 
   return input

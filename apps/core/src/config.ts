@@ -79,9 +79,23 @@ const anthropicProviderSchema = z.object({
   anthropicVersion: z.string().min(1).optional(),
 })
 
+const openaiProviderSchema = z.object({
+  type: z.literal('openai'),
+  baseURL: z.string().url().optional(),
+  apiKey: apiKeySchema,
+  headers: z.record(z.string(), z.string()).default({}),
+  plugins: z.array(pluginEntrySchema).default([]),
+  models: z.record(z.string(), modelRouteConfigSchema).default({}),
+  enableFlatModelLookup: z.boolean().optional(),
+  oauth: oauthConfigSchema.optional(),
+  organization: z.string().min(1).optional(),
+  project: z.string().min(1).optional(),
+})
+
 export const providerConfigSchema = z.discriminatedUnion('type', [
   openAICompatibleProviderSchema,
   anthropicProviderSchema,
+  openaiProviderSchema,
 ])
 
 export const settingsSchema = z.object({
@@ -119,6 +133,7 @@ export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>
 export type OpenAICompatibleProviderConfig = z.infer<typeof openAICompatibleProviderSchema>
 export type AnthropicProviderConfig = z.infer<typeof anthropicProviderSchema>
+export type OpenAIProviderConfig = z.infer<typeof openaiProviderSchema>
 export type ProviderConfig = z.infer<typeof providerConfigSchema>
 export type Settings = z.infer<typeof settingsSchema>
 

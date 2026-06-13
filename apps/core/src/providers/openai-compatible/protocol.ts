@@ -101,7 +101,6 @@ export function validateOpenAIChatRequest(value: unknown): OpenAIChatRequest {
 
 export function mapOpenAIChatRequestToAISDKInput(
   request: OpenAIChatRequest,
-  providerName?: string,
 ): AISDKInput {
   const input: AISDKInput = {
     messages: request.messages.map(mapMessage),
@@ -123,13 +122,14 @@ export function mapOpenAIChatRequestToAISDKInput(
   if (request.tool_choice) {
     input.toolChoice = mapToolChoice(request.tool_choice)
   }
-  if (providerName) {
-    const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
-    // parallel_tool_calls: AI SDK openai-compatible 不原生支持，通过 providerOptions 透传
-    if (request.parallel_tool_calls !== undefined) providerOptions.parallel_tool_calls = request.parallel_tool_calls
-    if (Object.keys(providerOptions).length > 0) {
-      input.providerOptions = { [providerName]: providerOptions }
-    }
+  // providerOptions key 固定为 "openaiCompatible"：
+  // @ai-sdk/openai-compatible 的 4 级 fallback 包含此 key，passthrough 正常工作；
+  // 其他 provider（如 @ai-sdk/anthropic）不认识此 key，自动忽略 → 不泄漏
+  const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
+  // parallel_tool_calls: AI SDK openai-compatible 不原生支持，通过 providerOptions 透传
+  if (request.parallel_tool_calls !== undefined) providerOptions.parallel_tool_calls = request.parallel_tool_calls
+  if (Object.keys(providerOptions).length > 0) {
+    input.providerOptions = { openaiCompatible: providerOptions }
   }
 
   return input

@@ -5,6 +5,7 @@ import type { Logger } from '../types.js'
 import type { PluginRegistry } from '../plugins/registry.js'
 import { createOpenAICompatibleProvider, sanitizeHeaders } from './shared/provider-factory.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
+import { createOpenAIProvider } from './openai/provider.js'
 
 const noopLogger: Logger = {
   info() {},
@@ -109,7 +110,9 @@ export async function createProviderRegistry(
         baseURL:
           provider.type === 'anthropic'
             ? (provider.baseURL ?? 'https://api.anthropic.com/v1')
-            : provider.baseURL,
+            : provider.type === 'openai'
+              ? (provider.baseURL ?? 'https://api.openai.com/v1')
+              : provider.baseURL,
         headers: sanitizeHeaders(provider.headers),
         proxyEnabled: settings.proxy !== null,
       }
@@ -160,6 +163,19 @@ function createProviderModelFactory(
         selectedApiKey,
         customFetch,
       )
+  }
+  if (provider.type === 'openai') {
+    return (selectedApiKey, customFetch) => (upstreamModel) => {
+      const openaiProvider = createOpenAIProvider(
+        providerName,
+        provider,
+        settings,
+        modelHeaders,
+        selectedApiKey,
+        customFetch,
+      )
+      return openaiProvider.responses(upstreamModel)
+    }
   }
   return (selectedApiKey, customFetch) =>
     createOpenAICompatibleProvider(

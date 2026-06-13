@@ -207,7 +207,7 @@ describe('OpenAI chat protocol mapping', () => {
     expect(toolModelMessageSchema.safeParse(jsonInput.messages[0]).success).toBe(true)
   })
 
-  it('maps provider-specific fields into provider options when provider is known', () => {
+  it('maps provider-specific fields into providerOptions.openaiCompatible', () => {
     const input = mapOpenAIChatRequestToAISDKInput(
       {
         model: 'openrouter/chat',
@@ -216,11 +216,10 @@ describe('OpenAI chat protocol mapping', () => {
         reasoning: { effort: 'high' },
         extra_body: { include_reasoning: true },
       },
-      'openrouter',
     )
 
     expect(input.providerOptions).toEqual({
-      openrouter: {
+      openaiCompatible: {
         parallel_tool_calls: false,
         reasoning: { effort: 'high' },
         extra_body: { include_reasoning: true },
@@ -228,12 +227,10 @@ describe('OpenAI chat protocol mapping', () => {
     })
   })
 
-  it('keeps provider-specific fields compatible when provider is unknown', () => {
+  it('does not set providerOptions when no provider-specific or passthrough fields', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
       messages: [{ role: 'user', content: 'hello' }],
-      parallel_tool_calls: true,
-      reasoning: { effort: 'low' },
     })
 
     expect(input.providerOptions).toBeUndefined()
