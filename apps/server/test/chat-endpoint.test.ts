@@ -399,4 +399,49 @@ describe('streamOnly provider', () => {
     const body = await response.json()
     expect(body.choices[0].message.content).toBe('from generate')
   })
+
+  it('returns 429 when streamOnly provider returns rate-limit error in first chunk', async () => {
+    const streamOnlyWithPlugin: Settings = {
+      ...settings,
+      providers: {
+        openrouter: {
+          ...settings.providers.openrouter!,
+          options: { streamOnly: true },
+          plugins: [{ name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] }],
+        },
+      },
+    }
+
+    const gateway: ModelGateway = {
+      async generate() {
+        throw new Error('generate should not be called for streamOnly provider')
+      },
+      stream() {
+        return (async function* () {
+          yield {
+            type: 'raw',
+            rawValue:
+              'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n',
+          }
+        })()
+      },
+    }
+
+    const app = createApp({ settings: streamOnlyWithPlugin, gateway, providerRegistry: stubRegistry })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    expect(response.status).toBe(429)
+    const body = await response.json()
+    expect(body.error.code).toBe('rate_limit')
+    expect(JSON.stringify(body)).not.toContain('secret text')
+  })
 })

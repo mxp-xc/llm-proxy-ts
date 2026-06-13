@@ -81,4 +81,43 @@ describe('collectStreamResult', () => {
     expect(result.finishReason).toBeUndefined()
     expect(result.usage).toBeUndefined()
   })
+
+  it('preserves cacheReadTokens and reasoningTokens from finish chunk', async () => {
+    const stream = chunks(
+      { type: 'text-delta', textDelta: 'hi' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          totalTokens: 150,
+          inputTokenDetails: { cacheReadTokens: 80 },
+          outputTokenDetails: { reasoningTokens: 20 },
+        },
+      },
+    )
+    const result = await collectStreamResult(stream)
+    expect(result.usage?.inputTokens).toBe(100)
+    expect(result.usage?.outputTokens).toBe(50)
+    expect(result.usage?.totalTokens).toBe(150)
+    expect(result.usage?.cacheReadTokens).toBe(80)
+    expect(result.usage?.reasoningTokens).toBe(20)
+  })
+
+  it('captures response timestamp from finish chunk', async () => {
+    const ts = new Date('2025-06-13T12:00:00Z')
+    const stream = chunks(
+      { type: 'text-delta', textDelta: 'hi' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        response: { id: 'chatcmpl-123', timestamp: ts },
+        totalUsage: {},
+      },
+    )
+    const result = await collectStreamResult(stream)
+    expect(result.response?.id).toBe('chatcmpl-123')
+    expect(result.response?.timestamp).toEqual(ts)
+  })
 })

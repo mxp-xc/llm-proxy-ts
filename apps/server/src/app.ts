@@ -258,15 +258,26 @@ export function createApp({
     // streamOnly: provider 仅支持流式 API，内部走 stream + 收集
     if (route.provider.options?.streamOnly) {
       try {
-        const stream = gateway.stream({
+        const rawStream = gateway.stream({
           model,
           callInput,
           requestModel,
           abortSignal: abortController.signal,
         })
-        // 注意：streamOnly 模式不检查首包（无 SSE 输出给客户端）
+        const inspection = await withRequestTimeout(
+          inspectFirstStreamChunk(route.resolvedPlugins, rawStream),
+          settings.requestTimeoutMs,
+          abortController,
+        )
+        if (inspection.error) {
+          const { body, status } = formatErrors.rateLimit(
+            inspection.error.body,
+            inspection.error.status,
+          )
+          return c.json(body, status as 429)
+        }
         const collected = await withRequestTimeout(
-          collectStreamResult(stream),
+          collectStreamResult(inspection.stream),
           settings.requestTimeoutMs,
           abortController,
         )
@@ -274,10 +285,10 @@ export function createApp({
           model: requestModel,
           text: collected.text,
           finishReason: collected.finishReason,
+          ...(collected.response && { response: collected.response }),
+          ...(collected.toolCalls && { toolCalls: collected.toolCalls }),
         }
-        if (collected.response) renderInput.response = collected.response
-        if (collected.toolCalls) renderInput.toolCalls = collected.toolCalls
-        if (collected.usage) renderInput.usage = flattenUsage(collected.usage as Parameters<typeof flattenUsage>[0])
+        if (collected.usage) renderInput.usage = collected.usage
         return c.json(strategy.renderResult(renderInput))
       } catch (error) {
         return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
