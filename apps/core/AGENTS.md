@@ -58,7 +58,12 @@ src/cli/
 - **OAuth fetch 组合：** `oauthFetch` 与 proxy fetch 按 OAuth → proxy → global 链式组合。OAuth 激活时不设 `apiKey`，避免 `Authorization` 头冲突。
 - **Token 过期余量：** `isTokenValid` 使用 30 秒余量提前刷新。
 - **models 端点：** `options.modelsEndpoint` 仅对 `openai-compatible` 类型生效；`anthropic` 类型不支持 OpenAI 协议发现。
-- **Provider options 分层：** 类型特定/行为控制字段（`enableFlatModelLookup`、`modelsEndpoint`、`includeUsage`、`anthropicVersion`、`organization`、`project`、`streamOnly`）统一放在 `provider.options` 中；顶层只保留通用连接/认证/路由字段（`type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`）。
+- **Provider options 分层：** 类型特定/行为控制字段统一放在 `provider.options` 中，但每个 provider 类型有自己的 options schema，Zod 按类型验证：
+  - 通用字段（`streamOnly`、`enableFlatModelLookup`）所有类型共享；
+  - `openai-compatible` 额外支持 `modelsEndpoint`、`includeUsage`；
+  - `anthropic` 额外支持 `anthropicVersion`；
+  - `openai` 额外支持 `organization`、`project`。
+  顶层只保留通用连接/认证/路由字段（`type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`）。旧版顶层配置字段会在加载时抛出明确的迁移错误。
 - **Logger DI：** `createProviderRegistry` 通过依赖注入接收 `Logger`，不耦合日志实现。
 - **Anthropic tool_choice：** 始终是对象格式（`{ type: 'auto' }` 等），不兼容裸字符串。
 - **策略模式：** 每种协议格式实现 `ProtocolStrategy<TRequest>` 接口，封装验证、映射、渲染和错误格式化。Server 端通过 `handleProtocolRequest` 通用函数统一处理，消除三个 handler 的重复逻辑。

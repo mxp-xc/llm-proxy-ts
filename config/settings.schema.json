@@ -349,18 +349,6 @@
                   },
                   "includeUsage": {
                     "type": "boolean"
-                  },
-                  "anthropicVersion": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "organization": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "project": {
-                    "type": "string",
-                    "minLength": 1
                   }
                 },
                 "additionalProperties": false
@@ -596,22 +584,7 @@
                   "enableFlatModelLookup": {
                     "type": "boolean"
                   },
-                  "modelsEndpoint": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "includeUsage": {
-                    "type": "boolean"
-                  },
                   "anthropicVersion": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "organization": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "project": {
                     "type": "string",
                     "minLength": 1
                   }
@@ -847,17 +820,6 @@
                   },
                   "enableFlatModelLookup": {
                     "type": "boolean"
-                  },
-                  "modelsEndpoint": {
-                    "type": "string",
-                    "minLength": 1
-                  },
-                  "includeUsage": {
-                    "type": "boolean"
-                  },
-                  "anthropicVersion": {
-                    "type": "string",
-                    "minLength": 1
                   },
                   "organization": {
                     "type": "string",

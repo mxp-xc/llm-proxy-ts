@@ -55,19 +55,34 @@ export const oauthConfigSchema = z.object({
   authFile: z.string().optional(),
 })
 
-const providerOptionsSchema = z.object({
-  // 行为控制（所有类型通用）
+// 所有 provider 类型共享的行为控制选项
+const commonProviderOptionsSchema = z.object({
   streamOnly: z.boolean().optional(),
   enableFlatModelLookup: z.boolean().optional(),
-  // openai-compatible 特定
-  modelsEndpoint: z.string().min(1).optional(),
-  includeUsage: z.boolean().optional(),
-  // anthropic 特定
-  anthropicVersion: z.string().min(1).optional(),
-  // openai 特定
-  organization: z.string().min(1).optional(),
-  project: z.string().min(1).optional(),
 })
+
+// openai-compatible 特定选项
+const openaiCompatibleOptionsSchema = commonProviderOptionsSchema
+  .extend({
+    modelsEndpoint: z.string().min(1).optional(),
+    includeUsage: z.boolean().optional(),
+  })
+  .strict()
+
+// anthropic 特定选项
+const anthropicOptionsSchema = commonProviderOptionsSchema
+  .extend({
+    anthropicVersion: z.string().min(1).optional(),
+  })
+  .strict()
+
+// openai 特定选项
+const openaiOptionsSchema = commonProviderOptionsSchema
+  .extend({
+    organization: z.string().min(1).optional(),
+    project: z.string().min(1).optional(),
+  })
+  .strict()
 
 const baseProviderFields = {
   apiKey: apiKeySchema,
@@ -75,25 +90,27 @@ const baseProviderFields = {
   plugins: z.array(pluginEntrySchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   oauth: oauthConfigSchema.optional(),
-  options: providerOptionsSchema.optional(),
 }
 
 const openAICompatibleProviderSchema = z.object({
   type: z.literal('openai-compatible'),
   baseURL: z.string().url(),
   ...baseProviderFields,
+  options: openaiCompatibleOptionsSchema.optional(),
 })
 
 const anthropicProviderSchema = z.object({
   type: z.literal('anthropic'),
   baseURL: z.string().url().optional(),
   ...baseProviderFields,
+  options: anthropicOptionsSchema.optional(),
 })
 
 const openaiProviderSchema = z.object({
   type: z.literal('openai'),
   baseURL: z.string().url().optional(),
   ...baseProviderFields,
+  options: openaiOptionsSchema.optional(),
 })
 
 export const providerConfigSchema = z.discriminatedUnion('type', [
@@ -135,7 +152,6 @@ export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>
 /** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
 export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>
 export type OAuthConfig = z.infer<typeof oauthConfigSchema>
-export type ProviderOptions = z.infer<typeof providerOptionsSchema>
 export type OpenAICompatibleProviderConfig = z.infer<typeof openAICompatibleProviderSchema>
 export type AnthropicProviderConfig = z.infer<typeof anthropicProviderSchema>
 export type OpenAIProviderConfig = z.infer<typeof openaiProviderSchema>
@@ -177,6 +193,38 @@ export function resolveEnvPlaceholders(value: unknown): unknown {
   return value
 }
 
+/** 已从 provider 顶层迁移到 `options` 内的字段名 */
+const MIGRATED_PROVIDER_FIELDS = new Set([
+  'enableFlatModelLookup',
+  'modelsEndpoint',
+  'includeUsage',
+  'anthropicVersion',
+  'organization',
+  'project',
+])
+
+/**
+ * 检测旧版配置格式：provider 顶层存在已迁移到 `options` 的字段。
+ * 必须在 Zod 解析之前运行，因为 Zod 默认 strip 模式会静默丢弃这些字段。
+ */
+function checkMigratedTopLevelFields(parsed: unknown): void {
+  const providers = (parsed as Record<string, unknown>)?.providers
+  if (!providers || typeof providers !== 'object') return
+
+  for (const [providerName, provider] of Object.entries(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== 'object') continue
+    for (const key of Object.keys(provider as Record<string, unknown>)) {
+      if (MIGRATED_PROVIDER_FIELDS.has(key)) {
+        throw new Error(
+          `Provider "${providerName}" has a top-level "${key}" field, which was moved into "options" in a recent version. ` +
+            `Please update your config: move "${key}" into the "options" object. ` +
+            `Example: { "options": { "${key}": ${(provider as Record<string, unknown>)[key]} } }`,
+        )
+      }
+    }
+  }
+}
+
 export async function loadSettingsFromFile(path: string): Promise<Settings> {
   const raw = await readFile(path, 'utf8')
   const errors: ParseError[] = []
@@ -186,7 +234,10 @@ export async function loadSettingsFromFile(path: string): Promise<Settings> {
     throw new Error(`Failed to parse JSONC settings: ${errors[0]?.error}`)
   }
 
-  return settingsSchema.parse(resolveEnvPlaceholders(parsed))
+  const resolved = resolveEnvPlaceholders(parsed)
+  checkMigratedTopLevelFields(resolved)
+
+  return settingsSchema.parse(resolved)
 }
 
 export function generateSettingsJsonSchema(): object {

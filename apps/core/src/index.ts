@@ -15,7 +15,6 @@ export type {
   AnthropicProviderConfig,
   OpenAIProviderConfig,
   ProviderConfig,
-  ProviderOptions,
   Settings,
 } from './config.js'
 /** @deprecated 使用 PluginEntry */
