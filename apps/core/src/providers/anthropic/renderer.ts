@@ -200,18 +200,16 @@ export async function* renderAnthropicMessageSSE(input: {
         if (stopChunk) yield stopChunk
 
         const stopReason = mapStopReason(part.finishReason as FinishReason | undefined)
-        const outputTokens =
-          typeof part.totalTokens === 'number'
-            ? part.totalTokens
-            : typeof part.outputTokens === 'number'
-              ? part.outputTokens
-              : 0
+        // AI SDK v6: finish part has totalUsage: LanguageModelUsage (not top-level outputTokens/totalTokens)
+        const totalUsage = (part as Record<string, unknown>).totalUsage as Record<string, unknown> | undefined
+        const inputTokens = typeof totalUsage?.inputTokens === 'number' ? totalUsage.inputTokens : 0
+        const outputTokens = typeof totalUsage?.outputTokens === 'number' ? totalUsage.outputTokens : 0
 
         yield encoder.encode(
           anthropicSSE('message_delta', {
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: outputTokens },
+            usage: { input_tokens: inputTokens, output_tokens: outputTokens },
           }),
         )
 
@@ -255,7 +253,7 @@ export async function* renderAnthropicMessageSSE(input: {
       anthropicSSE('message_delta', {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
-        usage: { output_tokens: 0 },
+        usage: { input_tokens: 0, output_tokens: 0 },
       }),
     )
     yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))

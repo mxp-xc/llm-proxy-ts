@@ -70,7 +70,7 @@ describe('Anthropic Messages renderer', () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hel' }
       yield { type: 'text-delta', text: 'lo' }
-      yield { type: 'finish', finishReason: 'stop', outputTokens: 5 }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
     }
 
     const events = await collectAnthropicSSEEvents(parts())
@@ -100,6 +100,7 @@ describe('Anthropic Messages renderer', () => {
 
     // Verify message_delta
     expect(events[5]!.delta.stop_reason).toBe('end_turn')
+    expect(events[5]!.usage.input_tokens).toBe(10)
     expect(events[5]!.usage.output_tokens).toBe(5)
   })
 
@@ -108,7 +109,7 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'tool-call-start', toolCallId: 'toolu_1', toolName: 'get_weather' }
       yield { type: 'tool-call-args-delta', toolCallId: 'toolu_1', argsTextDelta: '{"city"' }
       yield { type: 'tool-input-delta', toolCallId: 'toolu_1', inputTextDelta: ':"NYC"}' }
-      yield { type: 'finish', finishReason: 'tool-calls', outputTokens: 10 }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 20, outputTokens: 10 } }
     }
 
     const events = await collectAnthropicSSEEvents(parts())
@@ -137,7 +138,7 @@ describe('Anthropic Messages renderer', () => {
   it('renders complete tool-call events (non-streaming input)', async () => {
     async function* parts() {
       yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', input: { city: 'NYC' } }
-      yield { type: 'finish', finishReason: 'tool-calls', outputTokens: 8 }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 15, outputTokens: 8 } }
     }
 
     const events = await collectAnthropicSSEEvents(parts())
@@ -153,7 +154,7 @@ describe('Anthropic Messages renderer', () => {
   it('uses named SSE events format', async () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hi' }
-      yield { type: 'finish', finishReason: 'stop', outputTokens: 1 }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 1 } }
     }
 
     const chunks: string[] = []
