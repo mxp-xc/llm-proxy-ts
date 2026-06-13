@@ -209,7 +209,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         baseURL: provider.baseURL,
         apiKey: resolvedApiKey,
         proxySettings: settings.proxy,
-        modelsEndpoint: provider.modelsEndpoint,
+        modelsEndpoint: provider.options?.modelsEndpoint,
         headers: provider.headers,
         oauthToken,
       })

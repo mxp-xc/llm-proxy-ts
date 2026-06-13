@@ -56,48 +56,44 @@ export const oauthConfigSchema = z.object({
 })
 
 const providerOptionsSchema = z.object({
+  // 行为控制（所有类型通用）
   streamOnly: z.boolean().optional(),
+  enableFlatModelLookup: z.boolean().optional(),
+  // openai-compatible 特定
+  modelsEndpoint: z.string().min(1).optional(),
+  includeUsage: z.boolean().optional(),
+  // anthropic 特定
+  anthropicVersion: z.string().min(1).optional(),
+  // openai 特定
+  organization: z.string().min(1).optional(),
+  project: z.string().min(1).optional(),
 })
 
-const openAICompatibleProviderSchema = z.object({
-  type: z.literal('openai-compatible'),
-  baseURL: z.string().url(),
+const baseProviderFields = {
   apiKey: apiKeySchema,
   headers: z.record(z.string(), z.string()).default({}),
   plugins: z.array(pluginEntrySchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
-  enableFlatModelLookup: z.boolean().optional(),
   oauth: oauthConfigSchema.optional(),
-  modelsEndpoint: z.string().min(1).optional(),
-  includeUsage: z.boolean().optional(),
   options: providerOptionsSchema.optional(),
+}
+
+const openAICompatibleProviderSchema = z.object({
+  type: z.literal('openai-compatible'),
+  baseURL: z.string().url(),
+  ...baseProviderFields,
 })
 
 const anthropicProviderSchema = z.object({
   type: z.literal('anthropic'),
   baseURL: z.string().url().optional(),
-  apiKey: apiKeySchema,
-  headers: z.record(z.string(), z.string()).default({}),
-  plugins: z.array(pluginEntrySchema).default([]),
-  models: z.record(z.string(), modelRouteConfigSchema).default({}),
-  enableFlatModelLookup: z.boolean().optional(),
-  oauth: oauthConfigSchema.optional(),
-  anthropicVersion: z.string().min(1).optional(),
-  options: providerOptionsSchema.optional(),
+  ...baseProviderFields,
 })
 
 const openaiProviderSchema = z.object({
   type: z.literal('openai'),
   baseURL: z.string().url().optional(),
-  apiKey: apiKeySchema,
-  headers: z.record(z.string(), z.string()).default({}),
-  plugins: z.array(pluginEntrySchema).default([]),
-  models: z.record(z.string(), modelRouteConfigSchema).default({}),
-  enableFlatModelLookup: z.boolean().optional(),
-  oauth: oauthConfigSchema.optional(),
-  organization: z.string().min(1).optional(),
-  project: z.string().min(1).optional(),
-  options: providerOptionsSchema.optional(),
+  ...baseProviderFields,
 })
 
 export const providerConfigSchema = z.discriminatedUnion('type', [

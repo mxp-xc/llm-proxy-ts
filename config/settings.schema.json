@@ -284,9 +284,6 @@
                 },
                 "default": {}
               },
-              "enableFlatModelLookup": {
-                "type": "boolean"
-              },
               "oauth": {
                 "type": "object",
                 "properties": {
@@ -337,18 +334,33 @@
                 ],
                 "additionalProperties": false
               },
-              "modelsEndpoint": {
-                "type": "string",
-                "minLength": 1
-              },
-              "includeUsage": {
-                "type": "boolean"
-              },
               "options": {
                 "type": "object",
                 "properties": {
                   "streamOnly": {
                     "type": "boolean"
+                  },
+                  "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "modelsEndpoint": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "includeUsage": {
+                    "type": "boolean"
+                  },
+                  "anthropicVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "organization": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "project": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 },
                 "additionalProperties": false
@@ -525,9 +537,6 @@
                 },
                 "default": {}
               },
-              "enableFlatModelLookup": {
-                "type": "boolean"
-              },
               "oauth": {
                 "type": "object",
                 "properties": {
@@ -578,15 +587,33 @@
                 ],
                 "additionalProperties": false
               },
-              "anthropicVersion": {
-                "type": "string",
-                "minLength": 1
-              },
               "options": {
                 "type": "object",
                 "properties": {
                   "streamOnly": {
                     "type": "boolean"
+                  },
+                  "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "modelsEndpoint": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "includeUsage": {
+                    "type": "boolean"
+                  },
+                  "anthropicVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "organization": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "project": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 },
                 "additionalProperties": false
@@ -762,9 +789,6 @@
                 },
                 "default": {}
               },
-              "enableFlatModelLookup": {
-                "type": "boolean"
-              },
               "oauth": {
                 "type": "object",
                 "properties": {
@@ -815,19 +839,33 @@
                 ],
                 "additionalProperties": false
               },
-              "organization": {
-                "type": "string",
-                "minLength": 1
-              },
-              "project": {
-                "type": "string",
-                "minLength": 1
-              },
               "options": {
                 "type": "object",
                 "properties": {
                   "streamOnly": {
                     "type": "boolean"
+                  },
+                  "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "modelsEndpoint": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "includeUsage": {
+                    "type": "boolean"
+                  },
+                  "anthropicVersion": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "organization": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "project": {
+                    "type": "string",
+                    "minLength": 1
                   }
                 },
                 "additionalProperties": false

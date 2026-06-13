@@ -159,7 +159,7 @@ describe('config', () => {
             "type": "openai-compatible",
             "baseURL": "https://openrouter.ai/api/v1",
             "apiKey": "secret",
-            "enableFlatModelLookup": true,
+            "options": { "enableFlatModelLookup": true },
             "models": {
               "deepseek-r1": { "upstreamModel": "deepseek/deepseek-r1" }
             }
@@ -169,7 +169,7 @@ describe('config', () => {
     )
 
     const settings = await loadSettingsFromFile(settingsPath)
-    expect(settings.providers.openrouter?.enableFlatModelLookup).toBe(true)
+    expect(settings.providers.openrouter?.options?.enableFlatModelLookup).toBe(true)
     expect(settings.routing.enableFlatModelLookup).toBe(false)
   })
 
@@ -185,7 +185,7 @@ describe('config', () => {
             "type": "openai-compatible",
             "baseURL": "https://api.example.com/v1",
             "apiKey": "secret",
-            "modelsEndpoint": "/v1/models",
+            "options": { "modelsEndpoint": "/v1/models" },
             "models": {}
           }
         }
@@ -195,7 +195,7 @@ describe('config', () => {
     const settings = await loadSettingsFromFile(settingsPath)
     const p = settings.providers.custom
     expect(p?.type).toBe('openai-compatible')
-    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBe('/v1/models')
+    if (p?.type === 'openai-compatible') expect(p.options?.modelsEndpoint).toBe('/v1/models')
   })
 
   it('accepts modelsEndpoint as full URL', async () => {
@@ -210,7 +210,7 @@ describe('config', () => {
             "type": "openai-compatible",
             "baseURL": "https://api.example.com/v1",
             "apiKey": "secret",
-            "modelsEndpoint": "https://other.api.com/list",
+            "options": { "modelsEndpoint": "https://other.api.com/list" },
             "models": {}
           }
         }
@@ -220,7 +220,7 @@ describe('config', () => {
     const settings = await loadSettingsFromFile(settingsPath)
     const p = settings.providers.custom
     expect(p?.type).toBe('openai-compatible')
-    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBe('https://other.api.com/list')
+    if (p?.type === 'openai-compatible') expect(p.options?.modelsEndpoint).toBe('https://other.api.com/list')
   })
 
   it('rejects empty modelsEndpoint', async () => {
@@ -235,7 +235,7 @@ describe('config', () => {
             "type": "openai-compatible",
             "baseURL": "https://api.example.com/v1",
             "apiKey": "secret",
-            "modelsEndpoint": "",
+            "options": { "modelsEndpoint": "" },
             "models": {}
           }
         }
@@ -266,7 +266,7 @@ describe('config', () => {
     const settings = await loadSettingsFromFile(settingsPath)
     const p = settings.providers.custom
     expect(p?.type).toBe('openai-compatible')
-    if (p?.type === 'openai-compatible') expect(p.modelsEndpoint).toBeUndefined()
+    if (p?.type === 'openai-compatible') expect(p.options?.modelsEndpoint).toBeUndefined()
   })
 
   it('rejects provider with both oauth and auth plugin targeting it', async () => {

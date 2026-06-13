@@ -23,12 +23,12 @@ export function createOpenAIProvider(
 
   applyProviderAuth(options, selectedApiKey, customFetch, settings.proxy)
 
-  if (provider.organization !== undefined) {
-    options.organization = provider.organization
+  if (provider.options?.organization !== undefined) {
+    options.organization = provider.options.organization
   }
 
-  if (provider.project !== undefined) {
-    options.project = provider.project
+  if (provider.options?.project !== undefined) {
+    options.project = provider.options.project
   }
 
   return createOpenAI(options)

@@ -32,7 +32,7 @@ export function createOpenAICompatibleProvider(
     headers,
     // 让上游在流式响应中返回 usage（stream_options: { include_usage: true }）
     // 可在 provider 配置中设 includeUsage: false 禁用（适用于不支持 stream_options 的上游）
-    includeUsage: provider.includeUsage ?? true,
+    includeUsage: provider.options?.includeUsage ?? true,
   }
 
   applyProviderAuth(options, selectedApiKey, customFetch, settings.proxy)

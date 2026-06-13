@@ -27,14 +27,20 @@
       "type": "openai-compatible",
       "baseURL": "http://example.com/v1",
       "apiKey": ["example-api-key", "${LOCAL_OPENAI_API_KEY_2}"],
-      // Custom models API endpoint (default: /models appended to baseURL).
-      // Relative path: appended to baseURL.
-      // "modelsEndpoint": "/v1/models",
-      // Full URL: used directly, ignoring baseURL.
-      // "modelsEndpoint": "https://other.api.com/list",
-      // Set enableFlatModelLookup to override the routing-level setting per-provider.
-      // If omitted, inherits from routing.enableFlatModelLookup.
-      // "enableFlatModelLookup": false,
+      // "options": {
+      //   // Custom models API endpoint (default: /models appended to baseURL).
+      //   // Relative path: appended to baseURL.
+      //   "modelsEndpoint": "/v1/models",
+      //   // Full URL: used directly, ignoring baseURL.
+      //   // "modelsEndpoint": "https://other.api.com/list",
+      //   // Override the routing-level enableFlatModelLookup setting per-provider.
+      //   // If omitted, inherits from routing.enableFlatModelLookup.
+      //   // "enableFlatModelLookup": false,
+      //   // Set includeUsage: false to disable stream_options (for upstream that doesn't support it).
+      //   // "includeUsage": false,
+      //   // Force all requests through streaming path (for providers that only support streaming).
+      //   // "streamOnly": true,
+      // },
       "plugins": ["vendor_sse_error"],
       "models": {
         "gpt-5.5": {
@@ -81,8 +87,10 @@
     //   "apiKey": "${ANTHROPIC_API_KEY}",
     //   // baseURL is optional — defaults to https://api.anthropic.com/v1
     //   // "baseURL": "https://api.anthropic.com/v1",
-    //   // Override the default anthropic-version header:
-    //   // "anthropicVersion": "2023-06-01",
+    //   // "options": {
+    //   //   // Override the default anthropic-version header:
+    //   //   "anthropicVersion": "2023-06-01",
+    //   // },
     //   "models": {
     //     "sonnet": { "upstreamModel": "claude-sonnet-4-5" },
     //     "haiku": { "upstreamModel": "claude-haiku-4-5" },

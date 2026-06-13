@@ -80,14 +80,14 @@ describe('RoutingTable', () => {
 
   it('resolves flat aliases when enabled per-provider but globally off', () => {
     const s = settings(false)
-    s.providers.openrouter!.enableFlatModelLookup = true
+    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
     const table = RoutingTable.fromSettings(s)
     expect(table.resolve('default').upstreamModel).toBe('openrouter/chat')
   })
 
   it('rejects flat lookup when disabled per-provider but globally on', () => {
     const s = settings(true)
-    s.providers.openrouter!.enableFlatModelLookup = false
+    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: false }
     const table = RoutingTable.fromSettings(s)
     try {
       table.resolve('default')
@@ -99,7 +99,7 @@ describe('RoutingTable', () => {
 
   it('allows same flat name across providers when only one has flat lookup enabled', () => {
     const s = settings(false)
-    s.providers.openrouter!.enableFlatModelLookup = true
+    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
     s.providers.deepseek = {
       type: 'openai-compatible',
       baseURL: 'https://api.deepseek.com/v1',
@@ -141,7 +141,7 @@ describe('RoutingTable', () => {
       apiKey: 'secret',
       headers: {},
       plugins: [],
-      enableFlatModelLookup: false,
+      options: { enableFlatModelLookup: false },
       models: { other: { upstreamModel: 'deepseek/other', aliases: [], headers: {}, plugins: [] } },
     }
     const table = RoutingTable.fromSettings(s)
@@ -155,7 +155,7 @@ describe('RoutingTable', () => {
 
   it('returns unknown_model for flat selector when some providers have flat lookup enabled but none match', () => {
     const s = settings(false)
-    s.providers.openrouter!.enableFlatModelLookup = true
+    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
     const table = RoutingTable.fromSettings(s)
     try {
       table.resolve('nonexistent')

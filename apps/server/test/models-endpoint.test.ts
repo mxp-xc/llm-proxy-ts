@@ -243,7 +243,7 @@ describe('GET /v1/models/:id', () => {
         apiKey: 'secret',
         headers: {},
         plugins: [],
-        enableFlatModelLookup: true,
+        options: { enableFlatModelLookup: true },
         models: {
           chat: {
             upstreamModel: 'openrouter/auto',
@@ -289,7 +289,7 @@ describe('GET /v1/models/:id', () => {
         apiKey: 'secret',
         headers: {},
         plugins: [],
-        enableFlatModelLookup: true,
+        options: { enableFlatModelLookup: true },
         models: {
           chat: { upstreamModel: 'openrouter/auto', aliases: [], headers: {}, plugins: [] },
         },

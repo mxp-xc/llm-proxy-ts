@@ -12,8 +12,8 @@ export function createAnthropicProvider(
 ) {
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
 
-  if (provider.anthropicVersion !== undefined) {
-    headers['anthropic-version'] = provider.anthropicVersion
+  if (provider.options?.anthropicVersion !== undefined) {
+    headers['anthropic-version'] = provider.options.anthropicVersion
   }
 
   const options: Parameters<typeof createAnthropic>[0] = {
