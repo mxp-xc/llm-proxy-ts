@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import type { SSEOutput } from '../shared/sse-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
@@ -10,6 +11,7 @@ import type {
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
+  OpenAIResponseStreamEvent,
 } from './types.js'
 
 export type {
@@ -43,7 +45,7 @@ function mapResponseStatus(
 export async function* renderOpenAIResponseSSE(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
-}): AsyncIterable<Uint8Array> {
+}): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
@@ -67,17 +69,8 @@ export async function* renderOpenAIResponseSSE(input: {
   const toolCallsWithArgumentDeltas = new Set<string>()
   const toolCallStartEmitted = new Set<string>()
 
-  function sse(event: string, data: Record<string, unknown>): Uint8Array {
-    return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-  }
-
   function nextSeq(): number {
     return ++sequenceNumber
-  }
-
-  function closeTextContentPart(): Generator<Uint8Array, void, unknown> | undefined {
-    // no-op helper — yields are done inline below
-    return undefined
   }
 
   try {
@@ -85,16 +78,16 @@ export async function* renderOpenAIResponseSSE(input: {
       // Start response on first part
       if (!responseStarted) {
         responseStarted = true
-        yield sse('response.created', {
+        yield { event: 'response.created', data: {
           type: 'response.created',
           sequence_number: nextSeq(),
           response: { id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000), model: input.model, status: 'in_progress', output: [] },
-        })
-        yield sse('response.in_progress', {
+        } }
+        yield { event: 'response.in_progress', data: {
           type: 'response.in_progress',
           sequence_number: nextSeq(),
           response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
-        })
+        } }
       }
 
       if (part.type === 'text-delta') {
@@ -103,44 +96,44 @@ export async function* renderOpenAIResponseSSE(input: {
         if (!outputItemStarted) {
           outputItemStarted = true
           const msgId = newMsgId()
-          yield sse('response.output_item.added', {
+          yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: msgId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
-          })
-          yield sse('response.content_part.added', {
+          } }
+          yield { event: 'response.content_part.added', data: {
             type: 'response.content_part.added',
             sequence_number: nextSeq(),
             item_id: msgId,
             output_index: outputIndex,
             content_index: 0,
             part: { type: 'output_text', text: '', annotations: [] },
-          })
+          } }
           contentPartStarted = true
         }
 
         fullText += delta
-        yield sse('response.output_text.delta', {
+        yield { event: 'response.output_text.delta', data: {
           type: 'response.output_text.delta',
           sequence_number: nextSeq(),
           item_id: currentMsgId,
           output_index: outputIndex,
           content_index: 0,
           delta,
-        })
+        } }
       }
 
       if (part.type === 'reasoning-start') {
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield sse('response.output_item.added', {
+          yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-          })
+          } }
         }
       }
 
@@ -151,39 +144,39 @@ export async function* renderOpenAIResponseSSE(input: {
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield sse('response.output_item.added', {
+          yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-          })
+          } }
         }
 
         fullReasoning += delta
-        yield sse('response.reasoning_summary_text.delta', {
+        yield { event: 'response.reasoning_summary_text.delta', data: {
           type: 'response.reasoning_summary_text.delta',
           sequence_number: nextSeq(),
           item_id: reasoningItemId,
           output_index: outputIndex,
           delta,
-        })
+        } }
       }
 
       if (part.type === 'reasoning-end') {
         if (reasoningItemStarted) {
-          yield sse('response.reasoning_summary_text.done', {
+          yield { event: 'response.reasoning_summary_text.done', data: {
             type: 'response.reasoning_summary_text.done',
             sequence_number: nextSeq(),
             item_id: reasoningItemId,
             output_index: outputIndex,
             text: fullReasoning,
-          })
-          yield sse('response.output_item.done', {
+          } }
+          yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
-          })
+          } }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
@@ -197,32 +190,32 @@ export async function* renderOpenAIResponseSSE(input: {
         toolCallFcIds.set(toolCallId, fcId)
 
         if (contentPartStarted) {
-          yield sse('response.output_text.done', {
+          yield { event: 'response.output_text.done', data: {
             type: 'response.output_text.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             text: fullText,
-          })
-          yield sse('response.content_part.done', {
+          } }
+          yield { event: 'response.content_part.done', data: {
             type: 'response.content_part.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             part: { type: 'output_text', text: fullText, annotations: [] },
-          })
-          yield sse('response.output_item.done', {
+          } }
+          yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(), output_index: outputIndex,
             item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          })
+          } }
           outputIndex++
           outputItemStarted = false
           contentPartStarted = false
         }
 
-        yield sse('response.output_item.added', {
+        yield { event: 'response.output_item.added', data: {
           type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
           item: { id: fcId, type: 'function_call', status: 'in_progress', call_id: toolCallId, name: toolName, arguments: '' },
-        })
+        } }
         toolCallStartEmitted.add(toolCallId)
       }
 
@@ -234,10 +227,10 @@ export async function* renderOpenAIResponseSSE(input: {
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
-        yield sse('response.function_call_arguments.delta', {
+        yield { event: 'response.function_call_arguments.delta', data: {
           type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
           item_id: fcId, output_index: outputIndex, delta: argsDelta,
-        })
+        } }
       }
 
       if (part.type === 'tool-call') {
@@ -246,23 +239,23 @@ export async function* renderOpenAIResponseSSE(input: {
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
         if (contentPartStarted) {
-          yield sse('response.output_text.done', {
+          yield { event: 'response.output_text.done', data: {
             type: 'response.output_text.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             text: fullText,
-          })
-          yield sse('response.content_part.done', {
+          } }
+          yield { event: 'response.content_part.done', data: {
             type: 'response.content_part.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             part: { type: 'output_text', text: fullText, annotations: [] },
-          })
-          yield sse('response.output_item.done', {
+          } }
+          yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(), output_index: outputIndex,
             item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          })
+          } }
           outputIndex++
           outputItemStarted = false
           contentPartStarted = false
@@ -272,27 +265,27 @@ export async function* renderOpenAIResponseSSE(input: {
         const args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)
 
         if (!toolCallStartEmitted.has(toolCallId)) {
-          yield sse('response.output_item.added', {
+          yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
             item: { id: fcId, type: 'function_call', status: 'in_progress', call_id: toolCallId, name: toolName, arguments: '' },
-          })
+          } }
         }
 
         if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
-          yield sse('response.function_call_arguments.delta', {
+          yield { event: 'response.function_call_arguments.delta', data: {
             type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
             item_id: fcId, output_index: outputIndex, delta: args,
-          })
+          } }
         }
 
-        yield sse('response.function_call_arguments.done', {
+        yield { event: 'response.function_call_arguments.done', data: {
           type: 'response.function_call_arguments.done', sequence_number: nextSeq(),
           item_id: fcId, output_index: outputIndex, arguments: args,
-        })
-        yield sse('response.output_item.done', {
+        } }
+        yield { event: 'response.output_item.done', data: {
           type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
           item: { id: fcId, type: 'function_call', status: 'completed', call_id: toolCallId, name: toolName, arguments: args },
-        })
+        } }
 
         streamedToolCalls.push({
           id: fcId, type: 'function_call', status: 'completed',
@@ -303,44 +296,44 @@ export async function* renderOpenAIResponseSSE(input: {
 
       if (part.type === 'finish') {
         if (reasoningItemStarted) {
-          yield sse('response.reasoning_summary_text.done', {
+          yield { event: 'response.reasoning_summary_text.done', data: {
             type: 'response.reasoning_summary_text.done',
             sequence_number: nextSeq(),
             item_id: reasoningItemId,
             output_index: outputIndex,
             text: fullReasoning,
-          })
-          yield sse('response.output_item.done', {
+          } }
+          yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
-          })
+          } }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
         }
         if (contentPartStarted) {
-          yield sse('response.output_text.done', {
+          yield { event: 'response.output_text.done', data: {
             type: 'response.output_text.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             text: fullText,
-          })
-          yield sse('response.content_part.done', {
+          } }
+          yield { event: 'response.content_part.done', data: {
             type: 'response.content_part.done',
             sequence_number: nextSeq(),
             item_id: currentMsgId, output_index: outputIndex, content_index: 0,
             part: { type: 'output_text', text: fullText, annotations: [] },
-          })
+          } }
         }
         if (outputItemStarted) {
-          yield sse('response.output_item.done', {
+          yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(),
             output_index: outputIndex,
             item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          })
+          } }
         }
 
         const finishReason = part.finishReason
@@ -382,21 +375,21 @@ export async function* renderOpenAIResponseSSE(input: {
           }
         }
 
-        yield sse('response.completed', {
+        yield { event: 'response.completed', data: {
           type: 'response.completed',
           sequence_number: nextSeq(),
           response: completedResponse,
-        })
+        } }
       }
 
       if (part.type === 'error') {
         const errorData = part.error
-        yield sse('response.error', {
+        yield { event: 'response.error', data: {
           type: 'response.error',
           sequence_number: nextSeq(),
           error: { type: 'server_error', message: toErrorMessage(errorData) },
-        })
-        yield sse('response.completed', {
+        } }
+        yield { event: 'response.completed', data: {
           type: 'response.completed',
           sequence_number: nextSeq(),
           response: {
@@ -405,18 +398,18 @@ export async function* renderOpenAIResponseSSE(input: {
             instructions: null, temperature: null, top_p: null, tool_choice: null,
             tools: [], parallel_tool_calls: true, truncation: 'disabled',
           },
-        })
+        } }
         return
       }
 
       if (part.type === 'openai-error') {
         const errorData = part.body
-        yield sse('response.error', {
+        yield { event: 'response.error', data: {
           type: 'response.error',
           sequence_number: nextSeq(),
           error: { type: 'server_error', message: toErrorMessage(errorData) },
-        })
-        yield sse('response.completed', {
+        } }
+        yield { event: 'response.completed', data: {
           type: 'response.completed',
           sequence_number: nextSeq(),
           response: {
@@ -425,17 +418,17 @@ export async function* renderOpenAIResponseSSE(input: {
             instructions: null, temperature: null, top_p: null, tool_choice: null,
             tools: [], parallel_tool_calls: true, truncation: 'disabled',
           },
-        })
+        } }
         return
       }
     }
   } catch (error) {
-    yield sse('response.error', {
+    yield { event: 'response.error', data: {
       type: 'response.error',
       sequence_number: nextSeq(),
       error: { type: 'server_error', message: toErrorMessage(error) },
-    })
-    yield sse('response.completed', {
+    } }
+    yield { event: 'response.completed', data: {
       type: 'response.completed',
       sequence_number: nextSeq(),
       response: {
@@ -444,7 +437,7 @@ export async function* renderOpenAIResponseSSE(input: {
         instructions: null, temperature: null, top_p: null, tool_choice: null,
         tools: [], parallel_tool_calls: true, truncation: 'disabled',
       },
-    })
+    } }
     return
   }
 }

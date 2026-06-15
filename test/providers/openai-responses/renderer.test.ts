@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
+import type { SSEOutput } from '../../../src/providers/shared/sse-utils.js'
+import type { OpenAIResponseStreamEvent } from '../../../src/providers/openai-responses/types.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../../../src/providers/openai-responses/renderer.js'
 
 describe('renderOpenAIResponse', () => {
@@ -173,24 +175,10 @@ async function* textStream() {
   }
 }
 
-async function collectSSEEvents(stream: AsyncIterable<unknown>): Promise<Array<{ event: string; data: any }>> {
-  const chunks: string[] = []
-  for await (const chunk of stream) {
-    chunks.push(new TextDecoder().decode(chunk as Uint8Array))
-  }
-  const raw = chunks.join('')
+async function collectSSEEvents(stream: AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>>): Promise<Array<{ event: string; data: any }>> {
   const results: Array<{ event: string; data: any }> = []
-  const parts = raw.split('\n\n').filter(p => p.trim())
-  for (const part of parts) {
-    const lines = part.split('\n')
-    const eventLine = lines.find(l => l.startsWith('event: '))
-    const dataLine = lines.find(l => l.startsWith('data: '))
-    if (eventLine && dataLine) {
-      results.push({
-        event: eventLine.slice('event: '.length),
-        data: JSON.parse(dataLine.slice('data: '.length)),
-      })
-    }
+  for await (const frame of stream) {
+    if ('event' in frame) results.push({ event: frame.event, data: frame.data })
   }
   return results
 }

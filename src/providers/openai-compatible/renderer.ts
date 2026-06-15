@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import type { SSEOutput } from '../shared/sse-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import type { ProxyStreamPart } from '../shared/aisdk-types.js'
-import type { OpenAIChatCompletion } from './types.js'
+import type { OpenAIChatCompletion, OpenAIChatChunk, OpenAIChatStreamError } from './types.js'
 
 export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChatCompletion {
   const message: OpenAIChatCompletion['choices'][number]['message'] = {
@@ -48,8 +49,7 @@ export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChat
 export async function* renderOpenAIChatCompletionSSE(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
-}): AsyncIterable<Uint8Array> {
-  const encoder = new TextEncoder()
+}): AsyncIterable<SSEOutput<OpenAIChatChunk | OpenAIChatStreamError>> {
   const id = `chatcmpl_${randomUUID()}`
   const created = Math.floor(Date.now() / 1000)
   const toolIndexes = new Map<string, number>()
@@ -57,21 +57,21 @@ export async function* renderOpenAIChatCompletionSSE(input: {
 
   for await (const part of input.stream) {
     if (part.type === 'text-delta') {
-      yield encoder.encode(
-        sse({
+      yield {
+        data: {
           id,
           object: 'chat.completion.chunk',
           created,
           model: input.model,
           choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
-        }),
-      )
+        },
+      }
     } else if (part.type === 'tool-input-start') {
       const toolCallId = part.id
       const toolName = part.toolName
 
-      yield encoder.encode(
-        sse({
+      yield {
+        data: {
           id,
           object: 'chat.completion.chunk',
           created,
@@ -92,15 +92,15 @@ export async function* renderOpenAIChatCompletionSSE(input: {
               finish_reason: null,
             },
           ],
-        }),
-      )
+        },
+      }
     } else if (part.type === 'tool-input-delta') {
       const toolCallId = part.id
       const argumentsDelta = part.delta
       toolCallsWithArgumentDeltas.add(toolCallId)
 
-      yield encoder.encode(
-        sse({
+      yield {
+        data: {
           id,
           object: 'chat.completion.chunk',
           created,
@@ -119,8 +119,8 @@ export async function* renderOpenAIChatCompletionSSE(input: {
               finish_reason: null,
             },
           ],
-        }),
-      )
+        },
+      }
     } else if (part.type === 'tool-call') {
       const toolCallId = part.toolCallId
       const toolName = part.toolName
@@ -129,8 +129,8 @@ export async function* renderOpenAIChatCompletionSSE(input: {
         functionCall.arguments = JSON.stringify(part.args ?? {})
       }
 
-      yield encoder.encode(
-        sse({
+      yield {
+        data: {
           id,
           object: 'chat.completion.chunk',
           created,
@@ -151,11 +151,11 @@ export async function* renderOpenAIChatCompletionSSE(input: {
               finish_reason: null,
             },
           ],
-        }),
-      )
+        },
+      }
     } else if (part.type === 'finish') {
       const usage = extractUsageFromFinishPart(part)
-      const finishChunk: Record<string, unknown> = {
+      const finishChunk: OpenAIChatChunk = {
         id,
         object: 'chat.completion.chunk',
         created,
@@ -171,31 +171,27 @@ export async function* renderOpenAIChatCompletionSSE(input: {
           total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
         }
       }
-      yield encoder.encode(sse(finishChunk))
+      yield { data: finishChunk }
     } else if (part.type === 'openai-error') {
-      yield encoder.encode(sse(part.body))
-      yield encoder.encode('data: [DONE]\n\n')
+      yield { data: part.body as OpenAIChatStreamError }
+      yield { type: 'done' as const }
       return
     } else if (part.type === 'error') {
-      yield encoder.encode(
-        sse({
+      yield {
+        data: {
           error: {
             type: 'upstream_error',
             code: 'stream_internal_error',
             message: toErrorMessage(part.error),
           },
-        }),
-      )
-      yield encoder.encode('data: [DONE]\n\n')
+        },
+      }
+      yield { type: 'done' as const }
       return
     }
   }
 
-  yield encoder.encode('data: [DONE]\n\n')
-}
-
-function sse(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`
+  yield { type: 'done' as const }
 }
 
 function mapFinishReason(reason?: FinishReason | unknown, toolCalls?: unknown[]): string | null {

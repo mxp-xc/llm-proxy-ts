@@ -21,9 +21,9 @@ export interface ProtocolContext {
   ) => LanguageModel
 }
 
-export async function handleProtocolRequest<TRequest>(
+export async function handleProtocolRequest<TRequest, TSSEData>(
   c: Context<AppEnv>,
-  strategy: ProtocolStrategy<TRequest>,
+  strategy: ProtocolStrategy<TRequest, TSSEData>,
   ctx: ProtocolContext,
 ): Promise<Response> {
   const { formatErrors } = strategy
