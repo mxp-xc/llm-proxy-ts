@@ -14,49 +14,14 @@ import {
 import type { OAuthConfig } from '../../src/config.js'
 import type { OAuthToken } from '../../src/oauth/types.js'
 import { OAuthError } from '../../src/oauth/types.js'
-
-function makeToken(overrides: Partial<OAuthToken> = {}): OAuthToken {
-  return {
-    accessToken: 'test-access-token',
-    refreshToken: 'test-refresh-token',
-    expiresAt: Date.now() / 1000 + 3600,
-    tokenType: 'Bearer',
-    scope: 'read write',
-    ...overrides,
-  }
-}
-
-function makeExpiredToken(overrides: Partial<OAuthToken> = {}): OAuthToken {
-  return makeToken({ expiresAt: Date.now() / 1000 - 100, ...overrides })
-}
-
-const authCodeConfig: OAuthConfig = {
-  flow: 'authorization_code',
-  clientId: 'test-client-id',
-  clientSecret: 'test-client-secret',
-  tokenUrl: 'https://auth.example.com/oauth2/token',
-  authorizationUrl: 'https://auth.example.com/oauth2/authorize',
-  scopes: ['api.read'],
-}
-
-const clientCredentialsConfig: OAuthConfig = {
-  flow: 'client_credentials',
-  clientId: 'test-client-id',
-  clientSecret: 'test-client-secret',
-  tokenUrl: 'https://auth.example.com/oauth2/token',
-  scopes: ['api.read'],
-}
-
-function mockTokenResponse(overrides: Record<string, unknown> = {}) {
-  return {
-    access_token: 'new-access-token',
-    expires_in: 3600,
-    token_type: 'Bearer',
-    refresh_token: 'new-refresh-token',
-    scope: 'api.read',
-    ...overrides,
-  }
-}
+import {
+  makeToken,
+  makeExpiredToken,
+  authCodeConfig,
+  clientCredentialsConfig,
+  mockTokenResponse,
+  createMemoryPersistence,
+} from '../helpers/oauth.js'
 
 describe('token-manager', () => {
   describe('isTokenValid', () => {
@@ -113,18 +78,13 @@ describe('token-manager', () => {
   })
 
   describe('refreshAccessToken', () => {
-    afterEach(() => {
-      vi.restoreAllMocks()
-    })
-
     it('sends refresh_token grant and returns new token', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockTokenResponse()),
       })
-      vi.stubGlobal('fetch', mockFetch)
 
-      const token = await refreshAccessToken(authCodeConfig, 'existing-refresh-token')
+      const token = await refreshAccessToken(authCodeConfig, 'existing-refresh-token', mockFetch)
 
       expect(token.accessToken).toBe('new-access-token')
       expect(token.refreshToken).toBe('new-refresh-token')
@@ -138,18 +98,15 @@ describe('token-manager', () => {
     })
 
     it('throws OAuthError on HTTP error', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: false,
-          status: 400,
-          text: () => Promise.resolve('bad request'),
-        }),
-      )
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve('bad request'),
+      })
 
-      await expect(refreshAccessToken(authCodeConfig, 'rt')).rejects.toThrow(OAuthError)
+      await expect(refreshAccessToken(authCodeConfig, 'rt', mockFetch)).rejects.toThrow(OAuthError)
       try {
-        await refreshAccessToken(authCodeConfig, 'rt')
+        await refreshAccessToken(authCodeConfig, 'rt', mockFetch)
       } catch (error) {
         expect(error).toBeInstanceOf(OAuthError)
         expect((error as OAuthError).code).toBe('refresh_failed')
@@ -157,25 +114,20 @@ describe('token-manager', () => {
     })
 
     it('throws OAuthError on network error', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network error')))
+      const mockFetch = vi.fn().mockRejectedValue(new Error('network error'))
 
-      await expect(refreshAccessToken(authCodeConfig, 'rt')).rejects.toThrow(OAuthError)
+      await expect(refreshAccessToken(authCodeConfig, 'rt', mockFetch)).rejects.toThrow(OAuthError)
     })
   })
 
   describe('fetchClientCredentialsToken', () => {
-    afterEach(() => {
-      vi.restoreAllMocks()
-    })
-
     it('sends client_credentials grant', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
       })
-      vi.stubGlobal('fetch', mockFetch)
 
-      const token = await fetchClientCredentialsToken(clientCredentialsConfig)
+      const token = await fetchClientCredentialsToken(clientCredentialsConfig, mockFetch)
 
       expect(token.accessToken).toBe('new-access-token')
       expect(token.refreshToken).toBeUndefined()
@@ -186,21 +138,17 @@ describe('token-manager', () => {
   })
 
   describe('exchangeAuthorizationCode', () => {
-    afterEach(() => {
-      vi.restoreAllMocks()
-    })
-
     it('sends authorization_code grant with redirect_uri', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockTokenResponse()),
       })
-      vi.stubGlobal('fetch', mockFetch)
 
       const token = await exchangeAuthorizationCode(
         authCodeConfig,
         'auth-code-123',
         'http://localhost:8000/oauth/callback',
+        mockFetch,
       )
 
       expect(token.accessToken).toBe('new-access-token')
@@ -212,45 +160,28 @@ describe('token-manager', () => {
     })
 
     it('throws OAuthError on exchange failure', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: false,
-          status: 401,
-          text: () => Promise.resolve('unauthorized'),
-        }),
-      )
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve('unauthorized'),
+      })
 
       await expect(
         exchangeAuthorizationCode(
           authCodeConfig,
           'bad-code',
           'http://localhost:8000/oauth/callback',
+          mockFetch,
         ),
       ).rejects.toThrow(OAuthError)
     })
   })
 
   describe('TokenManager', () => {
-    let tempDir: string
-    let authFilePath: string
-
-    beforeEach(async () => {
-      tempDir = await mkdtemp(join(tmpdir(), 'oauth-manager-test-'))
-      authFilePath = join(tempDir, 'auth.json')
-    })
-
-    afterEach(async () => {
-      vi.restoreAllMocks()
-      await rm(tempDir, { recursive: true, force: true })
-    })
-
-    it('load reads from auth.json', async () => {
-      const { saveAuthFile, mergeTokenStore } = await import('../../src/oauth/token-store.js')
+    it('load reads from persistence', async () => {
       const token = makeToken()
-      await saveAuthFile(authFilePath, mergeTokenStore({}, { 'my-provider': token }))
-
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence({ 'my-provider': token })
+      const manager = new TokenManager(persistence)
       await manager.load()
 
       expect(manager.getStatus('my-provider', authCodeConfig)).toBe('valid')
@@ -258,10 +189,8 @@ describe('token-manager', () => {
 
     it('ensureValidToken returns cached valid token', async () => {
       const token = makeToken()
-      const { saveAuthFile, mergeTokenStore } = await import('../../src/oauth/token-store.js')
-      await saveAuthFile(authFilePath, mergeTokenStore({}, { p: token }))
-
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence({ p: token })
+      const manager = new TokenManager(persistence)
       await manager.load()
 
       const result = await manager.ensureValidToken('p', authCodeConfig)
@@ -270,18 +199,13 @@ describe('token-manager', () => {
 
     it('ensureValidToken refreshes expired token with refreshToken', async () => {
       const expiredToken = makeExpiredToken()
-      const { saveAuthFile, mergeTokenStore } = await import('../../src/oauth/token-store.js')
-      await saveAuthFile(authFilePath, mergeTokenStore({}, { p: expiredToken }))
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
 
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: () => Promise.resolve(mockTokenResponse()),
-        }),
-      )
-
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence({ p: expiredToken })
+      const manager = new TokenManager(persistence, mockFetch)
       await manager.load()
 
       const result = await manager.ensureValidToken('p', authCodeConfig)
@@ -289,15 +213,13 @@ describe('token-manager', () => {
     })
 
     it('ensureValidToken fetches new token for client_credentials', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
-        }),
-      )
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
+      })
 
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence()
+      const manager = new TokenManager(persistence, mockFetch)
       await manager.load()
 
       const result = await manager.ensureValidToken('p', clientCredentialsConfig)
@@ -306,7 +228,8 @@ describe('token-manager', () => {
     })
 
     it('ensureValidToken throws OAuthError for auth_code without token', async () => {
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence()
+      const manager = new TokenManager(persistence)
       await manager.load()
 
       try {
@@ -318,16 +241,14 @@ describe('token-manager', () => {
       }
     })
 
-    it('exchangeCode persists token to auth.json', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: () => Promise.resolve(mockTokenResponse()),
-        }),
-      )
+    it('exchangeCode persists token via persistence', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
 
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence()
+      const manager = new TokenManager(persistence, mockFetch)
       await manager.load()
 
       const token = await manager.exchangeCode(
@@ -339,29 +260,25 @@ describe('token-manager', () => {
 
       expect(token.accessToken).toBe('new-access-token')
 
-      // Verify persisted
-      const { loadAuthFile, extractTokenStore } = await import('../../src/oauth/token-store.js')
-      const data = await loadAuthFile(authFilePath)
-      const store = extractTokenStore(data)
-      expect(store['p']!.accessToken).toBe('new-access-token')
+      // Verify persisted via persistence
+      const stored = await persistence.load()
+      expect(stored['p']!.accessToken).toBe('new-access-token')
     })
 
     it('deduplicates concurrent ensureValidToken calls', async () => {
       let callCount = 0
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockImplementation(async () => {
-          callCount++
-          // Simulate slow response
-          await new Promise((r) => setTimeout(r, 50))
-          return {
-            ok: true,
-            json: () => Promise.resolve(mockTokenResponse()),
-          }
-        }),
-      )
+      const mockFetch = vi.fn().mockImplementation(async () => {
+        callCount++
+        // Simulate slow response
+        await new Promise((r) => setTimeout(r, 50))
+        return {
+          ok: true,
+          json: () => Promise.resolve(mockTokenResponse()),
+        }
+      })
 
-      const manager = new TokenManager(authFilePath)
+      const persistence = createMemoryPersistence()
+      const manager = new TokenManager(persistence, mockFetch)
       await manager.load()
 
       // Fire 5 concurrent calls for same provider
@@ -379,20 +296,86 @@ describe('token-manager', () => {
       expect(callCount).toBe(1)
     })
 
+    it('persists refreshed token via persistence', async () => {
+      const expiredToken = makeExpiredToken()
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
+
+      const persistence = createMemoryPersistence({ p: expiredToken })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+      await manager.ensureValidToken('p', authCodeConfig)
+
+      // Read directly from persistence to verify
+      const stored = await persistence.load()
+      expect(stored['p']!.accessToken).toBe('new-access-token')
+    })
+  })
+
+  // ── fromFile 集成测试（文件系统持久化） ──────────────────────
+
+  describe('TokenManager.fromFile', () => {
+    let tempDir: string
+    let authFilePath: string
+
+    beforeEach(async () => {
+      tempDir = await mkdtemp(join(tmpdir(), 'oauth-manager-test-'))
+      authFilePath = join(tempDir, 'auth.json')
+    })
+
+    afterEach(async () => {
+      await rm(tempDir, { recursive: true, force: true })
+    })
+
+    it('load reads from auth.json', async () => {
+      const { saveAuthFile, mergeTokenStore } = await import('../../src/oauth/token-store.js')
+      const token = makeToken()
+      await saveAuthFile(authFilePath, mergeTokenStore({}, { 'my-provider': token }))
+
+      const manager = TokenManager.fromFile(authFilePath)
+      await manager.load()
+
+      expect(manager.getStatus('my-provider', authCodeConfig)).toBe('valid')
+    })
+
+    it('exchangeCode persists token to auth.json', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
+
+      const manager = TokenManager.fromFile(authFilePath, mockFetch)
+      await manager.load()
+
+      const token = await manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'auth-code-123',
+        'http://localhost:8000/oauth/callback',
+      )
+
+      expect(token.accessToken).toBe('new-access-token')
+
+      // Verify persisted to file
+      const { loadAuthFile, extractTokenStore } = await import('../../src/oauth/token-store.js')
+      const data = await loadAuthFile(authFilePath)
+      const store = extractTokenStore(data)
+      expect(store['p']!.accessToken).toBe('new-access-token')
+    })
+
     it('persists refreshed token to auth.json', async () => {
       const expiredToken = makeExpiredToken()
       const { saveAuthFile, mergeTokenStore } = await import('../../src/oauth/token-store.js')
       await saveAuthFile(authFilePath, mergeTokenStore({}, { p: expiredToken }))
 
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: () => Promise.resolve(mockTokenResponse()),
-        }),
-      )
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
 
-      const manager = new TokenManager(authFilePath)
+      const manager = TokenManager.fromFile(authFilePath, mockFetch)
       await manager.load()
       await manager.ensureValidToken('p', authCodeConfig)
 

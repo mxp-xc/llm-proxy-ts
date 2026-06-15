@@ -1,18 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../src/index.js'
 import { RoutingError, RoutingTable } from '../src/routing.js'
+import { makeSettings } from './helpers/settings.js'
 
 // Import to register vendor_sse_error as a built-in plugin
 import '../src/plugins/vendor-sse-error.js'
 
 function settings(enableFlatModelLookup = false): Settings {
-  return {
-    service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-    requestTimeoutMs: 30000,
-    proxy: null,
-    routing: { enableFlatModelLookup },
-    plugins: [],
-    providers: {
+  return makeSettings(
+    {
       openrouter: {
         type: 'openai-compatible',
         baseURL: 'https://openrouter.ai/api/v1',
@@ -29,7 +25,8 @@ function settings(enableFlatModelLookup = false): Settings {
         },
       },
     },
-  }
+    { routing: { enableFlatModelLookup } },
+  )
 }
 
 describe('RoutingTable', () => {

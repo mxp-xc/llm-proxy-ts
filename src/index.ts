@@ -53,6 +53,7 @@ export {
   exchangeAuthorizationCode,
   TokenManager,
 } from './oauth/index.js'
+export type { TokenPersistence } from './oauth/index.js'
 
 // Plugin exports
 export type {
@@ -66,7 +67,7 @@ export type {
   DiscoveredModelList,
   ResolvedPlugin,
 } from './plugins/types.js'
-export { PluginRegistry } from './plugins/registry.js'
+export { PluginRegistry, validatePluginConstraints } from './plugins/registry.js'
 export { registerBuiltInPlugin, loadPlugin } from './plugins/loader.js'
 export { inspectVendorSseError } from './plugins/vendor-sse-error.js'
 export { createSimpleAuthFetch } from './plugins/helpers.js'
@@ -104,4 +105,4 @@ export type { RouteMatch } from './routing.js'
 
 // Provider registry exports
 export { createProviderRegistry, createOAuthFetch } from './providers/registry.js'
-export type { ProviderRegistry, KeySelection, LanguageModelResult } from './providers/registry.js'
+export type { ProviderRegistry, KeySelection, LanguageModelResult, ProviderFactory } from './providers/registry.js'

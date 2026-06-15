@@ -220,8 +220,7 @@ function checkMigratedTopLevelFields(parsed: unknown): void {
   }
 }
 
-export async function loadSettingsFromFile(path: string): Promise<Settings> {
-  const raw = await readFile(path, 'utf8')
+export function parseAndValidateSettings(raw: string): Settings {
   const errors: ParseError[] = []
   const parsed = parse(raw, errors, { allowTrailingComma: true })
 
@@ -233,6 +232,11 @@ export async function loadSettingsFromFile(path: string): Promise<Settings> {
   checkMigratedTopLevelFields(resolved)
 
   return settingsSchema.parse(resolved)
+}
+
+export async function loadSettingsFromFile(path: string): Promise<Settings> {
+  const raw = await readFile(path, 'utf8')
+  return parseAndValidateSettings(raw)
 }
 
 export function generateSettingsJsonSchema(): object {

@@ -8,18 +8,8 @@ import {
   extractTokenStore,
   mergeTokenStore,
 } from '../../src/oauth/token-store.js'
-import type { OAuthToken, TokenStore } from '../../src/oauth/types.js'
-
-function makeToken(overrides: Partial<OAuthToken> = {}): OAuthToken {
-  return {
-    accessToken: 'test-access-token',
-    refreshToken: 'test-refresh-token',
-    expiresAt: Date.now() / 1000 + 3600,
-    tokenType: 'Bearer',
-    scope: 'read write',
-    ...overrides,
-  }
-}
+import type { TokenStore } from '../../src/oauth/types.js'
+import { makeToken } from '../helpers/oauth.js'
 
 describe('token-store', () => {
   let tempDir: string
@@ -111,40 +101,6 @@ describe('token-store', () => {
       const data = await loadAuthFile(path)
       const merged = mergeTokenStore(data, { 'my-provider': token })
       expect(merged._plugins).toEqual({ myPlugin: { key: 'value' } })
-    })
-  })
-
-  describe('getToken (inline)', () => {
-    it('returns token for existing provider', () => {
-      const token = makeToken()
-      const store: TokenStore = { 'my-provider': token }
-      expect(store['my-provider']).toBe(token)
-    })
-
-    it('returns undefined for missing provider', () => {
-      const store: TokenStore = {}
-      expect(store['unknown']).toBeUndefined()
-    })
-  })
-
-  describe('setToken (inline)', () => {
-    it('adds a token to the store', () => {
-      const store: TokenStore = {}
-      const token = makeToken()
-      const result: TokenStore = { ...store, 'new-provider': token }
-
-      expect(result['new-provider']).toBe(token)
-      expect(store).toEqual({}) // original unchanged
-    })
-
-    it('overwrites existing token', () => {
-      const old = makeToken({ accessToken: 'old' })
-      const store: TokenStore = { p: old }
-      const newToken = makeToken({ accessToken: 'new' })
-      const result: TokenStore = { ...store, p: newToken }
-
-      expect(result['p']).toBe(newToken)
-      expect(store['p']).toBe(old) // original unchanged
     })
   })
 })

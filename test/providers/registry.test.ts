@@ -1,57 +1,30 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { Settings, Logger } from '../../src/index.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { Settings } from '../../src/index.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
+import type { ProviderFactory } from '../../src/providers/registry.js'
+import { makeSettings } from '../helpers/settings.js'
+import { createCapturingLogger } from '../helpers/registry.js'
 
-const capturedLogs: unknown[] = []
+const { logger: mockLogger, capturedLogs } = createCapturingLogger()
 
-const mockLogger: Logger = {
-  info(payload: unknown) {
-    capturedLogs.push(payload)
+/**
+ * Stub factory that captures arguments and returns lightweight model objects,
+ * avoiding real AI SDK provider construction.
+ */
+const stubFactory = {
+  createOpenAICompatible(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined) {
+    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
   },
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return mockLogger
+  createAnthropic(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined) {
+    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
   },
-}
+  createOpenAI(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined) {
+    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
+  },
+} as unknown as ProviderFactory
 
-vi.mock('../../src/providers/shared/provider-factory.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../src/providers/shared/provider-factory.js')>()
-  return {
-    ...original,
-    createOpenAICompatibleProvider(
-      providerName: string,
-      provider: unknown,
-      settings: unknown,
-      modelHeaders: unknown,
-      selectedApiKey: string | undefined,
-    ) {
-      return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
-    },
-    sanitizeHeaders(headers: Record<string, string>) {
-      const sensitiveHeaders = new Set([
-        'authorization',
-        'proxy-authorization',
-        'x-api-key',
-        'api-key',
-        'apikey',
-        'api_key',
-      ])
-      return Object.fromEntries(
-        Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())),
-      )
-    },
-  }
-})
-
-const settings: Settings = {
-  service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-  requestTimeoutMs: 30000,
-  proxy: { url: 'http://127.0.0.1:7890', verify: false },
-  routing: { enableFlatModelLookup: false },
-  plugins: [],
-  providers: {
+const settings = makeSettings(
+  {
     openrouter: {
       type: 'openai-compatible',
       baseURL: 'https://openrouter.ai/api/v1',
@@ -69,7 +42,8 @@ const settings: Settings = {
       models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
     },
   },
-}
+  { proxy: { url: 'http://127.0.0.1:7890', verify: false } },
+)
 
 describe('provider registry', () => {
   afterEach(() => {
@@ -77,7 +51,7 @@ describe('provider registry', () => {
   })
 
   it('creates openai-compatible language models and filters auth header overrides', async () => {
-    const registry = await createProviderRegistry(settings, undefined, mockLogger)
+    const registry = await createProviderRegistry(settings, undefined, mockLogger, undefined, undefined, stubFactory)
     const result = registry.languageModel('openrouter', 'openrouter/chat', {
       AUTHORIZATION: 'Bearer also-wrong',
       'X-API-Key': 'also-wrong',
@@ -104,6 +78,9 @@ describe('provider registry', () => {
       },
       undefined,
       mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
     )
 
     const r1 = registry.languageModel('openrouter', 'openrouter/chat', {})
@@ -130,6 +107,9 @@ describe('provider registry', () => {
       },
       undefined,
       mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
     )
 
     const r1 = registry.languageModel('openrouter', 'openrouter/chat', {})
@@ -156,6 +136,9 @@ describe('provider registry', () => {
       },
       undefined,
       mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
     )
 
     const result = registry.languageModel('openrouter', 'openrouter/chat', {})

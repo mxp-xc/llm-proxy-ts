@@ -123,7 +123,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   let tokenManager: TokenManager | undefined
   const hasOAuthProviders = selectedProviders.some((name) => settings.providers[name]?.oauth)
   if (hasOAuthProviders) {
-    tokenManager = new TokenManager(authFilePath)
+    tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
   }
 

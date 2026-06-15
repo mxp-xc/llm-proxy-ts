@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import type { Settings, OAuthConfig } from '../../src/index.js'
+import type { OAuthConfig } from '../../src/index.js'
 import { TokenManager, OAuthError, createProviderRegistry } from '../../src/index.js'
+import type { ProviderFactory } from '../../src/providers/registry.js'
+import { makeSettings } from '../helpers/settings.js'
 
 const oauthConfig: OAuthConfig = {
   flow: 'client_credentials',
@@ -13,60 +15,45 @@ const oauthConfig: OAuthConfig = {
   scopes: [],
 }
 
-function makeSettings(providers: Settings['providers'] = {}): Settings {
-  return {
-    service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-    requestTimeoutMs: 30000,
-    proxy: null,
-    routing: { enableFlatModelLookup: false },
-    plugins: [],
-    providers,
-  }
-}
+/**
+ * Captured options from the stub factory for assertion.
+ */
+const capturedOptions: Array<{
+  providerName: string
+  selectedApiKey: string | undefined
+  hasOauthFetch: boolean
+}> = []
 
-const mocks = vi.hoisted(() => ({
-  capturedOptions: [] as Array<{
-    providerName: string
-    selectedApiKey: string | undefined
-    hasOauthFetch: boolean
-  }>,
-}))
-
-vi.mock('../../src/providers/shared/provider-factory.js', async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import('../../src/providers/shared/provider-factory.js')>()
-  return {
-    ...original,
-    createOpenAICompatibleProvider(
-      providerName: string,
-      _provider: unknown,
-      _settings: unknown,
-      _modelHeaders: unknown,
-      selectedApiKey: string | undefined,
-      oauthFetch?: unknown,
-    ) {
-      mocks.capturedOptions.push({
-        providerName,
-        selectedApiKey,
-        hasOauthFetch: oauthFetch !== undefined,
-      })
-      return (upstreamModel: string) => ({ upstreamModel, providerName })
-    },
-    sanitizeHeaders(headers: Record<string, string>) {
-      const sensitiveHeaders = new Set([
-        'authorization',
-        'proxy-authorization',
-        'x-api-key',
-        'api-key',
-        'apikey',
-        'api_key',
-      ])
-      return Object.fromEntries(
-        Object.entries(headers).filter(([key]) => !sensitiveHeaders.has(key.toLowerCase())),
-      )
-    },
-  }
-})
+/**
+ * Stub factory that captures call arguments and returns lightweight model objects,
+ * replacing the previous vi.mock of provider-factory.js.
+ */
+const stubFactory = {
+  createOpenAICompatible(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    capturedOptions.push({
+      providerName,
+      selectedApiKey,
+      hasOauthFetch: customFetch !== undefined,
+    })
+    return (upstreamModel: string) => ({ upstreamModel, providerName })
+  },
+  createAnthropic(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    capturedOptions.push({
+      providerName,
+      selectedApiKey,
+      hasOauthFetch: customFetch !== undefined,
+    })
+    return (upstreamModel: string) => ({ upstreamModel, providerName })
+  },
+  createOpenAI(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    capturedOptions.push({
+      providerName,
+      selectedApiKey,
+      hasOauthFetch: customFetch !== undefined,
+    })
+    return (upstreamModel: string) => ({ upstreamModel, providerName })
+  },
+} as unknown as ProviderFactory
 
 describe('OAuth provider registry', () => {
   let tempDir: string
@@ -79,7 +66,7 @@ describe('OAuth provider registry', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks()
-    mocks.capturedOptions.length = 0
+    capturedOptions.length = 0
     await rm(tempDir, { recursive: true, force: true })
   })
 
@@ -109,17 +96,17 @@ describe('OAuth provider registry', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager)
+    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
     const result = registry.languageModel('oauth-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
-    expect(mocks.capturedOptions).toHaveLength(1)
-    expect(mocks.capturedOptions[0]!.providerName).toBe('oauth-provider')
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true)
+    expect(capturedOptions).toHaveLength(1)
+    expect(capturedOptions[0]!.providerName).toBe('oauth-provider')
+    expect(capturedOptions[0]!.selectedApiKey).toBeUndefined()
+    expect(capturedOptions[0]!.hasOauthFetch).toBe(true)
   })
 
   it('uses static apiKey when provider has no oauth', async () => {
@@ -134,13 +121,13 @@ describe('OAuth provider registry', () => {
       },
     })
 
-    const registry = await createProviderRegistry(settings)
+    const registry = await createProviderRegistry(settings, undefined, undefined, undefined, undefined, stubFactory)
     const result = registry.languageModel('static-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
-    expect(mocks.capturedOptions).toHaveLength(1)
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBe('static-key')
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(false)
+    expect(capturedOptions).toHaveLength(1)
+    expect(capturedOptions[0]!.selectedApiKey).toBe('static-key')
+    expect(capturedOptions[0]!.hasOauthFetch).toBe(false)
   })
 
   it('oauth takes precedence when both apiKey and oauth are configured', async () => {
@@ -169,16 +156,16 @@ describe('OAuth provider registry', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager)
+    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
     const result = registry.languageModel('both-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
-    expect(mocks.capturedOptions).toHaveLength(1)
-    expect(mocks.capturedOptions[0]!.selectedApiKey).toBeUndefined()
-    expect(mocks.capturedOptions[0]!.hasOauthFetch).toBe(true)
+    expect(capturedOptions).toHaveLength(1)
+    expect(capturedOptions[0]!.selectedApiKey).toBeUndefined()
+    expect(capturedOptions[0]!.hasOauthFetch).toBe(true)
   })
 
   it('throws OAuthError when auth is required for auth_code flow', async () => {
@@ -203,14 +190,14 @@ describe('OAuth provider registry', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
     // The registry creates a model with oauthFetch. When the model is used,
     // the fetch function calls ensureValidToken which throws OAuthError.
     // But languageModel() itself doesn't call ensureValidToken — the fetch
     // function does at request time. So languageModel() succeeds here.
-    const registry = await createProviderRegistry(settings, tokenManager)
+    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
     const result = registry.languageModel('auth-code-provider', 'm', {})
     expect(result.model).toBeTruthy()
   })

@@ -10,12 +10,75 @@ import type {
 } from './types.js'
 import type { Settings } from '../config.js'
 import { loadPlugin } from './loader.js'
+import { noopLogger } from '../types.js'
 import type { Logger } from '../types.js'
 import { createPluginStore } from './store-adapter.js'
 
 // ─── Re-exports ───────────────────────────────────────────────────
 
 export type { ResolvedPlugin } from './types.js'
+
+// ─── Plugin constraint validation ────────────────────────────────
+
+/**
+ * Validate plugin constraint rules against a loaded plugin list and settings.
+ *
+ * This is a pure function that can be tested independently of `fromSettings`.
+ * It checks:
+ * 1. Auth plugins at global level must not target providers with oauth configured
+ * 2. Auth plugins are not allowed at provider level
+ * 3. Auth plugins are not allowed at model level
+ *
+ * @param globalPlugins - Resolved plugins from the global `settings.plugins` array
+ * @param providerPlugins - Resolved plugins keyed by provider ID
+ * @param modelPlugins - Resolved plugins keyed by provider ID then model key
+ * @param settings - The full Settings object (used for oauth conflict check)
+ * @throws Error if any constraint is violated
+ */
+export function validatePluginConstraints(
+  globalPlugins: ResolvedPlugin[],
+  providerPlugins: Map<string, ResolvedPlugin[]>,
+  modelPlugins: Map<string, Map<string, ResolvedPlugin[]>>,
+  settings: Settings,
+): void {
+  // 1. Global auth plugins must not target providers with oauth
+  for (const rp of globalPlugins) {
+    if (isAuthPlugin(rp.plugin)) {
+      for (const providerId of rp.providers) {
+        const provider = settings.providers[providerId]
+        if (provider?.oauth) {
+          throw new Error(
+            `Provider '${providerId}' cannot have both oauth and auth plugin '${rp.plugin.name}'; use one or the other`,
+          )
+        }
+      }
+    }
+  }
+
+  // 2. Provider level must not contain AuthPlugin
+  for (const [_providerId, plugins] of providerPlugins) {
+    for (const rp of plugins) {
+      if (isAuthPlugin(rp.plugin)) {
+        throw new Error(
+          `Auth plugin '${rp.plugin.name}' cannot be configured at provider level; configure it in global plugins instead`,
+        )
+      }
+    }
+  }
+
+  // 3. Model level must not contain AuthPlugin
+  for (const [_providerId, modelMap] of modelPlugins) {
+    for (const [_modelKey, plugins] of modelMap) {
+      for (const rp of plugins) {
+        if (isAuthPlugin(rp.plugin)) {
+          throw new Error(
+            `Auth plugin '${rp.plugin.name}' cannot be configured at model level; configure it in global plugins instead`,
+          )
+        }
+      }
+    }
+  }
+}
 
 // ─── PluginRegistry ──────────────────────────────────────────────
 
@@ -54,18 +117,6 @@ export class PluginRegistry {
         ...(modulePath !== undefined ? { modulePath } : {}),
       }
 
-      // 全局 auth 插件与 provider 的 oauth 互斥检查
-      if (isAuthPlugin(plugin)) {
-        for (const providerId of rp.providers) {
-          const provider = settings.providers[providerId]
-          if (provider?.oauth) {
-            throw new Error(
-              `Provider '${providerId}' cannot have both oauth and auth plugin '${plugin.name}'; use one or the other`,
-            )
-          }
-        }
-      }
-
       log.info(
         { plugin: plugin.name, module: modulePath, providers: rp.providers },
         'global plugin loaded',
@@ -78,13 +129,6 @@ export class PluginRegistry {
       const resolved: ResolvedPlugin[] = []
       for (const entry of provider.plugins) {
         const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-
-        // Provider 级不允许 AuthPlugin
-        if (isAuthPlugin(plugin)) {
-          throw new Error(
-            `Auth plugin '${plugin.name}' cannot be configured at provider level; configure it in global plugins instead`,
-          )
-        }
 
         resolved.push({
           plugin,
@@ -111,13 +155,6 @@ export class PluginRegistry {
         for (const entry of modelConfig.plugins) {
           const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
 
-          // Model 级不允许 AuthPlugin
-          if (isAuthPlugin(plugin)) {
-            throw new Error(
-              `Auth plugin '${plugin.name}' cannot be configured at model level; configure it in global plugins instead`,
-            )
-          }
-
           resolved.push({
             plugin,
             config: entry.config,
@@ -137,6 +174,9 @@ export class PluginRegistry {
         }
       }
     }
+
+    // 4. 校验约束
+    validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)
 
     return new PluginRegistry(globalPlugins, providerPlugins, modelPlugins, settings, settingsDir)
   }
@@ -320,16 +360,6 @@ function isProxyPlugin(plugin: Plugin): plugin is ProxyPlugin {
 }
 
 // ─── No-op defaults ──────────────────────────────────────────────
-
-const noopLogger: Logger = {
-  info() {},
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return noopLogger
-  },
-}
 
 const noopStore: PluginStore = {
   async get() {

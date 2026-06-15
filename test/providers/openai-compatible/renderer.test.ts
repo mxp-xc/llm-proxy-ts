@@ -4,6 +4,7 @@ import {
   renderOpenAIChatCompletion,
   renderOpenAIChatCompletionSSE,
 } from '../../../src/providers/openai-compatible/renderer.js'
+import { collectSSEEvents } from '../../helpers/sse.js'
 
 describe('OpenAI chat renderer', () => {
   it('renders text completions', () => {
@@ -95,6 +96,22 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
     }
 
+    const stream = renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
+    const events = await collectSSEEvents(stream)
+
+    // Verify text deltas present in raw data
+    const dataJsons = events.map((e) => JSON.stringify(e.data))
+    expect(dataJsons.some((j) => j.includes('"hel"'))).toBe(true)
+    expect(dataJsons.some((j) => j.includes('"lo"'))).toBe(true)
+
+    // Verify usage in the finish event
+    const finishEvent = events.find((e: any) => e.data?.choices?.[0]?.finish_reason === 'stop')
+    expect(finishEvent!.data.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
+
+    // Verify [DONE] sentinel
     const chunks: string[] = []
     for await (const chunk of renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
@@ -102,19 +119,7 @@ describe('OpenAI chat renderer', () => {
     })) {
       chunks.push(new TextDecoder().decode(chunk))
     }
-
-    expect(chunks.join('')).toContain('"content":"hel"')
-    expect(chunks.join('')).toContain('"content":"lo"')
     expect(chunks.at(-1)).toBe('data: [DONE]\n\n')
-
-    // Verify usage in the finish chunk
-    const events = chunks
-      .join('')
-      .split('\n\n')
-      .filter((e) => e.startsWith('data: {'))
-      .map((e) => JSON.parse(e.slice('data: '.length)))
-    const finishEvent = events.find((e: any) => e.choices?.[0]?.finish_reason === 'stop')
-    expect(finishEvent.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
   })
 
   it('omits usage in SSE finish chunk when usage is all zeros', async () => {
@@ -123,21 +128,13 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'stop' }
     }
 
-    const chunks: string[] = []
-    for await (const chunk of renderOpenAIChatCompletionSSE({
+    const stream = renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
       stream: parts() as AsyncIterable<ProxyStreamPart>,
-    })) {
-      chunks.push(new TextDecoder().decode(chunk))
-    }
-
-    const events = chunks
-      .join('')
-      .split('\n\n')
-      .filter((e) => e.startsWith('data: {'))
-      .map((e) => JSON.parse(e.slice('data: '.length)))
-    const finishEvent = events.find((e: any) => e.choices?.[0]?.finish_reason === 'stop')
-    expect(finishEvent.usage).toBeUndefined()
+    })
+    const events = await collectSSEEvents(stream)
+    const finishEvent = events.find((e: any) => e.data?.choices?.[0]?.finish_reason === 'stop')
+    expect(finishEvent!.data.usage).toBeUndefined()
   })
 
   it('uses upstream totalTokens in SSE finish chunk when available', async () => {
@@ -146,21 +143,13 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 20 } }
     }
 
-    const chunks: string[] = []
-    for await (const chunk of renderOpenAIChatCompletionSSE({
+    const stream = renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
       stream: parts() as AsyncIterable<ProxyStreamPart>,
-    })) {
-      chunks.push(new TextDecoder().decode(chunk))
-    }
-
-    const events = chunks
-      .join('')
-      .split('\n\n')
-      .filter((e) => e.startsWith('data: {'))
-      .map((e) => JSON.parse(e.slice('data: '.length)))
-    const finishEvent = events.find((e: any) => e.choices?.[0]?.finish_reason === 'stop')
-    expect(finishEvent.usage.total_tokens).toBe(20)
+    })
+    const events = await collectSSEEvents(stream)
+    const finishEvent = events.find((e: any) => e.data?.choices?.[0]?.finish_reason === 'stop')
+    expect(finishEvent!.data.usage.total_tokens).toBe(20)
   })
 
   it('keeps a stable SSE tool call index across complete tool call events', async () => {
@@ -180,13 +169,18 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
+    const events = await collectSSEEvents(stream)
     const toolCalls = events
-      .flatMap((event) => event.choices)
-      .flatMap((choice) => choice.delta.tool_calls ?? [])
+      .flatMap((event) => event.data?.choices ?? [])
+      .flatMap((choice: any) => choice.delta?.tool_calls ?? [])
 
-    expect(toolCalls.map((toolCall) => toolCall.index)).toEqual([0, 0])
-    expect(events.at(-1)?.choices[0]?.finish_reason).toBe('tool_calls')
+    expect(toolCalls.map((toolCall: any) => toolCall.index)).toEqual([0, 0])
+    const lastEvent = events.at(-1)
+    expect(lastEvent!.data?.choices?.[0]?.finish_reason).toBe('tool_calls')
   })
 
   it('renders complete tool call arguments when no argument deltas were emitted', async () => {
@@ -201,10 +195,14 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
+    const events = await collectSSEEvents(stream)
     const toolCalls = events
-      .flatMap((event) => event.choices)
-      .flatMap((choice) => choice.delta.tool_calls ?? [])
+      .flatMap((event) => event.data?.choices ?? [])
+      .flatMap((choice: any) => choice.delta?.tool_calls ?? [])
 
     expect(toolCalls).toMatchObject([
       { index: 0, id: 'call_1', type: 'function', function: { name: 'get_weather' } },
@@ -231,10 +229,14 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
+    const events = await collectSSEEvents(stream)
     const toolCalls = events
-      .flatMap((event) => event.choices)
-      .flatMap((choice) => choice.delta.tool_calls ?? [])
+      .flatMap((event) => event.data?.choices ?? [])
+      .flatMap((choice: any) => choice.delta?.tool_calls ?? [])
 
     expect(toolCalls).toMatchObject([
       { index: 0, id: 'call_1', type: 'function', function: { name: 'get_weather' } },
@@ -255,10 +257,14 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
+    const events = await collectSSEEvents(stream)
     const toolCalls = events
-      .flatMap((event) => event.choices)
-      .flatMap((choice) => choice.delta.tool_calls ?? [])
+      .flatMap((event) => event.data?.choices ?? [])
+      .flatMap((choice: any) => choice.delta?.tool_calls ?? [])
 
     expect(toolCalls).toMatchObject([
       { index: 0, id: 'call_1', type: 'function', function: { name: 'get_weather' } },
@@ -269,16 +275,3 @@ describe('OpenAI chat renderer', () => {
     expect(toolCalls.at(-1)?.function).not.toHaveProperty('arguments')
   })
 })
-
-async function collectSseEvents(stream: AsyncIterable<ProxyStreamPart>): Promise<Array<any>> {
-  const chunks: string[] = []
-  for await (const chunk of renderOpenAIChatCompletionSSE({ model: 'openrouter/chat', stream })) {
-    chunks.push(new TextDecoder().decode(chunk))
-  }
-
-  return chunks
-    .join('')
-    .split('\n\n')
-    .filter((event) => event.startsWith('data: {'))
-    .map((event) => JSON.parse(event.slice('data: '.length)))
-}

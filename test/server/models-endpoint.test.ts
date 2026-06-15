@@ -1,28 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createApp } from '../../src/server/app.js'
-import type { Settings, ProviderRegistry } from '../../src/index.js'
+import type { Settings } from '../../src/index.js'
+import { makeSettings } from '../helpers/settings.js'
+import { stubRegistry } from '../helpers/registry.js'
 
-const stubRegistry: ProviderRegistry = {
-  languageModel() {
-    return { model: {} as never }
-  },
-  debugProviderConfig() {
-    return {} as never
-  },
-}
-
-function makeSettings(
+function makeSettingsWithFlatLookup(
   providers: Settings['providers'] = {},
   enableFlatModelLookup = false,
 ): Settings {
-  return {
-    service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-    requestTimeoutMs: 30000,
-    proxy: null,
-    routing: { enableFlatModelLookup },
-    plugins: [],
-    providers,
-  }
+  return makeSettings(providers, { routing: { enableFlatModelLookup } })
 }
 
 const singleProvider: Settings['providers'] = {
@@ -113,7 +99,7 @@ describe('GET /v1/models', () => {
 
   it('includes flat model names and aliases when enableFlatModelLookup is on', async () => {
     const app = createApp({
-      settings: makeSettings(singleProvider, true),
+      settings: makeSettingsWithFlatLookup(singleProvider, true),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models')
@@ -129,7 +115,7 @@ describe('GET /v1/models', () => {
 
   it('excludes flat names when enableFlatModelLookup is off', async () => {
     const app = createApp({
-      settings: makeSettings(singleProvider, false),
+      settings: makeSettingsWithFlatLookup(singleProvider, false),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models')
@@ -195,7 +181,7 @@ describe('GET /v1/models/:id', () => {
 
   it('resolves flat model name when enableFlatModelLookup is on', async () => {
     const app = createApp({
-      settings: makeSettings(singleProvider, true),
+      settings: makeSettingsWithFlatLookup(singleProvider, true),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models/chat')
@@ -211,7 +197,7 @@ describe('GET /v1/models/:id', () => {
 
   it('resolves alias when enableFlatModelLookup is on', async () => {
     const app = createApp({
-      settings: makeSettings(singleProvider, true),
+      settings: makeSettingsWithFlatLookup(singleProvider, true),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models/default')
@@ -227,7 +213,7 @@ describe('GET /v1/models/:id', () => {
 
   it('returns 404 for flat name when enableFlatModelLookup is off', async () => {
     const app = createApp({
-      settings: makeSettings(singleProvider, false),
+      settings: makeSettingsWithFlatLookup(singleProvider, false),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models/chat')
@@ -265,7 +251,7 @@ describe('GET /v1/models/:id', () => {
       },
     }
     const app = createApp({
-      settings: makeSettings(providers, false),
+      settings: makeSettingsWithFlatLookup(providers, false),
       providerRegistry: stubRegistry,
     })
     const response = await app.request('/v1/models')
@@ -306,7 +292,7 @@ describe('GET /v1/models/:id', () => {
       },
     }
     const app = createApp({
-      settings: makeSettings(providers, false),
+      settings: makeSettingsWithFlatLookup(providers, false),
       providerRegistry: stubRegistry,
     })
 

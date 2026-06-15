@@ -3,19 +3,12 @@ import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { createApp, type ModelGateway } from '../../src/server/app.js'
-import type { Settings, ProviderRegistry } from '../../src/index.js'
+import type { Settings } from '../../src/index.js'
 import { loadEnvironmentFiles, resolveSettingsPath, inspectVendorSseError } from '../../src/index.js'
 import { redact, safeProxyHost } from '../../src/server/logging.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
-
-const stubRegistry: ProviderRegistry = {
-  languageModel() {
-    return { model: {} as never }
-  },
-  debugProviderConfig() {
-    return {} as never
-  },
-}
+import { makeSettings } from '../helpers/settings.js'
+import { stubRegistry } from '../helpers/registry.js'
 
 describe('logging redaction', () => {
   it('redacts known secret fields recursively', () => {
@@ -188,25 +181,18 @@ describe('environment file loading', () => {
   })
 })
 
-const testSettings: Settings = {
-  service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-  requestTimeoutMs: 30000,
-  proxy: null,
-  routing: { enableFlatModelLookup: false },
-  plugins: [],
-  providers: {
-    openrouter: {
-      type: 'openai-compatible',
-      baseURL: 'https://openrouter.ai/api/v1',
-      apiKey: 'secret',
-      headers: {},
-      plugins: [
-        { name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] },
-      ],
-      models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
-    },
+const testSettings = makeSettings({
+  openrouter: {
+    type: 'openai-compatible',
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: 'secret',
+    headers: {},
+    plugins: [
+      { name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] },
+    ],
+    models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
   },
-}
+})
 
 async function* streamError(): AsyncIterable<unknown> {
   yield {

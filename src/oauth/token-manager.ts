@@ -7,6 +7,17 @@ import { loadAuthFile, extractTokenStore, saveAuthFile, mergeTokenStore } from '
 const EXPIRY_MARGIN_SECONDS = 30
 
 /**
+ * Token 持久化抽象，解耦 TokenManager 与文件系统。
+ *
+ * - `load()` 返回纯 TokenStore（不含 _plugins 等非 OAuth 数据）
+ * - `save()` 负责合并回完整持久化存储，保留非 OAuth 字段
+ */
+export interface TokenPersistence {
+  load(): Promise<TokenStore>
+  save(store: TokenStore): Promise<void>
+}
+
+/**
  * 检查 token 是否仍然有效（未过期）。
  */
 export function isTokenValid(token: OAuthToken): boolean {
@@ -51,6 +62,7 @@ export function classifyStatus(token: OAuthToken | undefined, config: OAuthConfi
 export async function refreshAccessToken(
   config: OAuthConfig,
   refreshToken: string,
+  fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -64,7 +76,7 @@ export async function refreshAccessToken(
   }
 
   try {
-    const response = await fetch(config.tokenUrl, {
+    const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -88,7 +100,10 @@ export async function refreshAccessToken(
 /**
  * 使用 client_credentials 获取 token。
  */
-export async function fetchClientCredentialsToken(config: OAuthConfig): Promise<OAuthToken> {
+export async function fetchClientCredentialsToken(
+  config: OAuthConfig,
+  fetchFn: typeof globalThis.fetch = globalThis.fetch,
+): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
     client_id: config.clientId,
@@ -100,7 +115,7 @@ export async function fetchClientCredentialsToken(config: OAuthConfig): Promise<
   }
 
   try {
-    const response = await fetch(config.tokenUrl, {
+    const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -131,6 +146,7 @@ export async function exchangeAuthorizationCode(
   config: OAuthConfig,
   code: string,
   redirectUri: string,
+  fetchFn: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -141,7 +157,7 @@ export async function exchangeAuthorizationCode(
   })
 
   try {
-    const response = await fetch(config.tokenUrl, {
+    const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -192,21 +208,43 @@ function parseTokenResponse(data: OAuthTokenResponse): OAuthToken {
 /**
  * Token 生命周期管理器。
  *
- * - 持有内存缓存 + 持久化到 auth.json
+ * - 持有内存缓存 + 通过 TokenPersistence 持久化
  * - 并发请求自动去重（同一 provider 同时只做一次刷新）
  */
 export class TokenManager {
   private store: TokenStore = {}
   private refreshLocks = new Map<string, Promise<OAuthToken>>()
 
-  constructor(private authFilePath: string) {}
+  constructor(
+    private persistence: TokenPersistence,
+    private fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  ) {}
 
   /**
-   * 启动时从 auth.json 加载 token。
+   * 从 auth.json 文件创建 TokenManager（便捷工厂方法）。
+   *
+   * 内部创建基于文件系统的 TokenPersistence 实现，
+   * 保持与原构造函数相同的外部行为。
+   */
+  static fromFile(authFilePath: string, fetchFn?: typeof globalThis.fetch): TokenManager {
+    const persistence: TokenPersistence = {
+      async load(): Promise<TokenStore> {
+        const data = await loadAuthFile(authFilePath)
+        return extractTokenStore(data)
+      },
+      async save(store: TokenStore): Promise<void> {
+        const data = await loadAuthFile(authFilePath)
+        await saveAuthFile(authFilePath, mergeTokenStore(data, store))
+      },
+    }
+    return new TokenManager(persistence, fetchFn)
+  }
+
+  /**
+   * 启动时从持久化存储加载 token。
    */
   async load(): Promise<void> {
-    const data = await loadAuthFile(this.authFilePath)
-    this.store = extractTokenStore(data)
+    this.store = await this.persistence.load()
   }
 
   /**
@@ -257,10 +295,9 @@ export class TokenManager {
     code: string,
     redirectUri: string,
   ): Promise<OAuthToken> {
-    const token = await exchangeAuthorizationCode(config, code, redirectUri)
+    const token = await exchangeAuthorizationCode(config, code, redirectUri, this.fetchFn)
     this.store = { ...this.store, [providerName]: token }
-    const data = await loadAuthFile(this.authFilePath)
-    await saveAuthFile(this.authFilePath, mergeTokenStore(data, this.store))
+    await this.persistence.save(this.store)
     return token
   }
 
@@ -272,9 +309,9 @@ export class TokenManager {
     let token: OAuthToken
 
     if (config.flow === 'client_credentials') {
-      token = await fetchClientCredentialsToken(config)
+      token = await fetchClientCredentialsToken(config, this.fetchFn)
     } else if (currentToken?.refreshToken) {
-      token = await refreshAccessToken(config, currentToken.refreshToken)
+      token = await refreshAccessToken(config, currentToken.refreshToken, this.fetchFn)
     } else {
       throw new OAuthError(
         'auth_required',
@@ -283,8 +320,7 @@ export class TokenManager {
     }
 
     this.store = { ...this.store, [providerName]: token }
-    const data = await loadAuthFile(this.authFilePath)
-    await saveAuthFile(this.authFilePath, mergeTokenStore(data, this.store))
+    await this.persistence.save(this.store)
     return token
   }
 }

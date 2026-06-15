@@ -1,19 +1,69 @@
 import type { LanguageModel } from 'ai'
 import type { Settings, OAuthConfig, ProviderConfig } from '../config.js'
+import type { OpenAICompatibleProviderConfig } from '../config.js'
+import type { AnthropicProviderConfig } from '../config.js'
+import type { OpenAIProviderConfig } from '../config.js'
 import type { TokenManager } from '../oauth/index.js'
+import { noopLogger } from '../types.js'
 import type { Logger } from '../types.js'
 import type { PluginRegistry } from '../plugins/registry.js'
-import { createOpenAICompatibleProvider, sanitizeHeaders } from './shared/provider-factory.js'
+import {
+  createOpenAICompatibleProvider,
+  sanitizeHeaders,
+} from './shared/provider-factory.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
 import { createOpenAIProvider } from './openai/provider.js'
 
-const noopLogger: Logger = {
-  info() {},
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return noopLogger
+// ─── ProviderFactory interface ──────────────────────────────────
+
+/**
+ * Injectable factory that creates provider-specific AI SDK model factories.
+ * Used to decouple `createProviderRegistry` from concrete provider implementations,
+ * enabling dependency injection in tests without module-level mocking.
+ */
+export interface ProviderFactory {
+  createOpenAICompatible(
+    providerName: string,
+    provider: OpenAICompatibleProviderConfig,
+    settings: Settings,
+    modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ): (upstreamModel: string) => LanguageModel
+
+  createAnthropic(
+    providerName: string,
+    provider: AnthropicProviderConfig,
+    settings: Settings,
+    modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ): (upstreamModel: string) => LanguageModel
+
+  createOpenAI(
+    providerName: string,
+    provider: OpenAIProviderConfig,
+    settings: Settings,
+    modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ): (upstreamModel: string) => LanguageModel
+}
+
+/** Default factory using the real provider implementations. */
+const defaultFactory: ProviderFactory = {
+  createOpenAICompatible: createOpenAICompatibleProvider,
+  createAnthropic: createAnthropicProvider,
+  createOpenAI(providerName, provider, settings, modelHeaders, selectedApiKey, customFetch) {
+    const openaiProvider = createOpenAIProvider(
+      providerName,
+      provider,
+      settings,
+      modelHeaders,
+      selectedApiKey,
+      customFetch,
+    )
+    return (upstreamModel) => openaiProvider.responses(upstreamModel)
   },
 }
 
@@ -46,8 +96,10 @@ export async function createProviderRegistry(
   logger?: Logger,
   pluginRegistry?: PluginRegistry,
   authFilePath?: string,
+  factory?: ProviderFactory,
 ): Promise<ProviderRegistry> {
   const log = logger ?? noopLogger
+  const providerFactory = factory ?? defaultFactory
   const apiKeyIndexes = new Map<string, number>()
 
   // 预构建 auth fetch wrappers（per-provider）
@@ -68,14 +120,14 @@ export async function createProviderRegistry(
         throw new Error(`Unknown provider '${providerName}'`)
       }
 
-      const factory = createProviderModelFactory(providerName, provider, settings, modelHeaders)
+      const modelFactory = createProviderModelFactory(providerName, provider, settings, modelHeaders, providerFactory)
 
       // Auth 插件路径：使用预构建的 fetch wrapper，但保留内置 API Key 注入
       const authFetch = authFetchMap.get(providerName)
       if (authFetch) {
         const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
         const result: LanguageModelResult = {
-          model: factory(selection?.apiKey, authFetch)(upstreamModel),
+          model: modelFactory(selection?.apiKey, authFetch)(upstreamModel),
         }
         if (selection) {
           result.keySelection = { index: selection.index, count: selection.count }
@@ -87,13 +139,13 @@ export async function createProviderRegistry(
       if (provider.oauth && tokenManager) {
         const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
         // OAuth fetch 自己注入 Authorization 头，apiKey 传 undefined 避免双重认证
-        return { model: factory(undefined, oauthFetch)(upstreamModel) }
+        return { model: modelFactory(undefined, oauthFetch)(upstreamModel) }
       }
 
       // 静态 API Key 路径
       const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
       const result: LanguageModelResult = {
-        model: factory(selection?.apiKey)(upstreamModel),
+        model: modelFactory(selection?.apiKey)(upstreamModel),
       }
       if (selection) {
         result.keySelection = { index: selection.index, count: selection.count }
@@ -154,13 +206,14 @@ function createProviderModelFactory(
   provider: ProviderConfig,
   settings: Settings,
   modelHeaders: Record<string, string>,
+  providerFactory: ProviderFactory,
 ): (
   selectedApiKey?: string,
   customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) => (upstreamModel: string) => LanguageModel {
   if (provider.type === 'anthropic') {
     return (selectedApiKey, customFetch) =>
-      createAnthropicProvider(
+      providerFactory.createAnthropic(
         providerName,
         provider,
         settings,
@@ -170,8 +223,8 @@ function createProviderModelFactory(
       )
   }
   if (provider.type === 'openai') {
-    return (selectedApiKey, customFetch) => (upstreamModel) => {
-      const openaiProvider = createOpenAIProvider(
+    return (selectedApiKey, customFetch) =>
+      providerFactory.createOpenAI(
         providerName,
         provider,
         settings,
@@ -179,11 +232,9 @@ function createProviderModelFactory(
         selectedApiKey,
         customFetch,
       )
-      return openaiProvider.responses(upstreamModel)
-    }
   }
   return (selectedApiKey, customFetch) =>
-    createOpenAICompatibleProvider(
+    providerFactory.createOpenAICompatible(
       providerName,
       provider,
       settings,

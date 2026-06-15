@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
 import { renderAnthropicMessage, renderAnthropicMessageSSE } from '../../../src/providers/anthropic/renderer.js'
+import { collectSSEEvents } from '../../helpers/sse.js'
 
 describe('Anthropic Messages renderer', () => {
   it('renders text completions', () => {
@@ -74,10 +75,12 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
+    const eventTypes = events.map((e) => e.event)
 
     // Verify event sequence
-    expect(events.map((e) => e.type)).toEqual([
+    expect(eventTypes).toEqual([
       'message_start',
       'content_block_start',
       'content_block_delta',
@@ -88,21 +91,21 @@ describe('Anthropic Messages renderer', () => {
     ])
 
     // Verify message_start
-    expect(events[0]!.message.role).toBe('assistant')
-    expect(events[0]!.message.stop_reason).toBeNull()
+    expect(events[0]!.data.message.role).toBe('assistant')
+    expect(events[0]!.data.message.stop_reason).toBeNull()
 
     // Verify content_block_start
-    expect(events[1]!.content_block.type).toBe('text')
-    expect(events[1]!.index).toBe(0)
+    expect(events[1]!.data.content_block.type).toBe('text')
+    expect(events[1]!.data.index).toBe(0)
 
     // Verify text deltas
-    expect(events[2]!.delta).toEqual({ type: 'text_delta', text: 'hel' })
-    expect(events[3]!.delta).toEqual({ type: 'text_delta', text: 'lo' })
+    expect(events[2]!.data.delta).toEqual({ type: 'text_delta', text: 'hel' })
+    expect(events[3]!.data.delta).toEqual({ type: 'text_delta', text: 'lo' })
 
     // Verify message_delta
-    expect(events[5]!.delta.stop_reason).toBe('end_turn')
-    expect(events[5]!.usage.input_tokens).toBe(10)
-    expect(events[5]!.usage.output_tokens).toBe(5)
+    expect(events[5]!.data.delta.stop_reason).toBe('end_turn')
+    expect(events[5]!.data.usage.input_tokens).toBe(10)
+    expect(events[5]!.data.usage.output_tokens).toBe(5)
   })
 
   it('omits usage in streaming message_delta when usage is all zeros', async () => {
@@ -111,10 +114,11 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop' }
     }
 
-    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
-    const messageDelta = events.find((e) => e.type === 'message_delta')
-    expect(messageDelta!.delta.stop_reason).toBe('end_turn')
-    expect(messageDelta!.usage).toBeUndefined()
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
+    const messageDelta = events.find((e) => e.event === 'message_delta')
+    expect(messageDelta!.data.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta!.data.usage).toBeUndefined()
   })
 
   it('omits usage in fallback message_delta when stream ends without finish part', async () => {
@@ -123,10 +127,11 @@ describe('Anthropic Messages renderer', () => {
       // no finish part — stream just ends
     }
 
-    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
-    const messageDelta = events.find((e) => e.type === 'message_delta')
-    expect(messageDelta!.delta.stop_reason).toBe('end_turn')
-    expect(messageDelta!.usage).toBeUndefined()
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
+    const messageDelta = events.find((e) => e.event === 'message_delta')
+    expect(messageDelta!.data.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta!.data.usage).toBeUndefined()
   })
 
   it('renders streaming tool use SSE events', async () => {
@@ -137,12 +142,13 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 20, outputTokens: 10 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
 
     // Verify tool_use block start
-    const blockStart = events.find((e) => e.type === 'content_block_start' && e.content_block?.type === 'tool_use')
+    const blockStart = events.find((e) => e.event === 'content_block_start' && e.data?.content_block?.type === 'tool_use')
     expect(blockStart).toBeDefined()
-    expect(blockStart!.content_block).toMatchObject({
+    expect(blockStart!.data.content_block).toMatchObject({
       type: 'tool_use',
       id: 'toolu_1',
       name: 'get_weather',
@@ -151,13 +157,13 @@ describe('Anthropic Messages renderer', () => {
 
     // Verify input_json_delta events
     const deltas = events.filter(
-      (e) => e.type === 'content_block_delta' && e.delta?.type === 'input_json_delta',
+      (e) => e.event === 'content_block_delta' && e.data?.delta?.type === 'input_json_delta',
     )
-    expect(deltas.map((d) => d.delta.partial_json)).toEqual(['{"city"', ':"NYC"}'])
+    expect(deltas.map((d) => d.data.delta.partial_json)).toEqual(['{"city"', ':"NYC"}'])
 
     // Verify stop reason
-    const messageDelta = events.find((e) => e.type === 'message_delta')
-    expect(messageDelta!.delta.stop_reason).toBe('tool_use')
+    const messageDelta = events.find((e) => e.event === 'message_delta')
+    expect(messageDelta!.data.delta.stop_reason).toBe('tool_use')
   })
 
   it('renders complete tool-call events (non-streaming input)', async () => {
@@ -166,14 +172,15 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 15, outputTokens: 8 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
 
     // Should have content_block_start with tool_use, then input_json_delta, then stop
-    const blockStart = events.find((e) => e.type === 'content_block_start')
-    expect(blockStart!.content_block.type).toBe('tool_use')
+    const blockStart = events.find((e) => e.event === 'content_block_start')
+    expect(blockStart!.data.content_block.type).toBe('tool_use')
 
-    const jsonDelta = events.find((e) => e.delta?.type === 'input_json_delta')
-    expect(jsonDelta!.delta.partial_json).toBe('{"city":"NYC"}')
+    const jsonDelta = events.find((e) => e.data?.delta?.type === 'input_json_delta')
+    expect(jsonDelta!.data.delta.partial_json).toBe('{"city":"NYC"}')
   })
 
   it('uses named SSE events format', async () => {
@@ -182,43 +189,16 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 1 } }
     }
 
-    const chunks: string[] = []
-    for await (const chunk of renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })) {
-      chunks.push(new TextDecoder().decode(chunk))
-    }
-    const raw = chunks.join('')
+    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEEvents(stream)
+    const eventTypes = events.map((e) => e.event)
 
-    // Anthropic SSE uses "event: <type>\ndata: <json>\n\n"
-    expect(raw).toContain('event: message_start\ndata: ')
-    expect(raw).toContain('event: content_block_start\ndata: ')
-    expect(raw).toContain('event: content_block_delta\ndata: ')
-    expect(raw).toContain('event: content_block_stop\ndata: ')
-    expect(raw).toContain('event: message_delta\ndata: ')
-    expect(raw).toContain('event: message_stop\ndata: ')
+    // Anthropic SSE uses named events
+    expect(eventTypes).toContain('message_start')
+    expect(eventTypes).toContain('content_block_start')
+    expect(eventTypes).toContain('content_block_delta')
+    expect(eventTypes).toContain('content_block_stop')
+    expect(eventTypes).toContain('message_delta')
+    expect(eventTypes).toContain('message_stop')
   })
 })
-
-async function collectAnthropicSSEEvents(stream: AsyncIterable<ProxyStreamPart>): Promise<Array<any>> {
-  const chunks: string[] = []
-  for await (const chunk of renderAnthropicMessageSSE({ model: 'test-model', stream })) {
-    chunks.push(new TextDecoder().decode(chunk))
-  }
-  const raw = chunks.join('')
-
-  // Parse Anthropic named SSE events: "event: <type>\ndata: <json>\n\n"
-  const events: Array<any> = []
-  const parts = raw.split('\n\n').filter((p) => p.trim())
-
-  for (const part of parts) {
-    const dataLine = part.split('\n').find((line) => line.startsWith('data: '))
-    if (dataLine) {
-      try {
-        events.push(JSON.parse(dataLine.slice('data: '.length)))
-      } catch {
-        // skip unparseable
-      }
-    }
-  }
-
-  return events
-}

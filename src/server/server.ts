@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth)
 
   if (hasOAuthProviders) {
-    tokenManager = new TokenManager(authFilePath)
+    tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
     nonce = generateNonce()
   }

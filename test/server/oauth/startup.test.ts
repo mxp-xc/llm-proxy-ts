@@ -2,9 +2,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { join } from 'node:path'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import type { Settings, OAuthConfig } from '../../../src/index.js'
+import type { OAuthConfig } from '../../../src/index.js'
 import { TokenManager } from '../../../src/index.js'
 import { validateOAuthStatus } from '../../../src/server/oauth/startup.js'
+import { makeSettings } from '../../helpers/settings.js'
 
 const authCodeConfig: OAuthConfig = {
   flow: 'authorization_code',
@@ -21,17 +22,6 @@ const clientCredentialsConfig: OAuthConfig = {
   clientSecret: 'test-client-secret',
   tokenUrl: 'https://auth.example.com/oauth2/token',
   scopes: [],
-}
-
-function makeSettings(providers: Settings['providers'] = {}): Settings {
-  return {
-    service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-    requestTimeoutMs: 30000,
-    proxy: null,
-    routing: { enableFlatModelLookup: false },
-    plugins: [],
-    providers,
-  }
 }
 
 describe('OAuth startup validation', () => {
@@ -60,7 +50,7 @@ describe('OAuth startup validation', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
     const results = await validateOAuthStatus(settings, tokenManager)
@@ -80,7 +70,7 @@ describe('OAuth startup validation', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
     const results = await validateOAuthStatus(settings, tokenManager)
@@ -103,22 +93,19 @@ describe('OAuth startup validation', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          access_token: 'valid-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+          refresh_token: 'refresh',
+        }),
+    })
+
+    const tokenManager = TokenManager.fromFile(authFilePath, mockFetch)
     await tokenManager.load()
-    // Simulate valid token by exchanging a code
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: 'valid-token',
-            expires_in: 3600,
-            token_type: 'Bearer',
-            refresh_token: 'refresh',
-          }),
-      }),
-    )
     await tokenManager.exchangeCode(
       'oauth-p',
       authCodeConfig,
@@ -144,21 +131,18 @@ describe('OAuth startup validation', () => {
       },
     })
 
-    const tokenManager = new TokenManager(authFilePath)
-    await tokenManager.load()
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          access_token: 'cc-token',
+          expires_in: 3600,
+          token_type: 'Bearer',
+        }),
+    })
 
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: 'cc-token',
-            expires_in: 3600,
-            token_type: 'Bearer',
-          }),
-      }),
-    )
+    const tokenManager = TokenManager.fromFile(authFilePath, mockFetch)
+    await tokenManager.load()
 
     const results = await validateOAuthStatus(settings, tokenManager)
     expect(results).toHaveLength(1)

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchUpstreamModels,
   openAIToDiscoveredModels,
@@ -45,13 +45,21 @@ describe('fetchUpstreamModels', () => {
     ],
   }
 
-  it('fetches and sorts models from upstream', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+  let mockFetch: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(mockModelList),
     })
     vi.stubGlobal('fetch', mockFetch)
+  })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('fetches and sorts models from upstream', async () => {
     const models = await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -68,17 +76,9 @@ describe('fetchUpstreamModels', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('uses first API key from array', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: ['key-1', 'key-2'],
@@ -91,17 +91,9 @@ describe('fetchUpstreamModels', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer key-1' }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('sends request without auth when apiKey is null', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: null,
@@ -114,17 +106,9 @@ describe('fetchUpstreamModels', () => {
         headers: {},
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('strips trailing slashes from baseURL', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1///',
       apiKey: 'test-key',
@@ -132,17 +116,14 @@ describe('fetchUpstreamModels', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledWith('https://api.example.com/v1/models', expect.any(Object))
-
-    vi.restoreAllMocks()
   })
 
   it('throws on non-200 response', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
     })
-    vi.stubGlobal('fetch', mockFetch)
 
     await expect(
       fetchUpstreamModels({
@@ -151,16 +132,13 @@ describe('fetchUpstreamModels', () => {
         proxySettings: null,
       }),
     ).rejects.toThrow('HTTP 401 Unauthorized')
-
-    vi.restoreAllMocks()
   })
 
   it('throws on unexpected response format', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+    mockFetch.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ object: 'list', data: null }),
     })
-    vi.stubGlobal('fetch', mockFetch)
 
     await expect(
       fetchUpstreamModels({
@@ -169,17 +147,9 @@ describe('fetchUpstreamModels', () => {
         proxySettings: null,
       }),
     ).rejects.toThrow('Unexpected response format')
-
-    vi.restoreAllMocks()
   })
 
   it('uses proxy fetch when proxySettings is provided', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     const models = await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -188,17 +158,9 @@ describe('fetchUpstreamModels', () => {
 
     expect(models).toHaveLength(3)
     expect(mockFetch).toHaveBeenCalled()
-
-    vi.restoreAllMocks()
   })
 
   it('uses custom modelsEndpoint as relative path', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -210,17 +172,9 @@ describe('fetchUpstreamModels', () => {
       'https://api.example.com/v1/v1/models',
       expect.any(Object),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('uses custom modelsEndpoint as full URL', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -229,17 +183,9 @@ describe('fetchUpstreamModels', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledWith('https://other.api.com/list', expect.any(Object))
-
-    vi.restoreAllMocks()
   })
 
   it('includes provider headers in request', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -257,17 +203,9 @@ describe('fetchUpstreamModels', () => {
         }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('oauthToken takes priority over apiKey for Authorization', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -283,17 +221,9 @@ describe('fetchUpstreamModels', () => {
         }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('oauthToken with non-Bearer tokenType', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: null,
@@ -309,17 +239,9 @@ describe('fetchUpstreamModels', () => {
         }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('oauthToken overrides Authorization from static headers', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: null,
@@ -337,17 +259,9 @@ describe('fetchUpstreamModels', () => {
         }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 
   it('apiKey overrides Authorization from static headers', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
-    vi.stubGlobal('fetch', mockFetch)
-
     await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
@@ -363,8 +277,6 @@ describe('fetchUpstreamModels', () => {
         }),
       }),
     )
-
-    vi.restoreAllMocks()
   })
 })
 

@@ -19,3 +19,4 @@ export {
   exchangeAuthorizationCode,
   TokenManager,
 } from './token-manager.js'
+export type { TokenPersistence } from './token-manager.js'

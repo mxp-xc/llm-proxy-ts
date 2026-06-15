@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createApp } from '../../src/server/app.js'
-import type { Settings } from '../../src/index.js'
 import { createProviderRegistry } from '../../src/index.js'
+import { makeSettings } from '../helpers/settings.js'
 
 const BASE_URL = process.env.LLM_PROXY_TEST_BASE_URL
 const API_KEY = process.env.LLM_PROXY_TEST_API_KEY
@@ -13,30 +13,23 @@ describe('smoke test (streaming)', () => {
     'proxies a streaming chat completion to the configured external model',
     { timeout: 30_000 },
     async () => {
-      const settings: Settings = {
-        service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-        requestTimeoutMs: 30000,
-        proxy: null,
-        routing: { enableFlatModelLookup: false },
-        plugins: [],
-        providers: {
-          smoke: {
-            type: 'openai-compatible',
-            baseURL: BASE_URL!,
-            apiKey: API_KEY!,
-            headers: {},
-            plugins: [],
-            models: {
-              chat: {
-                upstreamModel: MODEL!,
-                aliases: [],
-                headers: {},
-                plugins: [],
-              },
+      const settings = makeSettings({
+        smoke: {
+          type: 'openai-compatible',
+          baseURL: BASE_URL!,
+          apiKey: API_KEY!,
+          headers: {},
+          plugins: [],
+          models: {
+            chat: {
+              upstreamModel: MODEL!,
+              aliases: [],
+              headers: {},
+              plugins: [],
             },
           },
         },
-      }
+      })
       const providerRegistry = await createProviderRegistry(settings)
       const app = createApp({ settings, providerRegistry })
 

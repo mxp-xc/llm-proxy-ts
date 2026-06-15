@@ -1,21 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { Settings, Logger } from '../../src/index.js'
+import { describe, expect, it } from 'vitest'
+import type { Settings } from '../../src/index.js'
+import type { ProviderFactory } from '../../src/providers/registry.js'
 import type { ResolvedPlugin, AuthPlugin } from '../../src/plugins/types.js'
 import { PluginRegistry } from '../../src/plugins/registry.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
+import { makeSettings } from '../helpers/settings.js'
+import { noopLogger } from '../helpers/registry.js'
 
 // Import to register vendor_sse_error as a built-in plugin
 import '../../src/plugins/vendor-sse-error.js'
-
-const noopLogger: Logger = {
-  info() {},
-  warn() {},
-  error() {},
-  fatal() {},
-  child() {
-    return noopLogger
-  },
-}
 
 /**
  * Create a mock AuthPlugin that tracks calls and returns a fetch wrapper
@@ -40,49 +33,43 @@ function createMockAuthPlugin() {
   return { plugin, calls }
 }
 
-// Mock createOpenAICompatibleProvider to avoid needing real AI SDK setup
-vi.mock('../../src/providers/shared/provider-factory.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../src/providers/shared/provider-factory.js')>()
-  return {
-    ...original,
-    createOpenAICompatibleProvider(
-      providerName: string,
-      provider: unknown,
-      settings: unknown,
-      modelHeaders: unknown,
-      selectedApiKey: string | undefined,
-      customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
-    ) {
-      return (upstreamModel: string) => ({
-        upstreamModel,
-        providerName,
-        selectedApiKey,
-        customFetch: customFetch ? 'present' : 'absent',
-      })
-    },
-    sanitizeHeaders(headers: Record<string, string>) {
-      return original.sanitizeHeaders(headers)
-    },
-  }
-})
+/**
+ * Stub factory that captures customFetch presence and returns lightweight
+ * model objects for auth plugin integration testing.
+ */
+const stubFactory = {
+  createOpenAICompatible(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    return (upstreamModel: string) => ({
+      upstreamModel,
+      providerName,
+      selectedApiKey,
+      customFetch: customFetch ? 'present' : 'absent',
+    })
+  },
+  createAnthropic(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    return (upstreamModel: string) => ({
+      upstreamModel,
+      providerName,
+      selectedApiKey,
+      customFetch: customFetch ? 'present' : 'absent',
+    })
+  },
+  createOpenAI(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+    return (upstreamModel: string) => ({
+      upstreamModel,
+      providerName,
+      selectedApiKey,
+      customFetch: customFetch ? 'present' : 'absent',
+    })
+  },
+} as unknown as ProviderFactory
 
 describe('auth plugin integration with createProviderRegistry', () => {
   it('Provider with auth plugin should use both authFetch and apiKey', async () => {
     const { plugin: mockPlugin } = createMockAuthPlugin()
 
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [
-        {
-          name: 'mock-auth-plugin',
-          config: { tokenUrl: 'https://auth.example.com/token' },
-          providers: ['auth-provider'],
-        },
-      ],
-      providers: {
+    const settings = makeSettings(
+      {
         'auth-provider': {
           type: 'openai-compatible',
           baseURL: 'https://api.example.com/v1',
@@ -92,7 +79,16 @@ describe('auth plugin integration with createProviderRegistry', () => {
           models: {},
         },
       },
-    }
+      {
+        plugins: [
+          {
+            name: 'mock-auth-plugin',
+            config: { tokenUrl: 'https://auth.example.com/token' },
+            providers: ['auth-provider'],
+          },
+        ],
+      },
+    )
 
     // Manually construct a PluginRegistry with the mock plugin
     const resolvedPlugins: ResolvedPlugin[] = [
@@ -123,7 +119,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
       },
     } as unknown as import('../../src/plugins/registry.js').PluginRegistry
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry)
+    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry, undefined, stubFactory)
     const result = registry.languageModel(
       'auth-provider',
       'upstream-model',
@@ -137,25 +133,18 @@ describe('auth plugin integration with createProviderRegistry', () => {
   })
 
   it('Provider without auth/oauth should use apiKey as before', async () => {
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [],
-      providers: {
-        'simple-provider': {
-          type: 'openai-compatible',
-          baseURL: 'https://api.example.com/v1',
-          apiKey: 'my-api-key',
-          headers: {},
-          plugins: [],
-          models: {},
-        },
+    const settings = makeSettings({
+      'simple-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'my-api-key',
+        headers: {},
+        plugins: [],
+        models: {},
       },
-    }
+    })
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger)
+    const registry = await createProviderRegistry(settings, undefined, noopLogger, undefined, undefined, stubFactory)
     const result = registry.languageModel(
       'simple-provider',
       'upstream-model',
@@ -170,13 +159,8 @@ describe('auth plugin integration with createProviderRegistry', () => {
   it('Provider with auth plugin targeting different provider should not get authFetch', async () => {
     const { plugin: mockPlugin } = createMockAuthPlugin()
 
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [{ name: 'mock-auth-plugin', config: {}, providers: ['other-provider'] }],
-      providers: {
+    const settings = makeSettings(
+      {
         'auth-provider': {
           type: 'openai-compatible',
           baseURL: 'https://api.example.com/v1',
@@ -186,7 +170,10 @@ describe('auth plugin integration with createProviderRegistry', () => {
           models: {},
         },
       },
-    }
+      {
+        plugins: [{ name: 'mock-auth-plugin', config: {}, providers: ['other-provider'] }],
+      },
+    )
 
     // Plugin targets 'other-provider', not 'auth-provider'
     const resolvedPlugins: ResolvedPlugin[] = [
@@ -215,7 +202,7 @@ describe('auth plugin integration with createProviderRegistry', () => {
       },
     } as unknown as import('../../src/plugins/registry.js').PluginRegistry
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry)
+    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry, undefined, stubFactory)
     const result = registry.languageModel(
       'auth-provider',
       'upstream-model',
@@ -231,36 +218,29 @@ describe('auth plugin integration with createProviderRegistry', () => {
 
 describe('getPipelinePlugins with model-level plugins', () => {
   it('returns global + provider + model plugins merged with model override', async () => {
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [],
-      providers: {
-        'test-provider': {
-          type: 'openai-compatible',
-          baseURL: 'https://api.example.com/v1',
-          apiKey: 'test',
-          headers: {},
-          plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 5 }, providers: [] }],
-          models: {
-            'model-a': {
-              upstreamModel: 'upstream-a',
-              aliases: [],
-              headers: {},
-              plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
-            },
-            'model-b': {
-              upstreamModel: 'upstream-b',
-              aliases: [],
-              headers: {},
-              plugins: [],
-            },
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 5 }, providers: [] }],
+        models: {
+          'model-a': {
+            upstreamModel: 'upstream-a',
+            aliases: [],
+            headers: {},
+            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
+          },
+          'model-b': {
+            upstreamModel: 'upstream-b',
+            aliases: [],
+            headers: {},
+            plugins: [],
           },
         },
       },
-    }
+    })
     const registry = await PluginRegistry.fromSettings(settings, '/tmp')
     // model-a: model-level vendor_sse_error should override provider-level
     const pluginsA = registry.getPipelinePlugins('test-provider', 'model-a')
@@ -273,30 +253,23 @@ describe('getPipelinePlugins with model-level plugins', () => {
   })
 
   it('returns provider-level plugins when no modelKey is given', async () => {
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [],
-      providers: {
-        'test-provider': {
-          type: 'openai-compatible',
-          baseURL: 'https://api.example.com/v1',
-          apiKey: 'test',
-          headers: {},
-          plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 5 }, providers: [] }],
-          models: {
-            'model-a': {
-              upstreamModel: 'upstream-a',
-              aliases: [],
-              headers: {},
-              plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
-            },
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 5 }, providers: [] }],
+        models: {
+          'model-a': {
+            upstreamModel: 'upstream-a',
+            aliases: [],
+            headers: {},
+            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
           },
         },
       },
-    }
+    })
     const registry = await PluginRegistry.fromSettings(settings, '/tmp')
     // Without modelKey, only provider-level plugin
     const plugins = registry.getPipelinePlugins('test-provider')
@@ -306,30 +279,23 @@ describe('getPipelinePlugins with model-level plugins', () => {
 
   it('rejects AuthPlugin at model level', async () => {
     // Create a minimal settings with a model-level auth plugin
-    const settings: Settings = {
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
-      requestTimeoutMs: 30000,
-      proxy: null,
-      routing: { enableFlatModelLookup: false },
-      plugins: [],
-      providers: {
-        'test-provider': {
-          type: 'openai-compatible',
-          baseURL: 'https://api.example.com/v1',
-          apiKey: 'test',
-          headers: {},
-          plugins: [],
-          models: {
-            'model-a': {
-              upstreamModel: 'upstream-a',
-              aliases: [],
-              headers: {},
-              plugins: [{ module: 'some-auth-module', config: {}, providers: [] }],
-            },
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {
+          'model-a': {
+            upstreamModel: 'upstream-a',
+            aliases: [],
+            headers: {},
+            plugins: [{ module: 'some-auth-module', config: {}, providers: [] }],
           },
         },
       },
-    }
+    })
     // We need to mock loadPlugin to return an AuthPlugin for this test.
     // Since we can't easily mock it, test the error message by constructing
     // the registry from fromSettings with a module that resolves to an auth plugin.
