@@ -27,7 +27,9 @@ export async function collectStreamResult(stream: AsyncIterable<unknown>): Promi
 
     switch (chunk.type) {
       case 'text-delta': {
-        const delta = typeof chunk.textDelta === 'string' ? chunk.textDelta : ''
+        const delta = typeof chunk.text === 'string' ? chunk.text
+          : typeof chunk.textDelta === 'string' ? chunk.textDelta
+          : ''
         text += delta
         break
       }

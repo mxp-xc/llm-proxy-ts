@@ -9,8 +9,8 @@ async function* chunks(...items: unknown[]): AsyncIterable<unknown> {
 describe('collectStreamResult', () => {
   it('collects text from text-delta chunks', async () => {
     const stream = chunks(
-      { type: 'text-delta', textDelta: 'Hello' },
-      { type: 'text-delta', textDelta: ' world' },
+      { type: 'text-delta', text: 'Hello' },
+      { type: 'text-delta', text: ' world' },
     )
     const result = await collectStreamResult(stream)
     expect(result.text).toBe('Hello world')
@@ -18,7 +18,7 @@ describe('collectStreamResult', () => {
 
   it('collects finishReason and usage from finish chunk', async () => {
     const stream = chunks(
-      { type: 'text-delta', textDelta: 'hi' },
+      { type: 'text-delta', text: 'hi' },
       {
         type: 'finish',
         finishReason: 'stop',
@@ -34,7 +34,7 @@ describe('collectStreamResult', () => {
 
   it('collects response id from finish chunk', async () => {
     const stream = chunks(
-      { type: 'text-delta', textDelta: 'hi' },
+      { type: 'text-delta', text: 'hi' },
       {
         type: 'finish',
         finishReason: 'stop',
@@ -84,7 +84,7 @@ describe('collectStreamResult', () => {
 
   it('preserves cacheReadTokens and reasoningTokens from finish chunk', async () => {
     const stream = chunks(
-      { type: 'text-delta', textDelta: 'hi' },
+      { type: 'text-delta', text: 'hi' },
       {
         type: 'finish',
         finishReason: 'stop',
@@ -108,7 +108,7 @@ describe('collectStreamResult', () => {
   it('captures response timestamp from finish chunk', async () => {
     const ts = new Date('2025-06-13T12:00:00Z')
     const stream = chunks(
-      { type: 'text-delta', textDelta: 'hi' },
+      { type: 'text-delta', text: 'hi' },
       {
         type: 'finish',
         finishReason: 'stop',

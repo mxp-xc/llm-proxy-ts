@@ -327,8 +327,8 @@ describe('streamOnly provider', () => {
       },
       stream() {
         return (async function* () {
-          yield { type: 'text-delta', textDelta: 'Hello' }
-          yield { type: 'text-delta', textDelta: ' world' }
+          yield { type: 'text-delta', text: 'Hello' }
+          yield { type: 'text-delta', text: ' world' }
           yield {
             type: 'finish',
             finishReason: 'stop',
@@ -368,8 +368,8 @@ describe('streamOnly provider', () => {
       },
       stream() {
         return (async function* () {
-          yield { type: 'text-delta', textDelta: 'Hello' }
-          yield { type: 'text-delta', textDelta: ' world' }
+          yield { type: 'text-delta', text: 'Hello' }
+          yield { type: 'text-delta', text: ' world' }
           yield {
             type: 'finish',
             finishReason: 'stop',
