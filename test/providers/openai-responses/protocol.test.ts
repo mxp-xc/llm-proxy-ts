@@ -116,6 +116,19 @@ describe('mapResponsesRequestToAISDKInput', () => {
       model: 'gpt-4o',
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'https://example.com/img.png' }] }],
     })
+    expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'https://example.com/img.png' }] }]
+    )
+  })
+
+  it('extracts URL from input_image image_url object', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [{
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_image', image_url: { url: 'https://example.com/img.png', detail: 'auto' } }],
+      }],
+    })
     expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'https://example.com/img.png' }] }])
   })
 
@@ -132,15 +145,40 @@ describe('mapResponsesRequestToAISDKInput', () => {
   it('maps function_call_output to tool message', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',
-      input: [{ type: 'function_call_output', call_id: 'call_123', output: 'sunny' }],
+      input: [
+        { type: 'function_call', call_id: 'call_123', name: 'get_weather', arguments: '{"location":"Paris"}' },
+        { type: 'function_call_output', call_id: 'call_123', output: 'sunny' },
+      ],
+    })
+    expect(result.messages).toEqual([
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'call_123', toolName: 'get_weather', input: { location: 'Paris' } }],
+      },
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call_123',
+          toolName: 'get_weather',
+          output: { type: 'text', value: 'sunny' },
+        }],
+      },
+    ])
+  })
+
+  it('falls back toolName to call_id when no matching function_call exists', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [{ type: 'function_call_output', call_id: 'call_456', output: 'orphan' }],
     })
     expect(result.messages).toEqual([{
       role: 'tool',
       content: [{
         type: 'tool-result',
-        toolCallId: 'call_123',
-        toolName: 'call_123',
-        output: { type: 'text', value: 'sunny' },
+        toolCallId: 'call_456',
+        toolName: 'call_456',
+        output: { type: 'text', value: 'orphan' },
       }],
     }])
   })

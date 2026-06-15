@@ -1,6 +1,7 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions } from '../shared/protocol-utils.js'
+import { isRecord } from '../protocol-types.js'
 import { z } from 'zod/v3'
 
 // ─── Schemas ──────────────────────────────────────────────────
@@ -84,11 +85,17 @@ function mapEasyInputContent(
     if (item.type === 'input_text' || item.type === 'output_text') {
       return { type: 'text', text: String(item.text ?? '') }
     }
-    // input_image: ProtocolMessagePart does not carry image variants;
-    // AI SDK image content is handled at the gateway layer via raw passthrough.
-    // Map to text placeholder so the message shape stays valid.
+    // input_image: ProtocolMessagePart has no image variant.
+    // image_url is mapped to a text placeholder as a known limitation —
+    // multimodal content is not fully supported through the gateway yet.
     if (item.type === 'input_image') {
-      return { type: 'text', text: String(item.image_url ?? item.url ?? item.image ?? '') }
+      const imageUrl = item.image_url
+      const resolved = typeof imageUrl === 'string'
+        ? imageUrl
+        : isRecord(imageUrl) && typeof imageUrl.url === 'string'
+          ? imageUrl.url as string
+          : typeof item.url === 'string' ? item.url : ''
+      return { type: 'text', text: resolved }
     }
     // Fallback for unrecognized content parts: map to text
     return { type: 'text', text: String(item.text ?? '') }
@@ -117,6 +124,14 @@ export function mapResponsesRequestToAISDKInput(
   if (typeof request.input === 'string') {
     messages.push({ role: 'user', content: request.input })
   } else {
+    // Build call_id → tool name lookup (function_call_output lacks tool name)
+    const callIdToName = new Map<string, string>()
+    for (const item of request.input) {
+      if ('type' in item && item.type === 'function_call') {
+        callIdToName.set(item.call_id, item.name)
+      }
+    }
+
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
         // function_call → assistant message with tool-call content part
@@ -144,10 +159,7 @@ export function mapResponsesRequestToAISDKInput(
           content: [{
             type: 'tool-result',
             toolCallId: item.call_id,
-            // NOTE: Responses API function_call_output does not carry the tool name.
-            // Using call_id as toolName fallback — this may cause mismatches if the
-            // AI SDK tries to match toolName against the tool definition set.
-            toolName: item.call_id,
+            toolName: callIdToName.get(item.call_id) ?? item.call_id,
             output: { type: 'text', value: output },
           }],
         })

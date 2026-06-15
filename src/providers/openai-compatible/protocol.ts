@@ -1,6 +1,7 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod/v3'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
+import { isRecord } from '../protocol-types.js'
 import { mapProviderOptions } from '../shared/protocol-utils.js'
 
 export type { AISDKInput } from '../shared/aisdk-types.js'
@@ -17,7 +18,7 @@ const openAIToolCallSchema = z.object({
 const messageSchema = z
   .object({
     role: z.enum(['system', 'user', 'assistant', 'tool']),
-    content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]).optional(),
+    content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]).nullish(),
     tool_call_id: z.string().optional(),
     tool_calls: z.array(openAIToolCallSchema).optional(),
   })
@@ -29,7 +30,7 @@ const messageSchema = z
         message: 'tool_call_id is required for tool messages',
       })
     }
-    if (message.role === 'tool' && message.content === undefined) {
+    if (message.role === 'tool' && message.content == null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['content'],
@@ -111,10 +112,20 @@ export function mapOpenAIChatRequestToAISDKInput(
     }
   }
 
+  // Build tool_call_id → tool name lookup (for tool-result messages that lack the tool name)
+  const toolCallIdToName = new Map<string, string>()
+  for (const msg of request.messages) {
+    if (msg.role === 'assistant' && msg.tool_calls?.length) {
+      for (const tc of msg.tool_calls) {
+        toolCallIdToName.set(tc.id, tc.function.name)
+      }
+    }
+  }
+
   const input: AISDKInput = {
     messages: request.messages
       .filter((msg) => msg.role !== 'system')
-      .map(mapMessage),
+      .map((msg) => mapMessage(msg, toolCallIdToName)),
   }
 
   if (systemParts.length > 0) {
@@ -166,7 +177,7 @@ export function mapOpenAIChatRequestToAISDKInput(
   return input
 }
 
-function mapMessage(message: z.infer<typeof messageSchema>): ProtocolMessage {
+function mapMessage(message: z.infer<typeof messageSchema>, toolCallIdToName: Map<string, string>): ProtocolMessage {
   if (message.role === 'assistant' && message.tool_calls?.length) {
     const content: ProtocolMessagePart[] = message.tool_calls.map((toolCall) => ({
       type: 'tool-call' as const,
@@ -191,16 +202,16 @@ function mapMessage(message: z.infer<typeof messageSchema>): ProtocolMessage {
         {
           type: 'tool-result',
           toolCallId: message.tool_call_id ?? 'tool',
-          toolName: message.tool_call_id ?? 'tool',
+          toolName: toolCallIdToName.get(message.tool_call_id ?? '') ?? message.tool_call_id ?? 'tool',
           output: mapToolResultOutput(message.content),
         },
       ],
     }
   }
 
-  // user or system messages: content is string | content-part array | undefined
+  // user or assistant messages: content is string | content-part array | undefined
   const content = message.content ?? ''
-  return { role: message.role as 'user' | 'system', content } as ProtocolMessage
+  return { role: message.role as 'user' | 'assistant', content } as ProtocolMessage
 }
 
 type MessageContent = z.infer<typeof messageSchema>['content']
@@ -226,7 +237,8 @@ function extractSystemText(content: MessageContent): string {
 function parseToolCallInput(value: string | undefined): Record<string, unknown> | string {
   if (!value) return {}
   try {
-    return JSON.parse(value)
+    const parsed = JSON.parse(value)
+    return isRecord(parsed) ? parsed : value
   } catch {
     return value
   }

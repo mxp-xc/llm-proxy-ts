@@ -3,11 +3,12 @@ import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../ind
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
 function isProxyPluginWithInspect(plugin: Plugin): plugin is ProxyPlugin {
-  return 'inspectStreamChunk' in plugin
+  return typeof (plugin as ProxyPlugin).inspectStreamChunk === 'function'
 }
 
 function isPluginResponse(value: unknown): value is PluginResponse {
   return value !== null && typeof value === 'object' && 'status' in value
+    && typeof (value as PluginResponse).status === 'number'
 }
 
 export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<ProxyStreamPart>) {
