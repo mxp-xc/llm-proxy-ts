@@ -1,4 +1,4 @@
-import type { AuthPlugin, ProviderContext } from '@llm-proxy/core'
+import type { AuthPlugin, ProviderContext } from 'llm-proxy'
 
 /**
  * 调试插件：透传 fetch，打印每次请求的 URL、method、headers 和响应状态。

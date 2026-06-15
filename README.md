@@ -1,6 +1,6 @@
 # llm-proxy-ts
 
-本地优先的 LLM 反向代理，暴露 OpenAI Chat Completions 兼容 API，通过 Vercel AI SDK 转发到上游 OpenAI-compatible provider。
+本地优先的 LLM 协议转换代理。核心能力：将上游 provider（无论其原生协议）同时以多种下游协议格式暴露——同一个上游可以同时提供 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 等 API。客户端只需对接自己偏好的协议格式。
 
 ## 快速开始
 
@@ -15,13 +15,33 @@ pnpm dev serve
 
 ## API
 
-| 端点                        | 说明                             |
-| --------------------------- | -------------------------------- |
-| `GET /health`               | 服务状态和 provider 数量         |
-| `POST /v1/chat/completions` | 非流式 + `stream: true` SSE 流式 |
-| `GET /v1/models`            | 可用模型列表                     |
+| 端点 | 说明 |
+|---|---|
+| `GET /health` | 服务状态和 provider 数量 |
+| `POST /v1/chat/completions` | OpenAI Chat（非流式 + `stream: true` SSE） |
+| `POST /v1/responses` | OpenAI Responses（命名事件 SSE） |
+| `POST /v1/messages` | Anthropic Messages（非流式 + SSE） |
+| `GET /v1/models` | 可用模型列表 |
 
-请求格式兼容 OpenAI Chat Completions API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
+请求格式兼容对应上游 API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
+
+## CLI
+
+基于 Commander.js，通过 `pnpm dev <command>` 调用：
+
+| 命令 | 用途 |
+|---|---|
+| `pnpm dev serve` | 启动开发服务器（默认 tsx watch 热重载） |
+| `pnpm dev serve --no-watch` | 启动服务器（无热重载） |
+| `pnpm dev models sync` | 交互式同步上游模型到配置文件 |
+| `pnpm dev models sync -p <name>` | 同步指定 provider |
+| `pnpm dev models sync --dry-run` | 预览变更，不写入 |
+| `pnpm dev models list` | 列出已配置模型 |
+| `pnpm dev models list --format json` | 列出已配置模型（JSON） |
+| `pnpm test` | 运行全部测试 |
+| `pnpm test test/xxx.test.ts` | 运行单个测试 |
+| `pnpm typecheck` | 类型检查 |
+| `pnpm generate:schema` | 从 Zod schema 生成 `config/settings.schema.json` |
 
 ## 配置
 
@@ -30,39 +50,13 @@ pnpm dev serve
 核心字段：
 
 - **service** — 监听地址和端口
-- **providers** — 上游 provider 定义，每个包含 `baseURL`、`apiKey`、`models`
+- **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`models`
 - **apiKey 轮询** — `apiKey` 支持字符串数组，按请求 round-robin 选择
 - **模型别名** — `models` 中可定义 `aliases` 和自定义 `upstreamModel`
 - **`${ENV_NAME}`** — 占位符，加载时从环境变量解析（仅匹配完整字符串）
 - **proxy** — 可选 HTTP 代理（undici `ProxyAgent`）
 - **plugins** — provider/model 级插件（如 `vendor_sse_error` 检测上游限流）
-
-## 项目结构
-
-```
-apps/core/     @llm-proxy/core   — 配置系统、Provider 工厂、插件系统、OAuth、CLI
-apps/server/   @llm-proxy/server — Hono HTTP 服务器
-plugins/       示例外部插件（auth-demo）
-config/        示例配置 + JSON Schema
-```
-
-## CLI 命令
-
-基于 [Commander.js](https://github.com/tj/commander.js)，通过 `pnpm dev <command>` 调用。
-
-| 命令                                 | 作用                                             |
-| ------------------------------------ | ------------------------------------------------ |
-| `pnpm dev serve`                     | 启动开发服务器（默认 `tsx watch` 热重载）        |
-| `pnpm dev serve --no-watch`          | 启动服务器（无热重载）                           |
-| `pnpm dev models sync`               | 交互式同步上游模型到配置文件                     |
-| `pnpm dev models sync -p <name>`     | 同步指定 provider                                |
-| `pnpm dev models sync --dry-run`     | 预览变更，不写入                                 |
-| `pnpm dev models list`               | 列出所有已配置模型（表格）                       |
-| `pnpm dev models list --format json` | 列出所有已配置模型（JSON）                       |
-| `pnpm models:sync`                   | 同 `pnpm dev models sync`（向后兼容）            |
-| `pnpm test`                          | 运行全部测试                                     |
-| `pnpm typecheck`                     | 类型检查                                         |
-| `pnpm generate:schema`               | 从 Zod schema 生成 `config/settings.schema.json` |
+- **oauth** — 支持 Authorization Code 和 Client Credentials 两种流程
 
 ## 安全
 

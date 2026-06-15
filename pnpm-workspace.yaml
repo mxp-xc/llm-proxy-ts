@@ -1,3 +1,6 @@
-packages:
-  - apps/*
-  - packages/*
+allowBuilds:
+  esbuild: true
+minimumReleaseAgeExclude:
+  - '@ai-sdk/openai-compatible@2.0.50'
+  - '@ai-sdk/openai@3.0.71'
+  - '@ai-sdk/provider-utils@4.0.29'

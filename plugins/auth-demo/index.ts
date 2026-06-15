@@ -1,5 +1,5 @@
-import type { AuthPlugin, ProviderContext, SimpleAuthCredentials } from '@llm-proxy/core'
-import { createSimpleAuthFetch } from '@llm-proxy/core'
+import type { AuthPlugin, ProviderContext, SimpleAuthCredentials } from 'llm-proxy'
+import { createSimpleAuthFetch } from 'llm-proxy'
 
 /**
  * 示例认证插件：从自定义 token 端点获取 access_token 并注入 Bearer header。
