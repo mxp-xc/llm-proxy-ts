@@ -1,13 +1,14 @@
 import type { LanguageModel } from 'ai'
 import type { Context } from 'hono'
 import { OAuthError, RoutingError } from '../index.js'
-import type { ProtocolStrategy, ProtocolErrorFormatter } from '../index.js'
+import type { ProtocolStrategy, ProtocolErrorFormatter, AISDKInput } from '../index.js'
 import { flattenUsage, collectStreamResult } from '../index.js'
-import type { Settings, RoutingTable } from '../index.js'
+import type { Settings, RoutingTable, ResolvedPlugin } from '../index.js'
 import type { AppEnv, ModelGateway } from './types.js'
 import { RequestTimeoutError, withRequestTimeout } from './stream-utils.js'
-import { inspectFirstStreamChunk } from './stream-inspect.js'
+import { inspectFirstStreamChunk, type StreamInspectContext } from './stream-inspect.js'
 import { readableStreamFromAsyncIterable } from './stream-utils.js'
+import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
 export interface ProtocolContext {
   routingTable: RoutingTable
@@ -19,6 +20,44 @@ export interface ProtocolContext {
     headers: Record<string, string>,
     c: Context<AppEnv>,
   ) => LanguageModel
+}
+
+interface AcquireStreamOptions {
+  gateway: ModelGateway
+  model: LanguageModel
+  callInput: AISDKInput
+  requestModel: string
+  plugins: ResolvedPlugin[]
+  timeoutMs: number
+  abortController: AbortController
+  formatErrors: ProtocolErrorFormatter
+  inspectCtx: StreamInspectContext
+}
+
+type AcquireStreamResult =
+  | { stream: AsyncIterable<ProxyStreamPart> }
+  | { rateLimitResponse: { body: unknown; status: number } }
+
+async function acquireStream(opts: AcquireStreamOptions): Promise<AcquireStreamResult> {
+  const stream = opts.gateway.stream({
+    model: opts.model,
+    callInput: opts.callInput,
+    requestModel: opts.requestModel,
+    abortSignal: opts.abortController.signal,
+  })
+  const inspection = await withRequestTimeout(
+    inspectFirstStreamChunk(opts.plugins, stream, opts.inspectCtx),
+    opts.timeoutMs,
+    opts.abortController,
+  )
+  if (inspection.error) {
+    const { body, status } = opts.formatErrors.rateLimit(
+      inspection.error.body,
+      inspection.error.status,
+    )
+    return { rateLimitResponse: { body, status } }
+  }
+  return { stream: inspection.stream }
 }
 
 export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
@@ -70,32 +109,28 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     throw error
   }
   const abortController = new AbortController()
+  const inspectCtx: StreamInspectContext = {
+    requestId: c.get('requestId'),
+    settings: ctx.settings,
+    provider: { id: route.providerName, provider: route.provider },
+  }
 
   // 5-6. Stream or generate + render
   if (strategy.isStream(request)) {
     try {
-      const stream = ctx.gateway.stream({
-        model,
-        callInput,
-        requestModel,
-        abortSignal: abortController.signal,
+      const acquired = await acquireStream({
+        gateway: ctx.gateway, model, callInput, requestModel,
+        plugins: route.resolvedPlugins, timeoutMs: ctx.settings.requestTimeoutMs,
+        abortController, formatErrors, inspectCtx,
       })
-      const inspection = await withRequestTimeout(
-        inspectFirstStreamChunk(route.resolvedPlugins, stream),
-        ctx.settings.requestTimeoutMs,
-        abortController,
-      )
-      if (inspection.error) {
-        const { body, status } = formatErrors.rateLimit(
-          inspection.error.body,
-          inspection.error.status,
-        )
+      if ('rateLimitResponse' in acquired) {
+        const { body, status } = acquired.rateLimitResponse
         return c.json(body, status as 429)
       }
       const reqLogger = c.get('logger')
       return new Response(
         readableStreamFromAsyncIterable(
-          strategy.renderStreamSSE({ model: requestModel, stream: inspection.stream }),
+          strategy.renderStreamSSE({ model: requestModel, stream: acquired.stream }),
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
           },
@@ -112,26 +147,17 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   // streamOnly: provider 仅支持流式 API，内部走 stream + 收集
   if (route.provider.options?.streamOnly) {
     try {
-      const rawStream = ctx.gateway.stream({
-        model,
-        callInput,
-        requestModel,
-        abortSignal: abortController.signal,
+      const acquired = await acquireStream({
+        gateway: ctx.gateway, model, callInput, requestModel,
+        plugins: route.resolvedPlugins, timeoutMs: ctx.settings.requestTimeoutMs,
+        abortController, formatErrors, inspectCtx,
       })
-      const inspection = await withRequestTimeout(
-        inspectFirstStreamChunk(route.resolvedPlugins, rawStream),
-        ctx.settings.requestTimeoutMs,
-        abortController,
-      )
-      if (inspection.error) {
-        const { body, status } = formatErrors.rateLimit(
-          inspection.error.body,
-          inspection.error.status,
-        )
+      if ('rateLimitResponse' in acquired) {
+        const { body, status } = acquired.rateLimitResponse
         return c.json(body, status as 429)
       }
       const collected = await withRequestTimeout(
-        collectStreamResult(inspection.stream),
+        collectStreamResult(acquired.stream),
         ctx.settings.requestTimeoutMs,
         abortController,
       )
