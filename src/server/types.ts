@@ -3,7 +3,7 @@ import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 import type { Settings, TokenManager } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
-import pino from 'pino'
+import type pino from 'pino'
 
 export type { Settings } from '../index.js'
 

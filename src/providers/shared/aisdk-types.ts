@@ -21,9 +21,11 @@ export interface AISDKInput {
  * 并加入代理层注入的 'openai-error' 分片（来自 stream-inspect.ts）。
  *
  * 与 AI SDK 原生 TextStreamPart<TOOLS> 的差异：
- * - tool-call.args / tool-result.result 为 unknown（非工具泛型参数）
+ * - tool-call.input / tool-result.output / tool-error.input 为 unknown（非工具泛型参数）
  * - 加入 openai-error（代理层首包检测注入）
- * - finish 额外携带 response?（来自 AI SDK finish-step.response）
+ * - finish 额外携带 response?（由 stream-normalize 从 finish-step.response 注入，
+ *   AI SDK 原生 finish 无此字段）
+ * - tool-input-start 省略 AI SDK 的 toolMetadata / providerExecuted
  */
 export type ProxyStreamPart =
   | { type: 'text-start'; id: string; providerMetadata?: ProviderMetadata }
@@ -35,8 +37,11 @@ export type ProxyStreamPart =
   | { type: 'tool-input-start'; id: string; toolName: string; providerMetadata?: ProviderMetadata; dynamic?: boolean; title?: string }
   | { type: 'tool-input-end'; id: string; providerMetadata?: ProviderMetadata }
   | { type: 'tool-input-delta'; id: string; delta: string; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; result: unknown; providerMetadata?: ProviderMetadata }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; providerMetadata?: ProviderMetadata }
+  | { type: 'tool-error'; toolCallId: string; toolName: string; input: unknown; error: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
+  | { type: 'tool-output-denied'; toolCallId: string; toolName: string; providerExecuted?: boolean; dynamic?: boolean }
+  | { type: 'tool-approval-request'; approvalId: string; toolCall: { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }; signature?: string }
   | { type: 'source'; providerMetadata?: ProviderMetadata; sourceType: string; id?: string; url?: string; title?: string }
   | { type: 'file'; file: unknown; providerMetadata?: ProviderMetadata }
   | { type: 'start-step'; request: unknown; warnings: unknown[] }

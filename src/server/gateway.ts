@@ -2,13 +2,14 @@ import { generateText, streamText } from 'ai'
 import { logger as defaultLogger } from './logging.js'
 import type { ModelGateway } from './types.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
+import { normalizeStream } from './stream-normalize.js'
 
 export const defaultGateway: ModelGateway = {
   async generate({ model, callInput, abortSignal }) {
     return generateText({ model, ...callInput, abortSignal } as Parameters<typeof generateText>[0])
   },
   stream({ model, callInput, abortSignal }) {
-    return streamText({
+    const result = streamText({
       model,
       ...callInput,
       abortSignal,
@@ -18,6 +19,6 @@ export const defaultGateway: ModelGateway = {
         defaultLogger.error({ err: error }, 'stream error from AI SDK')
       },
     } as Parameters<typeof streamText>[0])
-      .fullStream as AsyncIterable<ProxyStreamPart>
+    return normalizeStream(result.fullStream as AsyncIterable<ProxyStreamPart>)
   },
 }

@@ -29,13 +29,13 @@ export async function collectStreamResult(stream: AsyncIterable<ProxyStreamPart>
         break
       }
       case 'tool-call': {
-        let input: unknown = part.args
-        // args 可能是 JSON 字符串，需解析
+        let input: unknown = part.input
+        // input 可能是 JSON 字符串，需解析
         if (typeof input === 'string') {
           try {
             input = JSON.parse(input)
           } catch {
-            // 防御性：args 为畸形 JSON 时保留原始字符串。实践中 AI SDK 总提供已解析对象。
+            // 防御性：input 为畸形 JSON 时保留原始字符串。实践中 AI SDK 总提供已解析对象。
           }
         }
         toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input })

@@ -1,4 +1,5 @@
 import type { RoutingError } from '../../routing.js'
+import { isRecord, toErrorMessage } from '../protocol-types.js'
 
 /** OpenAI 风格错误响应体 */
 export interface OpenAIErrorBody {
@@ -58,7 +59,16 @@ export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
   },
 
   routing(error: RoutingError) {
-    return { body: error.toResponse(), status: error.status }
+    return {
+      body: {
+        error: {
+          type: 'invalid_request_error',
+          code: error.code,
+          message: error.message,
+        },
+      },
+      status: error.status,
+    }
   },
 
   oauth(message: string, loginUrl: string) {
@@ -76,7 +86,21 @@ export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
   },
 
   rateLimit(errorBody: unknown, errorStatus?: number) {
-    return { body: errorBody as OpenAIErrorBody, status: errorStatus ?? 429 }
+    // 如果 errorBody 已经是合法的 OpenAI 错误格式，直接透传
+    if (isRecord(errorBody) && isRecord(errorBody.error)) {
+      return { body: errorBody as unknown as OpenAIErrorBody, status: errorStatus ?? 429 }
+    }
+    // 否则构造标准 OpenAI 错误体
+    return {
+      body: {
+        error: {
+          type: 'rate_limit_error',
+          code: 'rate_limit_exceeded',
+          message: toErrorMessage(errorBody),
+        },
+      },
+      status: errorStatus ?? 429,
+    }
   },
 
   timeout() {
@@ -126,7 +150,7 @@ export const anthropicErrorFormat: ProtocolErrorFormatter<AnthropicErrorBody> = 
         type: 'error',
         error: {
           type: 'not_found_error',
-          message: error.toResponse().error?.message ?? 'Model not found',
+          message: error.message,
         },
       },
       status: error.status,

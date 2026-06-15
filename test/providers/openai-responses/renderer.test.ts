@@ -271,7 +271,7 @@ describe('renderOpenAIResponseSSE', () => {
 
   // Bug #3 / #1 — Streaming tool-call with complete part (no deltas)
   async function* toolCallStream() {
-    yield { type: 'tool-call', toolCallId: 'call_123', toolName: 'get_weather', args: { location: 'Paris' } }
+    yield { type: 'tool-call', toolCallId: 'call_123', toolName: 'get_weather', input: { location: 'Paris' } }
     yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 10, outputTokens: 5 }, response: { id: 'resp_test' } }
   }
 
@@ -319,7 +319,7 @@ describe('renderOpenAIResponseSSE', () => {
     yield { type: 'tool-input-start', id: 'call_abc', toolName: 'search' }
     yield { type: 'tool-input-delta', id: 'call_abc', delta: '{"q":"h' }
     yield { type: 'tool-input-delta', id: 'call_abc', delta: 'ello"}' }
-    yield { type: 'tool-call', toolCallId: 'call_abc', toolName: 'search', args: '{"q":"hello"}' }
+    yield { type: 'tool-call', toolCallId: 'call_abc', toolName: 'search', input: '{"q":"hello"}' }
     yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 10 }, response: { id: 'resp_delta' } }
   }
 
@@ -343,7 +343,7 @@ describe('renderOpenAIResponseSSE', () => {
   // Bug #12 — new msgId after tool call
   async function* textThenToolCallStream() {
     yield { type: 'text-delta', text: 'Hello' }
-    yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'fn', args: {} }
+    yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'fn', input: {} }
     yield { type: 'text-delta', text: ' world' }
     yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_multi' } }
   }

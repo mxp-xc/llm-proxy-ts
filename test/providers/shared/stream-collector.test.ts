@@ -53,7 +53,7 @@ describe('collectStreamResult', () => {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        args: '{"city":"Tokyo"}',
+        input: '{"city":"Tokyo"}',
       },
       {
         type: 'finish',

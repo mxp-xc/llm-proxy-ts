@@ -9,7 +9,7 @@ import type { OpenAIChatCompletion, OpenAIChatChunk, OpenAIChatStreamError } fro
 export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChatCompletion {
   const message: OpenAIChatCompletion['choices'][number]['message'] = {
     role: 'assistant',
-    content: input.text || null,
+    content: input.text ?? null,
   }
 
   if (input.toolCalls?.length) {
@@ -126,7 +126,7 @@ export async function* renderOpenAIChatCompletionSSE(input: {
       const toolName = part.toolName
       const functionCall: { name: string; arguments?: string } = { name: toolName }
       if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
-        functionCall.arguments = JSON.stringify(part.args ?? {})
+        functionCall.arguments = JSON.stringify(part.input ?? {})
       }
 
       yield {

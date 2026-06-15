@@ -172,13 +172,13 @@ describe('OpenAI chat renderer', () => {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        args: { city: 'NYC' },
+        input: { city: 'NYC' },
       }
       yield {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        args: { unit: 'fahrenheit' },
+        input: { unit: 'fahrenheit' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
@@ -202,7 +202,7 @@ describe('OpenAI chat renderer', () => {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        args: { city: 'NYC' },
+        input: { city: 'NYC' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
@@ -234,7 +234,7 @@ describe('OpenAI chat renderer', () => {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        args: { city: 'NYC' },
+        input: { city: 'NYC' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
@@ -261,7 +261,7 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'tool-input-delta', id: 'call_1', delta: '{"city"' }
       yield { type: 'tool-input-delta', id: 'call_1', delta: ':"NYC"}' }
       yield { type: 'tool-input-end', id: 'call_1' }
-      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', args: { city: 'NYC' } }
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 

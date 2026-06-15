@@ -179,7 +179,7 @@ export async function* renderAnthropicMessageSSE(input: {
             input: {},
           })
 
-          const inputJson = JSON.stringify(part.args ?? {})
+          const inputJson = JSON.stringify(part.input ?? {})
           yield {
             event: 'content_block_delta',
             data: {
@@ -220,7 +220,7 @@ export async function* renderAnthropicMessageSSE(input: {
           event: 'error',
           data: {
             type: 'error',
-            error: { type: 'api_error', message: JSON.stringify(part.body) },
+            error: { type: 'api_error', message: toErrorMessage(part.body) },
           },
         }
         yield { event: 'message_stop', data: { type: 'message_stop' } }

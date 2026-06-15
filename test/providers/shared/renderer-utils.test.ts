@@ -1,22 +1,33 @@
 import { describe, expect, it } from 'vitest'
 import { extractUsageFromFinishPart, hasUsageData, flattenUsage } from '../../../src/providers/shared/renderer-utils.js'
+import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
+
+type FinishPart = Extract<ProxyStreamPart, { type: 'finish' }>
+
+/** 简化构造 finish part，totalUsage 用转型避免补全所有 LanguageModelUsage 必需字段 */
+function finish(totalUsage?: unknown, overrides?: Partial<Omit<FinishPart, 'totalUsage'>>): FinishPart {
+  return {
+    type: 'finish',
+    finishReason: 'stop',
+    rawFinishReason: undefined,
+    ...overrides,
+    totalUsage: totalUsage as FinishPart['totalUsage'],
+  }
+}
 
 describe('extractUsageFromFinishPart', () => {
   it('returns undefined when totalUsage is absent', () => {
-    const result = extractUsageFromFinishPart({ type: 'finish', finishReason: 'stop' })
+    const result = extractUsageFromFinishPart(finish())
     expect(result).toBeUndefined()
   })
 
   it('returns undefined when totalUsage is not a record', () => {
-    const result = extractUsageFromFinishPart({ type: 'finish', totalUsage: 'bad' })
+    const result = extractUsageFromFinishPart(finish('bad'))
     expect(result).toBeUndefined()
   })
 
   it('extracts inputTokens and outputTokens', () => {
-    const result = extractUsageFromFinishPart({
-      type: 'finish',
-      totalUsage: { inputTokens: 10, outputTokens: 5 },
-    })
+    const result = extractUsageFromFinishPart(finish({ inputTokens: 10, outputTokens: 5 }))
     expect(result).toEqual({
       inputTokens: 10,
       outputTokens: 5,
@@ -27,34 +38,22 @@ describe('extractUsageFromFinishPart', () => {
   })
 
   it('extracts totalTokens', () => {
-    const result = extractUsageFromFinishPart({
-      type: 'finish',
-      totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 20 },
-    })
+    const result = extractUsageFromFinishPart(finish({ inputTokens: 10, outputTokens: 5, totalTokens: 20 }))
     expect(result!.totalTokens).toBe(20)
   })
 
   it('extracts cacheReadTokens from inputTokenDetails', () => {
-    const result = extractUsageFromFinishPart({
-      type: 'finish',
-      totalUsage: { inputTokens: 10, outputTokens: 5, inputTokenDetails: { cacheReadTokens: 3 } },
-    })
+    const result = extractUsageFromFinishPart(finish({ inputTokens: 10, outputTokens: 5, inputTokenDetails: { cacheReadTokens: 3 } }))
     expect(result!.cacheReadTokens).toBe(3)
   })
 
   it('extracts reasoningTokens from outputTokenDetails', () => {
-    const result = extractUsageFromFinishPart({
-      type: 'finish',
-      totalUsage: { inputTokens: 10, outputTokens: 5, outputTokenDetails: { reasoningTokens: 7 } },
-    })
+    const result = extractUsageFromFinishPart(finish({ inputTokens: 10, outputTokens: 5, outputTokenDetails: { reasoningTokens: 7 } }))
     expect(result!.reasoningTokens).toBe(7)
   })
 
   it('returns undefined for fields that are not numbers', () => {
-    const result = extractUsageFromFinishPart({
-      type: 'finish',
-      totalUsage: { inputTokens: undefined, outputTokens: null },
-    })
+    const result = extractUsageFromFinishPart(finish({ inputTokens: undefined, outputTokens: undefined }))
     expect(result!.inputTokens).toBeUndefined()
     expect(result!.outputTokens).toBeUndefined()
   })

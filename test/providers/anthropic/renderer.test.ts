@@ -181,7 +181,7 @@ describe('Anthropic Messages renderer', () => {
 
   it('renders complete tool-call events (non-streaming input)', async () => {
     async function* parts() {
-      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', args: { city: 'NYC' } }
+      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', input: { city: 'NYC' } }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 15, outputTokens: 8 } }
     }
 

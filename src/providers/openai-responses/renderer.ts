@@ -139,7 +139,6 @@ export async function* renderOpenAIResponseSSE(input: {
 
       if (part.type === 'reasoning-delta') {
         const delta = part.text
-        if (!delta) continue
 
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
@@ -222,7 +221,7 @@ export async function* renderOpenAIResponseSSE(input: {
       if (part.type === 'tool-input-delta') {
         const toolCallId = part.id
         const argsDelta = part.delta
-        if (!toolCallId || !argsDelta) continue
+        if (toolCallId == null || argsDelta == null) continue
 
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -261,7 +260,7 @@ export async function* renderOpenAIResponseSSE(input: {
           contentPartStarted = false
         }
 
-        const rawArgs = part.args ?? {}
+        const rawArgs = part.input ?? {}
         const args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)
 
         if (!toolCallStartEmitted.has(toolCallId)) {
