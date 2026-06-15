@@ -1,5 +1,5 @@
 import type { OAuthConfig } from '../config.js'
-import type { AuthStatus, OAuthToken, TokenStore } from './types.js'
+import type { AuthStatus, OAuthToken, OAuthTokenResponse, TokenStore } from './types.js'
 import { OAuthError } from './types.js'
 import { loadAuthFile, extractTokenStore, saveAuthFile, mergeTokenStore } from './token-store.js'
 
@@ -78,7 +78,7 @@ export async function refreshAccessToken(
       )
     }
 
-    return parseTokenResponse((await response.json()) as Record<string, unknown>)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError('refresh_failed', `Token refresh failed: ${String(error)}`)
@@ -114,7 +114,7 @@ export async function fetchClientCredentialsToken(config: OAuthConfig): Promise<
       )
     }
 
-    return parseTokenResponse((await response.json()) as Record<string, unknown>)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError(
@@ -155,7 +155,7 @@ export async function exchangeAuthorizationCode(
       )
     }
 
-    return parseTokenResponse((await response.json()) as Record<string, unknown>)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError('exchange_failed', `Authorization code exchange failed: ${String(error)}`)
@@ -165,7 +165,7 @@ export async function exchangeAuthorizationCode(
 /**
  * 解析 OAuth token 端点的 JSON 响应。
  */
-function parseTokenResponse(data: Record<string, unknown>): OAuthToken {
+function parseTokenResponse(data: OAuthTokenResponse): OAuthToken {
   const accessToken = data['access_token']
   const expiresIn = data['expires_in']
   const tokenType = data['token_type']

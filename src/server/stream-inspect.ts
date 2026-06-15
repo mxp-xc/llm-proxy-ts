@@ -1,7 +1,8 @@
 import type { Settings } from '../index.js'
 import type { ResolvedPlugin, ProxyPlugin, PluginResponse } from '../index.js'
+import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
-export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<unknown>) {
+export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<ProxyStreamPart>) {
   const inspectors = plugins.filter(
     (rp) => typeof (rp.plugin as ProxyPlugin).inspectStreamChunk === 'function',
   )
@@ -34,10 +35,10 @@ export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream:
 }
 
 async function* replayStream(
-  first: unknown,
-  iterator: AsyncIterator<unknown>,
+  first: ProxyStreamPart | undefined,
+  iterator: AsyncIterator<ProxyStreamPart>,
   plugins: ResolvedPlugin[] = [],
-): AsyncIterable<unknown> {
+): AsyncIterable<ProxyStreamPart> {
   if (first !== undefined) {
     yield first
   }
@@ -58,7 +59,7 @@ async function* replayStream(
 
 async function inspectStreamChunk(
   plugins: ResolvedPlugin[],
-  chunk: unknown,
+  chunk: ProxyStreamPart,
 ): Promise<PluginResponse | undefined> {
   for (const rp of plugins) {
     if (typeof (rp.plugin as ProxyPlugin).inspectStreamChunk !== 'function') continue

@@ -6,6 +6,7 @@ import { createApp, type ModelGateway } from '../../src/server/app.js'
 import type { Settings, ProviderRegistry } from '../../src/index.js'
 import { loadEnvironmentFiles, resolveSettingsPath, inspectVendorSseError } from '../../src/index.js'
 import { redact, safeProxyHost } from '../../src/server/logging.js'
+import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 
 const stubRegistry: ProviderRegistry = {
   languageModel() {
@@ -74,7 +75,7 @@ describe('vendor_sse_error', () => {
       },
       stream() {
         calls += 1
-        return streamError()
+        return streamError() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: testSettings, gateway, providerRegistry: stubRegistry })
@@ -107,7 +108,7 @@ describe('vendor_sse_error', () => {
         throw new Error('not used')
       },
       stream() {
-        return streamLateError()
+        return streamLateError() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: testSettings, gateway, providerRegistry: stubRegistry })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
 import {
   renderOpenAIChatCompletion,
   renderOpenAIChatCompletionSSE,
@@ -97,7 +98,7 @@ describe('OpenAI chat renderer', () => {
     const chunks: string[] = []
     for await (const chunk of renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
-      stream: parts(),
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
     })) {
       chunks.push(new TextDecoder().decode(chunk))
     }
@@ -125,7 +126,7 @@ describe('OpenAI chat renderer', () => {
     const chunks: string[] = []
     for await (const chunk of renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
-      stream: parts(),
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
     })) {
       chunks.push(new TextDecoder().decode(chunk))
     }
@@ -148,7 +149,7 @@ describe('OpenAI chat renderer', () => {
     const chunks: string[] = []
     for await (const chunk of renderOpenAIChatCompletionSSE({
       model: 'openrouter/chat',
-      stream: parts(),
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
     })) {
       chunks.push(new TextDecoder().decode(chunk))
     }
@@ -168,18 +169,18 @@ describe('OpenAI chat renderer', () => {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        input: { city: 'NYC' },
+        args: { city: 'NYC' },
       }
       yield {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        input: { unit: 'fahrenheit' },
+        args: { unit: 'fahrenheit' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts())
+    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const toolCalls = events
       .flatMap((event) => event.choices)
       .flatMap((choice) => choice.delta.tool_calls ?? [])
@@ -190,17 +191,17 @@ describe('OpenAI chat renderer', () => {
 
   it('renders complete tool call arguments when no argument deltas were emitted', async () => {
     async function* parts() {
-      yield { type: 'tool-call-start', toolCallId: 'call_1', toolName: 'get_weather' }
+      yield { type: 'tool-input-start', id: 'call_1', toolName: 'get_weather' }
       yield {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        input: { city: 'NYC' },
+        args: { city: 'NYC' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts())
+    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const toolCalls = events
       .flatMap((event) => event.choices)
       .flatMap((choice) => choice.delta.tool_calls ?? [])
@@ -218,19 +219,19 @@ describe('OpenAI chat renderer', () => {
 
   it('does not repeat complete tool call arguments after argument deltas were emitted', async () => {
     async function* parts() {
-      yield { type: 'tool-call-start', toolCallId: 'call_1', toolName: 'get_weather' }
-      yield { type: 'tool-call-args-delta', toolCallId: 'call_1', argsTextDelta: '{"city"' }
-      yield { type: 'tool-call-delta', toolCallId: 'call_1', inputTextDelta: ':"NYC"}' }
+      yield { type: 'tool-input-start', id: 'call_1', toolName: 'get_weather' }
+      yield { type: 'tool-input-delta', id: 'call_1', delta: '{"city"' }
+      yield { type: 'tool-input-delta', id: 'call_1', delta: ':"NYC"}' }
       yield {
         type: 'tool-call',
         toolCallId: 'call_1',
         toolName: 'get_weather',
-        input: { city: 'NYC' },
+        args: { city: 'NYC' },
       }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts())
+    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const toolCalls = events
       .flatMap((event) => event.choices)
       .flatMap((choice) => choice.delta.tool_calls ?? [])
@@ -250,11 +251,11 @@ describe('OpenAI chat renderer', () => {
       yield { type: 'tool-input-delta', id: 'call_1', delta: '{"city"' }
       yield { type: 'tool-input-delta', id: 'call_1', delta: ':"NYC"}' }
       yield { type: 'tool-input-end', id: 'call_1' }
-      yield { type: 'tool-call', id: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } }
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', args: { city: 'NYC' } }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 3 } }
     }
 
-    const events = await collectSseEvents(parts())
+    const events = await collectSseEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const toolCalls = events
       .flatMap((event) => event.choices)
       .flatMap((choice) => choice.delta.tool_calls ?? [])
@@ -269,7 +270,7 @@ describe('OpenAI chat renderer', () => {
   })
 })
 
-async function collectSseEvents(stream: AsyncIterable<unknown>): Promise<Array<any>> {
+async function collectSseEvents(stream: AsyncIterable<ProxyStreamPart>): Promise<Array<any>> {
   const chunks: string[] = []
   for await (const chunk of renderOpenAIChatCompletionSSE({ model: 'openrouter/chat', stream })) {
     chunks.push(new TextDecoder().decode(chunk))

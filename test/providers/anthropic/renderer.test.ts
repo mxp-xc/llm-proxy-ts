@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
 import { renderAnthropicMessage, renderAnthropicMessageSSE } from '../../../src/providers/anthropic/renderer.js'
 
 describe('Anthropic Messages renderer', () => {
@@ -73,7 +74,7 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts())
+    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
 
     // Verify event sequence
     expect(events.map((e) => e.type)).toEqual([
@@ -110,7 +111,7 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop' }
     }
 
-    const events = await collectAnthropicSSEEvents(parts())
+    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const messageDelta = events.find((e) => e.type === 'message_delta')
     expect(messageDelta!.delta.stop_reason).toBe('end_turn')
     expect(messageDelta!.usage).toBeUndefined()
@@ -122,7 +123,7 @@ describe('Anthropic Messages renderer', () => {
       // no finish part — stream just ends
     }
 
-    const events = await collectAnthropicSSEEvents(parts())
+    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
     const messageDelta = events.find((e) => e.type === 'message_delta')
     expect(messageDelta!.delta.stop_reason).toBe('end_turn')
     expect(messageDelta!.usage).toBeUndefined()
@@ -130,13 +131,13 @@ describe('Anthropic Messages renderer', () => {
 
   it('renders streaming tool use SSE events', async () => {
     async function* parts() {
-      yield { type: 'tool-call-start', toolCallId: 'toolu_1', toolName: 'get_weather' }
-      yield { type: 'tool-call-args-delta', toolCallId: 'toolu_1', argsTextDelta: '{"city"' }
-      yield { type: 'tool-input-delta', toolCallId: 'toolu_1', inputTextDelta: ':"NYC"}' }
+      yield { type: 'tool-input-start', id: 'toolu_1', toolName: 'get_weather' }
+      yield { type: 'tool-input-delta', id: 'toolu_1', delta: '{"city"' }
+      yield { type: 'tool-input-delta', id: 'toolu_1', delta: ':"NYC"}' }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 20, outputTokens: 10 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts())
+    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
 
     // Verify tool_use block start
     const blockStart = events.find((e) => e.type === 'content_block_start' && e.content_block?.type === 'tool_use')
@@ -161,11 +162,11 @@ describe('Anthropic Messages renderer', () => {
 
   it('renders complete tool-call events (non-streaming input)', async () => {
     async function* parts() {
-      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', input: { city: 'NYC' } }
+      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', args: { city: 'NYC' } }
       yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 15, outputTokens: 8 } }
     }
 
-    const events = await collectAnthropicSSEEvents(parts())
+    const events = await collectAnthropicSSEEvents(parts() as AsyncIterable<ProxyStreamPart>)
 
     // Should have content_block_start with tool_use, then input_json_delta, then stop
     const blockStart = events.find((e) => e.type === 'content_block_start')
@@ -182,7 +183,7 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const chunks: string[] = []
-    for await (const chunk of renderAnthropicMessageSSE({ model: 'm', stream: parts() })) {
+    for await (const chunk of renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })) {
       chunks.push(new TextDecoder().decode(chunk))
     }
     const raw = chunks.join('')
@@ -197,7 +198,7 @@ describe('Anthropic Messages renderer', () => {
   })
 })
 
-async function collectAnthropicSSEEvents(stream: AsyncIterable<unknown>): Promise<Array<any>> {
+async function collectAnthropicSSEEvents(stream: AsyncIterable<ProxyStreamPart>): Promise<Array<any>> {
   const chunks: string[] = []
   for await (const chunk of renderAnthropicMessageSSE({ model: 'test-model', stream })) {
     chunks.push(new TextDecoder().decode(chunk))

@@ -1,3 +1,4 @@
+import type { LanguageModel } from 'ai'
 import type { Context } from 'hono'
 import { OAuthError, RoutingError } from '../index.js'
 import type { ProtocolStrategy, ProtocolErrorFormatter } from '../index.js'
@@ -17,7 +18,7 @@ export interface ProtocolContext {
     upstreamModel: string,
     headers: Record<string, string>,
     c: Context<AppEnv>,
-  ) => unknown
+  ) => LanguageModel
 }
 
 export async function handleProtocolRequest<TRequest>(

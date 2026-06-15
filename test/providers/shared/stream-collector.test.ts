@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { collectStreamResult } from '../../../src/providers/shared/stream-collector.js'
+import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
 
 /** 构造 AI SDK fullStream 风格的 async iterable */
 async function* chunks(...items: unknown[]): AsyncIterable<unknown> {
@@ -12,7 +13,7 @@ describe('collectStreamResult', () => {
       { type: 'text-delta', text: 'Hello' },
       { type: 'text-delta', text: ' world' },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.text).toBe('Hello world')
   })
 
@@ -25,7 +26,7 @@ describe('collectStreamResult', () => {
         totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.finishReason).toBe('stop')
     expect(result.usage?.inputTokens).toBe(10)
     expect(result.usage?.outputTokens).toBe(5)
@@ -42,7 +43,7 @@ describe('collectStreamResult', () => {
         totalUsage: {},
       },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.response?.id).toBe('chatcmpl-123')
   })
 
@@ -60,7 +61,7 @@ describe('collectStreamResult', () => {
         totalUsage: {},
       },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.toolCalls).toEqual([
       { toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'Tokyo' } },
     ])
@@ -69,14 +70,14 @@ describe('collectStreamResult', () => {
 
   it('returns empty text and undefined usage when stream has no relevant chunks', async () => {
     const stream = chunks({ type: 'finish', finishReason: 'stop', totalUsage: {} })
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.text).toBe('')
     expect(result.finishReason).toBe('stop')
   })
 
   it('handles empty stream gracefully', async () => {
     const stream = chunks()
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.text).toBe('')
     expect(result.finishReason).toBeUndefined()
     expect(result.usage).toBeUndefined()
@@ -97,7 +98,7 @@ describe('collectStreamResult', () => {
         },
       },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.usage?.inputTokens).toBe(100)
     expect(result.usage?.outputTokens).toBe(50)
     expect(result.usage?.totalTokens).toBe(150)
@@ -116,7 +117,7 @@ describe('collectStreamResult', () => {
         totalUsage: {},
       },
     )
-    const result = await collectStreamResult(stream)
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.response?.id).toBe('chatcmpl-123')
     expect(result.response?.timestamp).toEqual(ts)
   })

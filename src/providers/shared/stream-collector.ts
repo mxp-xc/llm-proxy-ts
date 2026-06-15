@@ -1,6 +1,6 @@
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
-import { isRecord } from '../protocol-types.js'
 import { extractUsageFromFinishPart } from './renderer-utils.js'
+import type { ProxyStreamPart } from './aisdk-types.js'
 
 /** 流收集结果，结构与 AI SDK generateText() 返回值兼容 */
 export interface CollectedResult {
@@ -15,28 +15,21 @@ export interface CollectedResult {
  * 遍历 AI SDK streamText().fullStream，收集完整结果。
  * 用于 streamOnly provider 的非流式请求适配。
  */
-export async function collectStreamResult(stream: AsyncIterable<unknown>): Promise<CollectedResult> {
+export async function collectStreamResult(stream: AsyncIterable<ProxyStreamPart>): Promise<CollectedResult> {
   let text = ''
   let finishReason: FinishReason | undefined
   let usage: RenderResultInput['usage'] | undefined
   let response: { id?: string; timestamp?: Date } | undefined
   const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = []
 
-  for await (const chunk of stream) {
-    if (!isRecord(chunk)) continue
-
-    switch (chunk.type) {
+  for await (const part of stream) {
+    switch (part.type) {
       case 'text-delta': {
-        const delta = typeof chunk.text === 'string' ? chunk.text
-          : typeof chunk.textDelta === 'string' ? chunk.textDelta
-          : ''
-        text += delta
+        text += part.text
         break
       }
       case 'tool-call': {
-        const toolCallId = typeof chunk.toolCallId === 'string' ? chunk.toolCallId : ''
-        const toolName = typeof chunk.toolName === 'string' ? chunk.toolName : ''
-        let input: unknown = chunk.args
+        let input: unknown = part.args
         // args 可能是 JSON 字符串，需解析
         if (typeof input === 'string') {
           try {
@@ -45,12 +38,12 @@ export async function collectStreamResult(stream: AsyncIterable<unknown>): Promi
             // 防御性：args 为畸形 JSON 时保留原始字符串。实践中 AI SDK 总提供已解析对象。
           }
         }
-        toolCalls.push({ toolCallId, toolName, input })
+        toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input })
         break
       }
       case 'finish': {
-        finishReason = chunk.finishReason as FinishReason
-        const extracted = extractUsageFromFinishPart(chunk)
+        finishReason = part.finishReason
+        const extracted = extractUsageFromFinishPart(part)
         if (extracted) {
           const u: NonNullable<RenderResultInput['usage']> = {}
           if (extracted.inputTokens !== undefined) u.inputTokens = extracted.inputTokens
@@ -60,7 +53,7 @@ export async function collectStreamResult(stream: AsyncIterable<unknown>): Promi
           if (extracted.reasoningTokens !== undefined) u.reasoningTokens = extracted.reasoningTokens
           usage = u
         }
-        const resp = isRecord(chunk.response) ? chunk.response : undefined
+        const resp = part.response
         if (resp) {
           response = {}
           if (typeof resp.id === 'string') response.id = resp.id

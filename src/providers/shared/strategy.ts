@@ -1,4 +1,4 @@
-import type { AISDKInput } from './aisdk-types.js'
+import type { AISDKInput, ProxyStreamPart } from './aisdk-types.js'
 import type { RenderResultInput } from '../protocol-types.js'
 import type { ProtocolErrorFormatter } from './error-format.js'
 
@@ -20,7 +20,7 @@ export interface ProtocolStrategy<TRequest = unknown> {
   /** 非流式渲染：将 AI SDK 结果渲染为协议特定响应 */
   renderResult(input: RenderResultInput): unknown
   /** 流式渲染：将 AI SDK 流渲染为 SSE Uint8Array 异步迭代 */
-  renderStreamSSE(input: { model: string; stream: AsyncIterable<unknown> }): AsyncIterable<Uint8Array>
+  renderStreamSSE(input: { model: string; stream: AsyncIterable<ProxyStreamPart> }): AsyncIterable<Uint8Array>
   /** 错误格式化器：按协议风格格式化各类错误 */
   formatErrors: ProtocolErrorFormatter
 }

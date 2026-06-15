@@ -1,23 +1,25 @@
+import type { LanguageModel } from 'ai'
+import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 import type { Settings, TokenManager } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
-import type pino from 'pino'
+import pino from 'pino'
 
 export type { Settings } from '../index.js'
 
 export interface ModelGateway {
   generate(input: {
-    model: unknown
+    model: LanguageModel
     callInput: any
     requestModel: string
     abortSignal?: AbortSignal
   }): Promise<any>
   stream(input: {
-    model: unknown
+    model: LanguageModel
     callInput: any
     requestModel: string
     abortSignal?: AbortSignal
-  }): AsyncIterable<unknown>
+  }): AsyncIterable<ProxyStreamPart>
 }
 
 export interface AppDependencies {

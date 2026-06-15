@@ -6,6 +6,7 @@ import { createApp, type ModelGateway } from '../../src/server/app.js'
 import type { Settings, ProviderRegistry } from '../../src/index.js'
 import { loadEnvironmentFiles, resolveSettingsPath, inspectVendorSseError } from '../../src/index.js'
 import { redact, safeProxyHost } from '../../src/server/logging.js'
+import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 
 // ── Shared helpers ──────────────────────────────────────────────
 
@@ -110,7 +111,7 @@ describe('chat endpoint', () => {
         throw new Error('not used')
       },
       stream() {
-        return delayedFirstChunk()
+        return delayedFirstChunk() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({
@@ -280,7 +281,7 @@ describe('chat endpoint', () => {
         throw new Error('not used')
       },
       stream() {
-        return throwingFirstChunk()
+        return throwingFirstChunk() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
@@ -335,7 +336,7 @@ describe('streamOnly provider', () => {
             totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
             response: { id: 'chatcmpl-streamonly' },
           }
-        })()
+        })() as AsyncIterable<ProxyStreamPart>
       },
     }
 
@@ -375,7 +376,7 @@ describe('streamOnly provider', () => {
             finishReason: 'stop',
             totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
           }
-        })()
+        })() as AsyncIterable<ProxyStreamPart>
       },
     }
 
@@ -450,7 +451,7 @@ describe('streamOnly provider', () => {
             rawValue:
               'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n',
           }
-        })()
+        })() as AsyncIterable<ProxyStreamPart>
       },
     }
 
@@ -541,7 +542,7 @@ describe('messages endpoint', () => {
         throw new Error('not used')
       },
       stream() {
-        return textDeltaStream('Hello world')
+        return textDeltaStream('Hello world') as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: anthropicSettings, gateway, providerRegistry: stubRegistry })
@@ -1108,7 +1109,7 @@ describe('vendor_sse_error', () => {
       },
       stream() {
         calls += 1
-        return streamError()
+        return streamError() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: securityTestSettings, gateway, providerRegistry: stubRegistry })
@@ -1141,7 +1142,7 @@ describe('vendor_sse_error', () => {
         throw new Error('not used')
       },
       stream() {
-        return streamLateError()
+        return streamLateError() as AsyncIterable<ProxyStreamPart>
       },
     }
     const app = createApp({ settings: securityTestSettings, gateway, providerRegistry: stubRegistry })

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { toErrorMessage, isRecord, type FinishReason, type RenderResultInput } from '../protocol-types.js'
-import { stringValue, toolCallIdValue, extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import { toErrorMessage, type FinishReason, type RenderResultInput } from '../protocol-types.js'
+import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
@@ -50,7 +51,7 @@ export function renderAnthropicMessage(input: RenderResultInput): AnthropicMessa
 
 export async function* renderAnthropicMessageSSE(input: {
   model: string
-  stream: AsyncIterable<unknown>
+  stream: AsyncIterable<ProxyStreamPart>
 }): AsyncIterable<Uint8Array> {
   const encoder = new TextEncoder()
   const id = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -105,12 +106,9 @@ export async function* renderAnthropicMessageSSE(input: {
 
   try {
     for await (const part of input.stream) {
-      if (!isRecord(part)) continue
-
       if (part.type === 'text-delta') {
         if (!messageStarted) yield emitMessageStart()
 
-        // 如果没有打开的 text block，先打开一个
         if (currentBlockType !== 'text') {
           const stopChunk = emitBlockStop()
           if (stopChunk) yield stopChunk
@@ -121,17 +119,15 @@ export async function* renderAnthropicMessageSSE(input: {
           anthropicSSE('content_block_delta', {
             type: 'content_block_delta',
             index: currentBlockIndex,
-            delta: { type: 'text_delta', text: stringValue(part.text) ?? '' },
+            delta: { type: 'text_delta', text: part.text },
           }),
         )
-      } else if (part.type === 'tool-call-start' || part.type === 'tool-input-start') {
+      } else if (part.type === 'tool-input-start') {
         if (!messageStarted) yield emitMessageStart()
 
-        const toolCallId = toolCallIdValue(part)
-        const toolName = stringValue(part.toolName)
-        if (!toolCallId || !toolName) continue
+        const toolCallId = part.id
+        const toolName = part.toolName
 
-        // 关闭当前 block（如果有），开启新的 tool_use block
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
         toolCallBlockIndexes.set(toolCallId, currentBlockIndex + 1)
@@ -141,16 +137,9 @@ export async function* renderAnthropicMessageSSE(input: {
           name: toolName,
           input: {},
         })
-      } else if (
-        part.type === 'tool-call-delta' ||
-        part.type === 'tool-call-args-delta' ||
-        part.type === 'tool-input-delta'
-      ) {
-        const toolCallId = toolCallIdValue(part)
-        const argsDelta = stringValue(
-          part.argsTextDelta ?? part.inputTextDelta ?? part.argumentsDelta ?? part.delta,
-        )
-        if (!toolCallId || argsDelta === undefined) continue
+      } else if (part.type === 'tool-input-delta') {
+        const toolCallId = part.id
+        const argsDelta = part.delta
 
         const blockIndex = toolCallBlockIndexes.get(toolCallId) ?? currentBlockIndex
 
@@ -164,11 +153,9 @@ export async function* renderAnthropicMessageSSE(input: {
       } else if (part.type === 'tool-call') {
         if (!messageStarted) yield emitMessageStart()
 
-        const toolCallId = toolCallIdValue(part)
-        const toolName = stringValue(part.toolName)
-        if (!toolCallId || !toolName) continue
+        const toolCallId = part.toolCallId
+        const toolName = part.toolName
 
-        // 如果这个 tool call 没有通过 start 事件打开过 block
         if (!toolCallBlockIndexes.has(toolCallId)) {
           const stopChunk = emitBlockStop()
           if (stopChunk) yield stopChunk
@@ -180,8 +167,7 @@ export async function* renderAnthropicMessageSSE(input: {
             input: {},
           })
 
-          // emit 完整的 input 作为单个 delta
-          const inputJson = JSON.stringify(part.input ?? {})
+          const inputJson = JSON.stringify(part.args ?? {})
           yield encoder.encode(
             anthropicSSE('content_block_delta', {
               type: 'content_block_delta',
@@ -191,7 +177,6 @@ export async function* renderAnthropicMessageSSE(input: {
           )
         }
 
-        // 关闭 tool_use block
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
       } else if (part.type === 'finish') {
@@ -199,7 +184,7 @@ export async function* renderAnthropicMessageSSE(input: {
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
 
-        const stopReason = mapStopReason(part.finishReason as FinishReason | undefined)
+        const stopReason = mapStopReason(part.finishReason)
         const usage = extractUsageFromFinishPart(part)
 
         const messageDelta: Record<string, unknown> = {
@@ -246,7 +231,6 @@ export async function* renderAnthropicMessageSSE(input: {
       }
     }
 
-    // 如果流正常结束但无 finish part，仍需发送 message_stop
     if (!messageStarted) yield emitMessageStart()
     const stopChunk = emitBlockStop()
     if (stopChunk) yield stopChunk

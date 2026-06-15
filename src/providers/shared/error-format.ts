@@ -1,29 +1,49 @@
 import type { RoutingError } from '../../routing.js'
 
+/** OpenAI 风格错误响应体 */
+export interface OpenAIErrorBody {
+  error: {
+    type: string
+    code: string
+    message: string
+    loginUrl?: string
+  }
+}
+
+/** Anthropic 风格错误响应体 */
+export interface AnthropicErrorBody {
+  type: 'error'
+  error: {
+    type: string
+    message: string
+    loginUrl?: string
+  }
+}
+
 /**
  * 协议错误格式化器：按协议风格格式化各类错误响应。
  * OpenAI 兼容协议和 Anthropic 协议的错误格式不同。
  */
-export interface ProtocolErrorFormatter {
+export interface ProtocolErrorFormatter<TBody = OpenAIErrorBody | AnthropicErrorBody> {
   /** 请求验证失败 — 可传入协议特定的消息文本 */
-  validation(message?: string): { body: unknown; status: number }
+  validation(message?: string): { body: TBody; status: number }
   /** 模型路由失败（模型不存在） */
-  routing(error: RoutingError): { body: unknown; status: number }
+  routing(error: RoutingError): { body: TBody; status: number }
   /** OAuth 认证失败（需要登录） */
-  oauth(message: string, loginUrl: string): { body: unknown; status: number }
+  oauth(message: string, loginUrl: string): { body: TBody; status: number }
   /** 流首包检查发现限流错误 */
-  rateLimit(errorBody: unknown, errorStatus?: number): { body: unknown; status: number }
+  rateLimit(errorBody: unknown, errorStatus?: number): { body: TBody; status: number }
   /** 上游超时 */
-  timeout(): { body: unknown; status: number }
+  timeout(): { body: TBody; status: number }
   /** 上游请求失败（通用错误） */
-  upstream(): { body: unknown; status: number }
+  upstream(): { body: TBody; status: number }
 }
 
 /**
  * OpenAI 风格错误格式化器。
  * openai-compatible 和 openai-responses 共用同一风格。
  */
-export const openAIErrorFormat: ProtocolErrorFormatter = {
+export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
   validation(message?: string) {
     return {
       body: {
@@ -56,7 +76,7 @@ export const openAIErrorFormat: ProtocolErrorFormatter = {
   },
 
   rateLimit(errorBody: unknown, errorStatus?: number) {
-    return { body: errorBody, status: errorStatus ?? 429 }
+    return { body: errorBody as OpenAIErrorBody, status: errorStatus ?? 429 }
   },
 
   timeout() {
@@ -89,7 +109,7 @@ export const openAIErrorFormat: ProtocolErrorFormatter = {
 /**
  * Anthropic 风格错误格式化器。
  */
-export const anthropicErrorFormat: ProtocolErrorFormatter = {
+export const anthropicErrorFormat: ProtocolErrorFormatter<AnthropicErrorBody> = {
   validation(message?: string) {
     return {
       body: {

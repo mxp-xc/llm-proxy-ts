@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { toErrorMessage, isRecord } from '../protocol-types.js'
+import { toErrorMessage } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
+import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
   ResponseOutputText,
   ResponseOutputMessage,
@@ -24,7 +25,7 @@ export type {
 
 function mapResponseStatus(
   finishReason?: FinishReason,
-  toolCalls?: Array<unknown>,
+  toolCalls?: unknown[],
 ): 'completed' | 'incomplete' {
   if (toolCalls?.length) return 'incomplete'
   if (
@@ -39,10 +40,9 @@ function mapResponseStatus(
 
 // ─── Streaming SSE Renderer ───────────────────────────────────
 
-
 export async function* renderOpenAIResponseSSE(input: {
   model: string
-  stream: AsyncIterable<unknown>
+  stream: AsyncIterable<ProxyStreamPart>
 }): AsyncIterable<Uint8Array> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -63,10 +63,9 @@ export async function* renderOpenAIResponseSSE(input: {
   let reasoningItemId = ''
   const streamedToolCalls: ResponseFunctionToolCall[] = []
 
-  // Bug #3 — tool-call delta tracking state
-  const toolCallFcIds = new Map<string, string>()       // toolCallId → fcId
-  const toolCallsWithArgumentDeltas = new Set<string>()  // toolCallIds that had incremental deltas
-  const toolCallStartEmitted = new Set<string>()         // toolCallIds that had output_item.added emitted
+  const toolCallFcIds = new Map<string, string>()
+  const toolCallsWithArgumentDeltas = new Set<string>()
+  const toolCallStartEmitted = new Set<string>()
 
   function sse(event: string, data: Record<string, unknown>): Uint8Array {
     return new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
@@ -76,10 +75,13 @@ export async function* renderOpenAIResponseSSE(input: {
     return ++sequenceNumber
   }
 
+  function closeTextContentPart(): Generator<Uint8Array, void, unknown> | undefined {
+    // no-op helper — yields are done inline below
+    return undefined
+  }
+
   try {
     for await (const part of input.stream) {
-      if (!isRecord(part)) continue
-
       // Start response on first part
       if (!responseStarted) {
         responseStarted = true
@@ -95,13 +97,9 @@ export async function* renderOpenAIResponseSSE(input: {
         })
       }
 
-      const partType = (part as Record<string, unknown>).type
+      if (part.type === 'text-delta') {
+        const delta = part.text
 
-      if (partType === 'text-delta') {
-        // AI SDK fullStream uses `text` field (not `textDelta`); fall back to `delta` for other stream types
-        const delta = String((part as Record<string, unknown>).text ?? (part as Record<string, unknown>).delta ?? '')
-
-        // Start output item if needed
         if (!outputItemStarted) {
           outputItemStarted = true
           const msgId = newMsgId()
@@ -133,8 +131,7 @@ export async function* renderOpenAIResponseSSE(input: {
         })
       }
 
-      // Reasoning chunks — map to reasoning output item (OpenAI Responses API)
-      if (partType === 'reasoning-start') {
+      if (part.type === 'reasoning-start') {
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -147,9 +144,8 @@ export async function* renderOpenAIResponseSSE(input: {
         }
       }
 
-      if (partType === 'reasoning-delta') {
-        // AI SDK fullStream uses `text` field; fall back to `delta`
-        const delta = String((part as Record<string, unknown>).text ?? (part as Record<string, unknown>).delta ?? '')
+      if (part.type === 'reasoning-delta') {
+        const delta = part.text
         if (!delta) continue
 
         if (!reasoningItemStarted) {
@@ -173,7 +169,7 @@ export async function* renderOpenAIResponseSSE(input: {
         })
       }
 
-      if (partType === 'reasoning-end') {
+      if (part.type === 'reasoning-end') {
         if (reasoningItemStarted) {
           yield sse('response.reasoning_summary_text.done', {
             type: 'response.reasoning_summary_text.done',
@@ -194,14 +190,12 @@ export async function* renderOpenAIResponseSSE(input: {
         }
       }
 
-      // Bug #3 — Handler 1: tool-call-start / tool-input-start
-      if (partType === 'tool-call-start' || partType === 'tool-input-start') {
-        const toolCallId = String((part as Record<string, unknown>).toolCallId ?? `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`)
-        const toolName = String((part as Record<string, unknown>).toolName ?? '')
+      if (part.type === 'tool-input-start') {
+        const toolCallId = part.id
+        const toolName = part.toolName
         const fcId = `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         toolCallFcIds.set(toolCallId, fcId)
 
-        // Close any open text content part first
         if (contentPartStarted) {
           yield sse('response.output_text.done', {
             type: 'response.output_text.done',
@@ -232,15 +226,9 @@ export async function* renderOpenAIResponseSSE(input: {
         toolCallStartEmitted.add(toolCallId)
       }
 
-      // Bug #3 — Handler 2: tool-call-delta / tool-call-args-delta / tool-input-delta
-      if (partType === 'tool-call-delta' || partType === 'tool-call-args-delta' || partType === 'tool-input-delta') {
-        const toolCallId = String((part as Record<string, unknown>).toolCallId ?? '')
-        const argsDelta = String(
-          (part as Record<string, unknown>).argsTextDelta ??
-          (part as Record<string, unknown>).inputTextDelta ??
-          (part as Record<string, unknown>).argumentsDelta ??
-          (part as Record<string, unknown>).delta ?? ''
-        )
+      if (part.type === 'tool-input-delta') {
+        const toolCallId = part.id
+        const argsDelta = part.delta
         if (!toolCallId || !argsDelta) continue
 
         toolCallsWithArgumentDeltas.add(toolCallId)
@@ -252,13 +240,11 @@ export async function* renderOpenAIResponseSSE(input: {
         })
       }
 
-      // Bug #3 — Handler 3: tool-call (complete)
-      if (partType === 'tool-call') {
-        const toolCallId = String((part as Record<string, unknown>).toolCallId ?? `call_${randomUUID().replace(/-/g, '').slice(0, 24)}`)
-        const toolName = String((part as Record<string, unknown>).toolName ?? '')
+      if (part.type === 'tool-call') {
+        const toolCallId = part.toolCallId
+        const toolName = part.toolName
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
-        // Close any open text content part first
         if (contentPartStarted) {
           yield sse('response.output_text.done', {
             type: 'response.output_text.done',
@@ -282,11 +268,9 @@ export async function* renderOpenAIResponseSSE(input: {
           contentPartStarted = false
         }
 
-        // Bug #9 — avoid double-encoding string args
-        const rawArgs = (part as Record<string, unknown>).args ?? (part as Record<string, unknown>).input ?? {}
+        const rawArgs = part.args ?? {}
         const args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)
 
-        // If start wasn't emitted via incremental events, emit it now
         if (!toolCallStartEmitted.has(toolCallId)) {
           yield sse('response.output_item.added', {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
@@ -294,7 +278,6 @@ export async function* renderOpenAIResponseSSE(input: {
           })
         }
 
-        // Only emit full args as a single delta if no argument deltas were streamed
         if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
           yield sse('response.function_call_arguments.delta', {
             type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
@@ -311,7 +294,6 @@ export async function* renderOpenAIResponseSSE(input: {
           item: { id: fcId, type: 'function_call', status: 'completed', call_id: toolCallId, name: toolName, arguments: args },
         })
 
-        // Bug #1 — accumulate tool calls for response.completed
         streamedToolCalls.push({
           id: fcId, type: 'function_call', status: 'completed',
           call_id: toolCallId, name: toolName, arguments: args,
@@ -319,8 +301,7 @@ export async function* renderOpenAIResponseSSE(input: {
         outputIndex++
       }
 
-      if (partType === 'finish') {
-        // Close any open reasoning item
+      if (part.type === 'finish') {
         if (reasoningItemStarted) {
           yield sse('response.reasoning_summary_text.done', {
             type: 'response.reasoning_summary_text.done',
@@ -339,7 +320,6 @@ export async function* renderOpenAIResponseSSE(input: {
           reasoningItemStarted = false
           fullReasoning = ''
         }
-        // Close any open text content
         if (contentPartStarted) {
           yield sse('response.output_text.done', {
             type: 'response.output_text.done',
@@ -363,14 +343,11 @@ export async function* renderOpenAIResponseSSE(input: {
           })
         }
 
-        // Build complete response object
-        const finishReason = (part as Record<string, unknown>).finishReason as FinishReason
-        // Bug #8 — pass streamedToolCalls to mapResponseStatus
+        const finishReason = part.finishReason
         const status = mapResponseStatus(finishReason, streamedToolCalls)
         const usage = extractUsageFromFinishPart(part)
-        const finishResponse = (part as Record<string, unknown>).response as { id?: string } | undefined
+        const finishResponse = part.response
 
-        // Bug #1 — build output from both text and accumulated tool calls
         const textOutput: ResponseOutputMessage[] = fullText !== '' ? [{
           id: currentMsgId, type: 'message', status: 'completed', role: 'assistant',
           content: [{ type: 'output_text', text: fullText, annotations: [] }],
@@ -393,7 +370,6 @@ export async function* renderOpenAIResponseSSE(input: {
           truncation: 'disabled',
         }
 
-        // 只在有实际 usage 数据时才包含 usage（避免全 0 误导）
         if (usage && hasUsageData(usage)) {
           const promptTokens = usage.inputTokens ?? 0
           const completionTokens = usage.outputTokens ?? 0
@@ -413,15 +389,33 @@ export async function* renderOpenAIResponseSSE(input: {
         })
       }
 
-      // Bug #2 — Error handling must be terminal
-      if (partType === 'error' || partType === 'openai-error') {
-        const errorData = (part as Record<string, unknown>).error ?? (part as Record<string, unknown>).body
+      if (part.type === 'error') {
+        const errorData = part.error
         yield sse('response.error', {
           type: 'response.error',
           sequence_number: nextSeq(),
           error: { type: 'server_error', message: toErrorMessage(errorData) },
         })
-        // Terminal event
+        yield sse('response.completed', {
+          type: 'response.completed',
+          sequence_number: nextSeq(),
+          response: {
+            id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
+            model: input.model, status: 'incomplete', output: [], output_text: '',
+            instructions: null, temperature: null, top_p: null, tool_choice: null,
+            tools: [], parallel_tool_calls: true, truncation: 'disabled',
+          },
+        })
+        return
+      }
+
+      if (part.type === 'openai-error') {
+        const errorData = part.body
+        yield sse('response.error', {
+          type: 'response.error',
+          sequence_number: nextSeq(),
+          error: { type: 'server_error', message: toErrorMessage(errorData) },
+        })
         yield sse('response.completed', {
           type: 'response.completed',
           sequence_number: nextSeq(),
@@ -460,7 +454,6 @@ export async function* renderOpenAIResponseSSE(input: {
 export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
   const output: ResponseOutputItem[] = []
 
-  // Bug #5 — empty-string text should still produce a message output item
   if (input.text != null) {
     output.push({
       id: `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
@@ -473,7 +466,6 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
 
   if (input.toolCalls?.length) {
     for (const call of input.toolCalls) {
-      // Bug #9 — avoid double-encoding string args
       const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})
       output.push({
         id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
@@ -493,7 +485,6 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
     model: input.model,
     status: mapResponseStatus(input.finishReason, input.toolCalls),
     output,
-    // Bug #5 — use ?? instead of || for empty-string text
     output_text: input.text ?? '',
     instructions: null,
     temperature: null,

@@ -50,7 +50,7 @@ export function createApp({
     upstreamModel: string,
     headers: Record<string, string>,
     c: import('hono').Context<AppEnv>,
-  ) {
+  ): import('ai').LanguageModel {
     const result = resolvedRegistry.languageModel(providerName, upstreamModel, headers)
     if (result.keySelection) {
       c.set('keySelection', result.keySelection)

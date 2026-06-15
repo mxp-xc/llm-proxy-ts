@@ -1,5 +1,5 @@
-import { isRecord } from '../protocol-types.js'
 import type { RenderResultInput } from '../protocol-types.js'
+import type { ProxyStreamPart } from './aisdk-types.js'
 
 export function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
@@ -21,17 +21,24 @@ export interface ExtractedUsage {
 /** 从 AI SDK finish part 提取 token usage（AI SDK v6: totalUsage: LanguageModelUsage）
  *  - 返回 undefined 表示完全无 usage 数据（totalUsage 不存在）
  *  - 各字段 undefined 表示上游未报告该项 */
-export function extractUsageFromFinishPart(part: Record<string, unknown>): ExtractedUsage | undefined {
-  const totalUsage = part.totalUsage
-  if (!isRecord(totalUsage)) return undefined
+export function extractUsageFromFinishPart(
+  part: Extract<ProxyStreamPart, { type: 'finish' }> | Record<string, unknown>,
+): ExtractedUsage | undefined {
+  const totalUsage = 'totalUsage' in part ? part.totalUsage : undefined
+  if (totalUsage === undefined || totalUsage === null || typeof totalUsage !== 'object') return undefined
 
-  const inputTokenDetails = isRecord(totalUsage.inputTokenDetails) ? totalUsage.inputTokenDetails : undefined
-  const outputTokenDetails = isRecord(totalUsage.outputTokenDetails) ? totalUsage.outputTokenDetails : undefined
+  const tu = totalUsage as Record<string, unknown>
+  const inputTokenDetails = typeof tu.inputTokenDetails === 'object' && tu.inputTokenDetails !== null
+    ? tu.inputTokenDetails as Record<string, unknown>
+    : undefined
+  const outputTokenDetails = typeof tu.outputTokenDetails === 'object' && tu.outputTokenDetails !== null
+    ? tu.outputTokenDetails as Record<string, unknown>
+    : undefined
 
   return {
-    inputTokens: typeof totalUsage.inputTokens === 'number' ? totalUsage.inputTokens : undefined,
-    outputTokens: typeof totalUsage.outputTokens === 'number' ? totalUsage.outputTokens : undefined,
-    totalTokens: typeof totalUsage.totalTokens === 'number' ? totalUsage.totalTokens : undefined,
+    inputTokens: typeof tu.inputTokens === 'number' ? tu.inputTokens : undefined,
+    outputTokens: typeof tu.outputTokens === 'number' ? tu.outputTokens : undefined,
+    totalTokens: typeof tu.totalTokens === 'number' ? tu.totalTokens : undefined,
     cacheReadTokens:
       inputTokenDetails && typeof inputTokenDetails.cacheReadTokens === 'number'
         ? inputTokenDetails.cacheReadTokens

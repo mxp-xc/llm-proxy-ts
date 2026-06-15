@@ -10,7 +10,10 @@ import type { OAuthToken, TokenStore } from './types.js'
  * 顶层 provider name 键对应 OAuthToken（OAuth 模块使用）。
  * `_plugins` 子树供 auth 插件持久化使用。
  */
-export type AuthFileData = Record<string, unknown>
+export interface AuthFileData {
+  [providerName: string]: OAuthToken | Record<string, unknown>
+  _plugins?: Record<string, Record<string, unknown>>
+}
 
 /** `_plugins` 子树的键名 */
 export const PLUGINS_KEY = '_plugins'

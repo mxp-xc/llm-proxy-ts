@@ -1,3 +1,12 @@
+/** OAuth 2.0 Token Endpoint 成功响应 (RFC 6749 §5.1) */
+export interface OAuthTokenResponse {
+  access_token: string
+  token_type?: string
+  expires_in: number
+  refresh_token?: string
+  scope?: string
+}
+
 /**
  * OAuth token 数据，持久化到 auth.json。
  */

@@ -24,16 +24,16 @@ export function createPluginStore(authFilePath: string, pluginName: string): Plu
       const data = await loadAuthFile(authFilePath)
       const plugins = data[PLUGINS_KEY]
       if (typeof plugins !== 'object' || plugins === null) return {}
-      const subtree = (plugins as Record<string, unknown>)[pluginName]
+      const subtree = (plugins as Record<string, Record<string, unknown>>)[pluginName]
       if (typeof subtree !== 'object' || subtree === null) return {}
-      return { ...(subtree as Record<string, unknown>) }
+      return { ...subtree }
     },
 
     async set(data: Record<string, unknown>): Promise<void> {
       const fileData = await loadAuthFile(authFilePath)
       const plugins =
         typeof fileData[PLUGINS_KEY] === 'object' && fileData[PLUGINS_KEY] !== null
-          ? { ...(fileData[PLUGINS_KEY] as Record<string, unknown>) }
+          ? { ...(fileData[PLUGINS_KEY] as Record<string, Record<string, unknown>>) }
           : {}
 
       plugins[pluginName] = data

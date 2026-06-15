@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { toErrorMessage, isRecord } from '../protocol-types.js'
-import { stringValue, toolCallIdValue, extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import { toErrorMessage } from '../protocol-types.js'
+import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
+import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type { OpenAIChatCompletion } from './types.js'
 
 export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChatCompletion {
@@ -46,7 +47,7 @@ export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChat
 
 export async function* renderOpenAIChatCompletionSSE(input: {
   model: string
-  stream: AsyncIterable<unknown>
+  stream: AsyncIterable<ProxyStreamPart>
 }): AsyncIterable<Uint8Array> {
   const encoder = new TextEncoder()
   const id = `chatcmpl_${randomUUID()}`
@@ -55,8 +56,6 @@ export async function* renderOpenAIChatCompletionSSE(input: {
   const toolCallsWithArgumentDeltas = new Set<string>()
 
   for await (const part of input.stream) {
-    if (!isRecord(part)) continue
-
     if (part.type === 'text-delta') {
       yield encoder.encode(
         sse({
@@ -67,10 +66,9 @@ export async function* renderOpenAIChatCompletionSSE(input: {
           choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
         }),
       )
-    } else if (part.type === 'tool-call-start' || part.type === 'tool-input-start') {
-      const toolCallId = toolCallIdValue(part)
-      const toolName = stringValue(part.toolName)
-      if (!toolCallId || !toolName) continue
+    } else if (part.type === 'tool-input-start') {
+      const toolCallId = part.id
+      const toolName = part.toolName
 
       yield encoder.encode(
         sse({
@@ -96,16 +94,9 @@ export async function* renderOpenAIChatCompletionSSE(input: {
           ],
         }),
       )
-    } else if (
-      part.type === 'tool-call-delta' ||
-      part.type === 'tool-call-args-delta' ||
-      part.type === 'tool-input-delta'
-    ) {
-      const toolCallId = toolCallIdValue(part)
-      const argumentsDelta = stringValue(
-        part.argsTextDelta ?? part.inputTextDelta ?? part.argumentsDelta ?? part.delta,
-      )
-      if (!toolCallId || argumentsDelta === undefined) continue
+    } else if (part.type === 'tool-input-delta') {
+      const toolCallId = part.id
+      const argumentsDelta = part.delta
       toolCallsWithArgumentDeltas.add(toolCallId)
 
       yield encoder.encode(
@@ -131,12 +122,11 @@ export async function* renderOpenAIChatCompletionSSE(input: {
         }),
       )
     } else if (part.type === 'tool-call') {
-      const toolCallId = toolCallIdValue(part)
-      const toolName = stringValue(part.toolName)
-      if (!toolCallId || !toolName) continue
+      const toolCallId = part.toolCallId
+      const toolName = part.toolName
       const functionCall: { name: string; arguments?: string } = { name: toolName }
       if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
-        functionCall.arguments = JSON.stringify(part.input ?? {})
+        functionCall.arguments = JSON.stringify(part.args ?? {})
       }
 
       yield encoder.encode(
