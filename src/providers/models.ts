@@ -1,6 +1,14 @@
 import type { Settings } from '../config.js'
 import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { OpenAIModel, OpenAIModelList } from './model-types.js'
+import type { ModelLimit, OpenAIModel, OpenAIModelList } from './model-types.js'
+
+/** 构造 OpenAIModel，仅在 limit 有值时附带 */
+function makeModel(id: string, ownedBy: string, limit?: ModelLimit): OpenAIModel {
+  const hasLimit = limit && (limit.context != null || limit.input != null || limit.output != null)
+  return hasLimit
+    ? { id, object: 'model', created: 0, owned_by: ownedBy, limit }
+    : { id, object: 'model', created: 0, owned_by: ownedBy }
+}
 
 export function listModels(settings: Settings): OpenAIModelList {
   const data: OpenAIModel[] = []
@@ -9,27 +17,12 @@ export function listModels(settings: Settings): OpenAIModelList {
     const flatEnabled = isFlatLookupEnabled(provider, settings)
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
-      data.push({
-        id: `${providerName}/${modelKey}`,
-        object: 'model',
-        created: 0,
-        owned_by: providerName,
-      })
+      data.push(makeModel(`${providerName}/${modelKey}`, providerName, model.limit))
 
       if (flatEnabled) {
-        data.push({
-          id: modelKey,
-          object: 'model',
-          created: 0,
-          owned_by: providerName,
-        })
+        data.push(makeModel(modelKey, providerName, model.limit))
         for (const alias of model.aliases) {
-          data.push({
-            id: alias,
-            object: 'model',
-            created: 0,
-            owned_by: providerName,
-          })
+          data.push(makeModel(alias, providerName, model.limit))
         }
       }
     }
@@ -50,16 +43,12 @@ export function getModel(settings: Settings, modelId: string): OpenAIModel | nul
     }
 
     const provider = settings.providers[providerName]
-    if (!provider?.models[modelKey]) {
+    const model = provider?.models[modelKey]
+    if (!model) {
       return null
     }
 
-    return {
-      id: modelId,
-      object: 'model',
-      created: 0,
-      owned_by: providerName,
-    }
+    return makeModel(modelId, providerName, model.limit)
   }
 
   // 扁平名称查找 — 仅搜索启用了 flat lookup 的 provider
@@ -70,20 +59,10 @@ export function getModel(settings: Settings, modelId: string): OpenAIModel | nul
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
       if (modelKey === modelId) {
-        return {
-          id: modelId,
-          object: 'model',
-          created: 0,
-          owned_by: providerName,
-        }
+        return makeModel(modelId, providerName, model.limit)
       }
       if (model.aliases.includes(modelId)) {
-        return {
-          id: modelId,
-          object: 'model',
-          created: 0,
-          owned_by: providerName,
-        }
+        return makeModel(modelId, providerName, model.limit)
       }
     }
   }

@@ -1,3 +1,4 @@
+import type { ModelLimit } from '../providers/model-types.js'
 import type { ProviderConfig, Settings } from '../config.js'
 import type { Logger } from '../types.js'
 
@@ -19,7 +20,7 @@ export interface PluginStore {
 
 export interface DiscoveredModel {
   id: string
-  // 后续可扩展
+  limit?: ModelLimit
 }
 
 export interface DiscoveredModelList {

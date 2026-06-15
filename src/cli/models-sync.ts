@@ -273,6 +273,9 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
 
     const selectedIds = new Set(selected as string[])
 
+    // 按 id 查找 discovered model（含 limit 信息）
+    const discoveredById = new Map(models.map((m) => [m.id, m]))
+
     const newModels: Record<string, ModelRouteInput> = {}
     let kept = 0
     let added = 0
@@ -286,7 +289,12 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
         newModels[existingEntry[0]] = existingEntry[1]
         kept++
       } else {
-        newModels[modelId] = { upstreamModel: modelId }
+        const discovered = discoveredById.get(modelId)
+        const entry: ModelRouteInput = { upstreamModel: modelId }
+        if (discovered?.limit) {
+          entry.limit = discovered.limit
+        }
+        newModels[modelId] = entry
         added++
       }
     }

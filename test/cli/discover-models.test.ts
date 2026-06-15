@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  extractLimit,
   fetchUpstreamModels,
   openAIToDiscoveredModels,
   resolveModelsUrl,
@@ -297,9 +298,63 @@ describe('openAIToDiscoveredModels', () => {
     expect(result).toEqual({ models: [] })
   })
 
-  it('discards OpenAI-specific fields', () => {
+  it('discards OpenAI-specific fields when no limit fields present', () => {
     const openaiModels = [{ id: 'model-a', object: 'model', created: 999, owned_by: 'org' }]
     const result = openAIToDiscoveredModels(openaiModels)
     expect(result.models[0]).toEqual({ id: 'model-a' })
+  })
+
+  it('extracts limit from upstream extension fields', () => {
+    const openaiModels = [
+      { id: 'deepseek-r1', object: 'model', context_length: 65536, max_output_tokens: 8192 },
+    ]
+    const result = openAIToDiscoveredModels(openaiModels)
+    expect(result.models[0]).toEqual({
+      id: 'deepseek-r1',
+      limit: { context: 65536, output: 8192 },
+    })
+  })
+
+  it('extracts only context_length when max_output_tokens is absent', () => {
+    const openaiModels = [
+      { id: 'model-a', object: 'model', context_length: 128000 },
+    ]
+    const result = openAIToDiscoveredModels(openaiModels)
+    expect(result.models[0]).toEqual({
+      id: 'model-a',
+      limit: { context: 128000 },
+    })
+  })
+
+  it('extracts only max_output_tokens when context_length is absent', () => {
+    const openaiModels = [
+      { id: 'model-b', object: 'model', max_output_tokens: 4096 },
+    ]
+    const result = openAIToDiscoveredModels(openaiModels)
+    expect(result.models[0]).toEqual({
+      id: 'model-b',
+      limit: { output: 4096 },
+    })
+  })
+})
+
+describe('extractLimit', () => {
+  it('returns undefined when no limit fields present', () => {
+    expect(extractLimit({})).toBeUndefined()
+  })
+
+  it('maps context_length to limit.context', () => {
+    expect(extractLimit({ context_length: 32000 })).toEqual({ context: 32000 })
+  })
+
+  it('maps max_output_tokens to limit.output', () => {
+    expect(extractLimit({ max_output_tokens: 4096 })).toEqual({ output: 4096 })
+  })
+
+  it('maps both fields when present', () => {
+    expect(extractLimit({ context_length: 128000, max_output_tokens: 16384 })).toEqual({
+      context: 128000,
+      output: 16384,
+    })
   })
 })

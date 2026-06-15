@@ -305,3 +305,141 @@ describe('GET /v1/models/:id', () => {
     expect(reasonerResponse.status).toBe(404)
   })
 })
+
+describe('GET /v1/models — limit', () => {
+  it('includes limit when configured on models', async () => {
+    const providers: Settings['providers'] = {
+      openrouter: {
+        type: 'openai-compatible',
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        models: {
+          chat: {
+            upstreamModel: 'openrouter/auto',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            limit: { context: 128000, output: 4096 },
+          },
+          basic: {
+            upstreamModel: 'openrouter/basic',
+            aliases: [],
+            headers: {},
+            plugins: [],
+          },
+        },
+      },
+    }
+    const app = createApp({ settings: makeSettings(providers), providerRegistry: stubRegistry })
+    const response = await app.request('/v1/models')
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.data).toEqual([
+      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: { context: 128000, output: 4096 } },
+      { id: 'openrouter/basic', object: 'model', created: 0, owned_by: 'openrouter' },
+    ])
+  })
+
+  it('includes limit in flat lookup entries', async () => {
+    const providers: Settings['providers'] = {
+      openrouter: {
+        type: 'openai-compatible',
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        options: { enableFlatModelLookup: true },
+        models: {
+          chat: {
+            upstreamModel: 'openrouter/auto',
+            aliases: ['default'],
+            headers: {},
+            plugins: [],
+            limit: { context: 200000, input: 200000, output: 8192 },
+          },
+        },
+      },
+    }
+    const app = createApp({ settings: makeSettingsWithFlatLookup(providers, true), providerRegistry: stubRegistry })
+    const response = await app.request('/v1/models')
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    const expectedLimit = { context: 200000, input: 200000, output: 8192 }
+    expect(body.data).toEqual([
+      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      { id: 'default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+    ])
+  })
+})
+
+describe('GET /v1/models/:id — limit', () => {
+  it('returns limit for provider/modelKey lookup', async () => {
+    const providers: Settings['providers'] = {
+      openrouter: {
+        type: 'openai-compatible',
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        models: {
+          chat: {
+            upstreamModel: 'openrouter/auto',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            limit: { context: 128000, output: 4096 },
+          },
+        },
+      },
+    }
+    const app = createApp({ settings: makeSettings(providers), providerRegistry: stubRegistry })
+    const response = await app.request('/v1/models/openrouter/chat')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      id: 'openrouter/chat',
+      object: 'model',
+      created: 0,
+      owned_by: 'openrouter',
+      limit: { context: 128000, output: 4096 },
+    })
+  })
+
+  it('returns limit for flat lookup by alias', async () => {
+    const providers: Settings['providers'] = {
+      openrouter: {
+        type: 'openai-compatible',
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        options: { enableFlatModelLookup: true },
+        models: {
+          chat: {
+            upstreamModel: 'openrouter/auto',
+            aliases: ['default'],
+            headers: {},
+            plugins: [],
+            limit: { context: 128000, output: 4096 },
+          },
+        },
+      },
+    }
+    const app = createApp({ settings: makeSettingsWithFlatLookup(providers, true), providerRegistry: stubRegistry })
+    const response = await app.request('/v1/models/default')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      id: 'default',
+      object: 'model',
+      created: 0,
+      owned_by: 'openrouter',
+      limit: { context: 128000, output: 4096 },
+    })
+  })
+})

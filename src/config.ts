@@ -34,11 +34,22 @@ const apiKeySchema = z
   .nullable()
   .optional()
 
+/** 模型 token 限制 */
+export const modelLimitSchema = z.object({
+  /** 总上下文窗口长度（含输入+输出） */
+  context: z.number().int().positive().optional(),
+  /** 输入 token 上限（无上游标准字段，需手动配置） */
+  input: z.number().int().positive().optional(),
+  /** 输出 token 上限 */
+  output: z.number().int().positive().optional(),
+})
+
 export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
   aliases: z.array(z.string().min(1)).optional().default([]),
   headers: z.record(z.string(), z.string()).optional().default({}),
   plugins: z.array(pluginEntrySchema).optional().default([]),
+  limit: modelLimitSchema.optional(),
 })
 
 export const oauthConfigSchema = z.object({

@@ -1,19 +1,38 @@
 import { createProxyFetch } from '../providers/shared/provider-factory.js'
+import type { ModelLimit } from '../providers/model-types.js'
 import type { Settings } from '../config.js'
 import type { DiscoveredModelList } from '../plugins/types.js'
 
-/** OpenAI /models 端点返回的单个模型对象 */
-export interface OpenAIModel {
+/** 上游 /models 端点返回的单个模型对象（原始格式） */
+export interface UpstreamModelResponse {
   id: string
   object: string
   created?: number
   owned_by?: string
+  /** 上游扩展字段：总上下文窗口长度（如 OpenRouter） */
+  context_length?: number
+  /** 上游扩展字段：最大输出 token 数（如 OpenRouter） */
+  max_output_tokens?: number
 }
 
-/** OpenAI /models 端点返回的完整响应 */
-export interface OpenAIModelList {
+/** 从上游扩展字段提取模型限制信息 */
+export function extractLimit(
+  raw: Pick<UpstreamModelResponse, 'context_length' | 'max_output_tokens'>,
+): ModelLimit | undefined {
+  const contextLength = raw.context_length
+  const maxOutputTokens = raw.max_output_tokens
+  if (contextLength == null && maxOutputTokens == null) return undefined
+
+  const limit: ModelLimit = {}
+  if (contextLength != null) limit.context = contextLength
+  if (maxOutputTokens != null) limit.output = maxOutputTokens
+  return limit
+}
+
+/** 上游 /models 端点返回的完整响应 */
+export interface UpstreamModelList {
   object: 'list'
-  data: OpenAIModel[]
+  data: UpstreamModelResponse[]
 }
 
 export interface DiscoverModelsOptions {
@@ -60,7 +79,7 @@ export async function fetchUpstreamModels({
   modelsEndpoint,
   headers: providerHeaders,
   oauthToken,
-}: DiscoverModelsOptions): Promise<OpenAIModel[]> {
+}: DiscoverModelsOptions): Promise<UpstreamModelResponse[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
     : globalThis.fetch
@@ -88,7 +107,7 @@ export async function fetchUpstreamModels({
     throw new Error(`HTTP ${response.status} ${response.statusText}`)
   }
 
-  const body = (await response.json()) as OpenAIModelList
+  const body = (await response.json()) as UpstreamModelList
 
   if (!body.data || !Array.isArray(body.data)) {
     throw new Error('Unexpected response format: missing data array')
@@ -98,8 +117,11 @@ export async function fetchUpstreamModels({
 }
 
 /** 将 OpenAI 协议的模型列表转换为内部统一的 DiscoveredModel 格式 */
-export function openAIToDiscoveredModels(models: OpenAIModel[]): DiscoveredModelList {
+export function openAIToDiscoveredModels(models: UpstreamModelResponse[]): DiscoveredModelList {
   return {
-    models: models.map((m) => ({ id: m.id })),
+    models: models.map((m) => {
+      const limit = extractLimit(m)
+      return limit ? { id: m.id, limit } : { id: m.id }
+    }),
   }
 }
