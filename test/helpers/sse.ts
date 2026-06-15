@@ -1,41 +1,29 @@
 /**
- * Shared SSE event collector for renderer tests.
+ * Shared SSE output collector for renderer tests.
  *
- * Supports two SSE formats:
- * 1. `data: {json}` (OpenAI Chat Completions style)
- * 2. `event: type\ndata: json` (Anthropic / OpenAI Responses style)
+ * Works with structured SSEOutput<T> objects (not raw bytes).
+ * Returns frames with event name and data payload.
  */
-export async function collectSSEEvents(
-  stream: AsyncIterable<Uint8Array>,
-): Promise<Array<{ event?: string; data: any }>> {
-  const decoder = new TextDecoder()
-  const chunks: string[] = []
-  for await (const chunk of stream) {
-    chunks.push(decoder.decode(chunk))
+import type { SSEFrame, SSEOutput } from '../../src/providers/shared/sse-utils.js'
+
+/** A collected SSE frame with event name and data payload */
+export interface CollectedSSEFrame<T = unknown> {
+  event?: string
+  data: T
+}
+
+/**
+ * Collect structured SSEOutput frames from a renderer stream.
+ * Filters out SSEDone sentinels — returns only data frames.
+ */
+export async function collectSSEFrames<T>(
+  stream: AsyncIterable<SSEOutput<T>>,
+): Promise<Array<CollectedSSEFrame<T>>> {
+  const frames: Array<CollectedSSEFrame<T>> = []
+  for await (const output of stream) {
+    if ('type' in output && output.type === 'done') continue
+    const frame = output as SSEFrame<T>
+    frames.push(frame.event != null ? { event: frame.event, data: frame.data } : { data: frame.data })
   }
-  const raw = chunks.join('')
-
-  const results: Array<{ event?: string; data: any }> = []
-  const parts = raw.split('\n\n').filter((p) => p.trim())
-
-  for (const part of parts) {
-    const lines = part.split('\n')
-    const eventLine = lines.find((l) => l.startsWith('event: '))
-    const dataLines = lines.filter((l) => l.startsWith('data: '))
-
-    if (dataLines.length === 0) continue
-
-    // SSE spec: multiple data: lines are joined with \n
-    const dataStr = dataLines.map((l) => l.slice('data: '.length)).join('\n')
-    try {
-      results.push({
-        ...(eventLine ? { event: eventLine.slice('event: '.length) } : {}),
-        data: JSON.parse(dataStr),
-      })
-    } catch {
-      // skip unparseable (e.g. [DONE])
-    }
-  }
-
-  return results
+  return frames
 }

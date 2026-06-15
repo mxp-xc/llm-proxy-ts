@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
+import type {
+  OpenAIResponseStreamEvent,
+  ResponseOutputTextDeltaEvent,
+  ResponseCompletedEvent,
+  ResponseOutputItemAddedEvent,
+  ResponseFunctionCallArgumentsDeltaEvent,
+} from '../../../src/providers/openai-responses/types.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../../../src/providers/openai-responses/renderer.js'
-import { collectSSEEvents } from '../../helpers/sse.js'
+import { collectSSEFrames } from '../../helpers/sse.js'
 
 describe('renderOpenAIResponse', () => {
   it('renders text response', () => {
@@ -177,7 +184,7 @@ async function* textStream() {
 describe('renderOpenAIResponseSSE', () => {
   it('emits correct event sequence for text streaming', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: textStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     const eventTypes = events.map(e => e.event)
     expect(eventTypes).toContain('response.created')
     expect(eventTypes).toContain('response.in_progress')
@@ -192,20 +199,21 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('emits text delta content', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: textStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const deltas = events.filter(e => e.event === 'response.output_text.delta')
-    expect(deltas[0]!.data.delta).toBe('Hello')
-    expect(deltas[1]!.data.delta).toBe(' world')
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const deltas = events
+      .filter(e => e.event === 'response.output_text.delta')
+      .map(e => e.data as ResponseOutputTextDeltaEvent)
+    expect(deltas[0]!.delta).toBe('Hello')
+    expect(deltas[1]!.delta).toBe(' world')
   })
 
   it('emits completed response with full data', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: textStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const completed = events.find(e => e.event === 'response.completed')
-    expect(completed).toBeDefined()
-    expect(completed?.data.response.object).toBe('response')
-    expect(completed?.data.response.status).toBe('completed')
-    expect(completed?.data.response.usage).toEqual({
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.object).toBe('response')
+    expect(completed.response.status).toBe('completed')
+    expect(completed.response.usage).toEqual({
       input_tokens: 10,
       output_tokens: 5,
       total_tokens: 15,
@@ -220,9 +228,9 @@ describe('renderOpenAIResponseSSE', () => {
       yield { type: 'finish', finishReason: 'stop', response: { id: 'resp_no_usage' } }
     }
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: noUsageStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const completed = events.find(e => e.event === 'response.completed')
-    expect(completed?.data.response.usage).toBeUndefined()
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.usage).toBeUndefined()
   })
 
   it('passes cacheReadTokens and reasoningTokens through in SSE response.completed', async () => {
@@ -242,9 +250,9 @@ describe('renderOpenAIResponseSSE', () => {
       }
     }
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: detailStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const completed = events.find(e => e.event === 'response.completed')
-    expect(completed?.data.response.usage).toEqual({
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.usage).toEqual({
       input_tokens: 10,
       output_tokens: 5,
       total_tokens: 20,
@@ -255,7 +263,7 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('includes sequence_number in events', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: textStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     for (const event of events) {
       expect(typeof event.data.sequence_number).toBe('number')
     }
@@ -269,7 +277,7 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('emits tool-call events for complete tool-call part', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: toolCallStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     const eventTypes = events.map(e => e.event)
     expect(eventTypes).toContain('response.output_item.added')
     expect(eventTypes).toContain('response.function_call_arguments.delta')
@@ -286,12 +294,12 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('emits response.completed after error and terminates stream', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: errorStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     const eventTypes = events.map(e => e.event)
     expect(eventTypes).toContain('response.error')
     expect(eventTypes).toContain('response.completed')
-    const completed = events.find(e => e.event === 'response.completed')
-    expect(completed?.data.response.status).toBe('incomplete')
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.status).toBe('incomplete')
     // No events after response.completed
     const completedIndex = eventTypes.indexOf('response.completed')
     expect(eventTypes.length).toBe(completedIndex + 1)
@@ -300,10 +308,10 @@ describe('renderOpenAIResponseSSE', () => {
   // Bug #1 — response.completed includes tool calls
   it('includes function_call items in response.completed output', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: toolCallStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const completed = events.find(e => e.event === 'response.completed')
-    const output = completed?.data.response.output
-    expect(output.some((item: any) => item.type === 'function_call')).toBe(true)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    const output = completed.response.output
+    expect(output.some((item) => item.type === 'function_call')).toBe(true)
   })
 
   // Bug #3 — Streaming tool-call with incremental deltas
@@ -317,14 +325,16 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('handles tool-call-start and tool-call-delta incremental events', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: toolCallDeltaStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     const eventTypes = events.map(e => e.event)
     expect(eventTypes).toContain('response.output_item.added')
     // Two deltas from tool-call-delta parts
-    const argDeltas = events.filter(e => e.event === 'response.function_call_arguments.delta')
+    const argDeltas = events
+      .filter(e => e.event === 'response.function_call_arguments.delta')
+      .map(e => e.data as ResponseFunctionCallArgumentsDeltaEvent)
     expect(argDeltas.length).toBe(2)
-    expect(argDeltas[0]!.data.delta).toBe('{"q":"h')
-    expect(argDeltas[1]!.data.delta).toBe('ello"}')
+    expect(argDeltas[0]!.delta).toBe('{"q":"h')
+    expect(argDeltas[1]!.delta).toBe('ello"}')
     expect(eventTypes).toContain('response.function_call_arguments.done')
     expect(eventTypes).toContain('response.output_item.done')
     expect(eventTypes).toContain('response.completed')
@@ -340,13 +350,15 @@ describe('renderOpenAIResponseSSE', () => {
 
   it('uses different msgId for text after tool call', async () => {
     const stream = renderOpenAIResponseSSE({ model: 'gpt-4o', stream: textThenToolCallStream() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const addedItems = events.filter(e => e.event === 'response.output_item.added')
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const addedItems = events
+      .filter(e => e.event === 'response.output_item.added')
+      .map(e => e.data as ResponseOutputItemAddedEvent)
     // First text message, then function_call, then second text message
-    const msgItems = addedItems.filter(e => e.data.item?.type === 'message')
+    const msgItems = addedItems.filter(e => e.item?.type === 'message')
     expect(msgItems.length).toBe(2)
     // The two message items should have different ids
-    const ids = msgItems.map(e => e.data.item.id)
+    const ids = msgItems.map(e => e.item.id)
     expect(ids[0]).not.toBe(ids[1])
   })
 })

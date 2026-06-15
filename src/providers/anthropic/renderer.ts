@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage, type FinishReason, type RenderResultInput } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import type { SSEFrame, SSEOutput } from '../shared/sse-utils.js'
 import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
   AnthropicMessageResponse,
   AnthropicResponseContentBlock,
+  AnthropicSSEData,
+  AnthropicSSEMessageDelta,
+  AnthropicSSEToolUseContentBlock,
+  AnthropicSSETextContentBlock,
   AnthropicStopReason,
 } from './types.js'
 
@@ -52,8 +57,7 @@ export function renderAnthropicMessage(input: RenderResultInput): AnthropicMessa
 export async function* renderAnthropicMessageSSE(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
-}): AsyncIterable<Uint8Array> {
-  const encoder = new TextEncoder()
+}): AsyncIterable<SSEOutput<AnthropicSSEData>> {
   const id = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
   let messageStarted = false
@@ -61,10 +65,11 @@ export async function* renderAnthropicMessageSSE(input: {
   let currentBlockType: 'text' | 'tool_use' | null = null
   const toolCallBlockIndexes = new Map<string, number>()
 
-  function emitMessageStart(): Uint8Array {
+  function emitMessageStart(): SSEFrame<AnthropicSSEData> {
     messageStarted = true
-    return encoder.encode(
-      anthropicSSE('message_start', {
+    return {
+      event: 'message_start',
+      data: {
         type: 'message_start',
         message: {
           id,
@@ -76,30 +81,35 @@ export async function* renderAnthropicMessageSSE(input: {
           stop_sequence: null,
           usage: { input_tokens: 0, output_tokens: 1 },
         },
-      }),
-    )
+      },
+    }
   }
 
-  function emitBlockStart(type: 'text' | 'tool_use', block: Record<string, unknown>): Uint8Array {
+  function emitBlockStart(
+    type: 'text' | 'tool_use',
+    block: AnthropicSSETextContentBlock | AnthropicSSEToolUseContentBlock,
+  ): SSEFrame<AnthropicSSEData> {
     currentBlockIndex++
     currentBlockType = type
-    return encoder.encode(
-      anthropicSSE('content_block_start', {
+    return {
+      event: 'content_block_start',
+      data: {
         type: 'content_block_start',
         index: currentBlockIndex,
         content_block: block,
-      }),
-    )
+      },
+    }
   }
 
-  function emitBlockStop(): Uint8Array | null {
+  function emitBlockStop(): SSEFrame<AnthropicSSEData> | null {
     if (currentBlockType === null) return null
-    const result = encoder.encode(
-      anthropicSSE('content_block_stop', {
+    const result: SSEFrame<AnthropicSSEData> = {
+      event: 'content_block_stop',
+      data: {
         type: 'content_block_stop',
         index: currentBlockIndex,
-      }),
-    )
+      },
+    }
     currentBlockType = null
     return result
   }
@@ -115,13 +125,14 @@ export async function* renderAnthropicMessageSSE(input: {
           yield emitBlockStart('text', { type: 'text', text: '' })
         }
 
-        yield encoder.encode(
-          anthropicSSE('content_block_delta', {
+        yield {
+          event: 'content_block_delta',
+          data: {
             type: 'content_block_delta',
             index: currentBlockIndex,
             delta: { type: 'text_delta', text: part.text },
-          }),
-        )
+          },
+        }
       } else if (part.type === 'tool-input-start') {
         if (!messageStarted) yield emitMessageStart()
 
@@ -143,13 +154,14 @@ export async function* renderAnthropicMessageSSE(input: {
 
         const blockIndex = toolCallBlockIndexes.get(toolCallId) ?? currentBlockIndex
 
-        yield encoder.encode(
-          anthropicSSE('content_block_delta', {
+        yield {
+          event: 'content_block_delta',
+          data: {
             type: 'content_block_delta',
             index: blockIndex,
             delta: { type: 'input_json_delta', partial_json: argsDelta },
-          }),
-        )
+          },
+        }
       } else if (part.type === 'tool-call') {
         if (!messageStarted) yield emitMessageStart()
 
@@ -168,13 +180,14 @@ export async function* renderAnthropicMessageSSE(input: {
           })
 
           const inputJson = JSON.stringify(part.args ?? {})
-          yield encoder.encode(
-            anthropicSSE('content_block_delta', {
+          yield {
+            event: 'content_block_delta',
+            data: {
               type: 'content_block_delta',
               index: currentBlockIndex,
               delta: { type: 'input_json_delta', partial_json: inputJson },
-            }),
-          )
+            },
+          }
         }
 
         const stopChunk = emitBlockStop()
@@ -187,7 +200,7 @@ export async function* renderAnthropicMessageSSE(input: {
         const stopReason = mapStopReason(part.finishReason)
         const usage = extractUsageFromFinishPart(part)
 
-        const messageDelta: Record<string, unknown> = {
+        const messageDelta: AnthropicSSEMessageDelta = {
           type: 'message_delta',
           delta: { stop_reason: stopReason, stop_sequence: null },
         }
@@ -195,38 +208,38 @@ export async function* renderAnthropicMessageSSE(input: {
           messageDelta.usage = { input_tokens: usage.inputTokens ?? 0, output_tokens: usage.outputTokens ?? 0 }
         }
 
-        yield encoder.encode(
-          anthropicSSE('message_delta', messageDelta),
-        )
+        yield { event: 'message_delta', data: messageDelta }
 
-        yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+        yield { event: 'message_stop', data: { type: 'message_stop' } }
         return
       } else if (part.type === 'openai-error') {
         if (!messageStarted) yield emitMessageStart()
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
-        yield encoder.encode(
-          anthropicSSE('error', {
+        yield {
+          event: 'error',
+          data: {
             type: 'error',
             error: { type: 'api_error', message: JSON.stringify(part.body) },
-          }),
-        )
-        yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+          },
+        }
+        yield { event: 'message_stop', data: { type: 'message_stop' } }
         return
       } else if (part.type === 'error') {
         if (!messageStarted) yield emitMessageStart()
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
-        yield encoder.encode(
-          anthropicSSE('error', {
+        yield {
+          event: 'error',
+          data: {
             type: 'error',
             error: {
               type: 'api_error',
               message: toErrorMessage(part.error),
             },
-          }),
-        )
-        yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+          },
+        }
+        yield { event: 'message_stop', data: { type: 'message_stop' } }
         return
       }
     }
@@ -234,33 +247,31 @@ export async function* renderAnthropicMessageSSE(input: {
     if (!messageStarted) yield emitMessageStart()
     const stopChunk = emitBlockStop()
     if (stopChunk) yield stopChunk
-    yield encoder.encode(
-      anthropicSSE('message_delta', {
+    yield {
+      event: 'message_delta',
+      data: {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
-      }),
-    )
-    yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+      },
+    }
+    yield { event: 'message_stop', data: { type: 'message_stop' } }
   } catch (error) {
     if (!messageStarted) yield emitMessageStart()
     const stopChunk = emitBlockStop()
     if (stopChunk) yield stopChunk
     const message = toErrorMessage(error)
-    yield encoder.encode(
-      anthropicSSE('error', {
+    yield {
+      event: 'error',
+      data: {
         type: 'error',
         error: { type: 'api_error', message },
-      }),
-    )
-    yield encoder.encode(anthropicSSE('message_stop', { type: 'message_stop' }))
+      },
+    }
+    yield { event: 'message_stop', data: { type: 'message_stop' } }
   }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
-
-function anthropicSSE(eventType: string, data: unknown): string {
-  return `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`
-}
 
 function mapStopReason(
   reason?: FinishReason | unknown,

@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
+import { formatSSE } from '../../../src/providers/shared/sse-utils.js'
+import type {
+  AnthropicSSEData,
+  AnthropicSSEMessageStart,
+  AnthropicSSEContentBlockStart,
+  AnthropicSSEContentBlockDelta,
+  AnthropicSSEMessageDelta,
+} from '../../../src/providers/anthropic/types.js'
 import { renderAnthropicMessage, renderAnthropicMessageSSE } from '../../../src/providers/anthropic/renderer.js'
-import { collectSSEEvents } from '../../helpers/sse.js'
+import { collectSSEFrames } from '../../helpers/sse.js'
 
 describe('Anthropic Messages renderer', () => {
   it('renders text completions', () => {
@@ -76,11 +84,10 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const eventTypes = events.map((e) => e.event)
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Verify event sequence
-    expect(eventTypes).toEqual([
+    expect(events.map((e) => e.event)).toEqual([
       'message_start',
       'content_block_start',
       'content_block_delta',
@@ -91,21 +98,26 @@ describe('Anthropic Messages renderer', () => {
     ])
 
     // Verify message_start
-    expect(events[0]!.data.message.role).toBe('assistant')
-    expect(events[0]!.data.message.stop_reason).toBeNull()
+    const msgStart = events[0]!.data as AnthropicSSEMessageStart
+    expect(msgStart.message.role).toBe('assistant')
+    expect(msgStart.message.stop_reason).toBeNull()
 
     // Verify content_block_start
-    expect(events[1]!.data.content_block.type).toBe('text')
-    expect(events[1]!.data.index).toBe(0)
+    const blockStart = events[1]!.data as AnthropicSSEContentBlockStart
+    expect(blockStart.content_block.type).toBe('text')
+    expect(blockStart.index).toBe(0)
 
     // Verify text deltas
-    expect(events[2]!.data.delta).toEqual({ type: 'text_delta', text: 'hel' })
-    expect(events[3]!.data.delta).toEqual({ type: 'text_delta', text: 'lo' })
+    const delta0 = events[2]!.data as AnthropicSSEContentBlockDelta
+    const delta1 = events[3]!.data as AnthropicSSEContentBlockDelta
+    expect(delta0.delta).toEqual({ type: 'text_delta', text: 'hel' })
+    expect(delta1.delta).toEqual({ type: 'text_delta', text: 'lo' })
 
     // Verify message_delta
-    expect(events[5]!.data.delta.stop_reason).toBe('end_turn')
-    expect(events[5]!.data.usage.input_tokens).toBe(10)
-    expect(events[5]!.data.usage.output_tokens).toBe(5)
+    const msgDelta = events[5]!.data as AnthropicSSEMessageDelta
+    expect(msgDelta.delta.stop_reason).toBe('end_turn')
+    expect(msgDelta.usage!.input_tokens).toBe(10)
+    expect(msgDelta.usage!.output_tokens).toBe(5)
   })
 
   it('omits usage in streaming message_delta when usage is all zeros', async () => {
@@ -115,10 +127,10 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const messageDelta = events.find((e) => e.event === 'message_delta')
-    expect(messageDelta!.data.delta.stop_reason).toBe('end_turn')
-    expect(messageDelta!.data.usage).toBeUndefined()
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
+    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    expect(messageDelta.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta.usage).toBeUndefined()
   })
 
   it('omits usage in fallback message_delta when stream ends without finish part', async () => {
@@ -128,10 +140,10 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
-    const messageDelta = events.find((e) => e.event === 'message_delta')
-    expect(messageDelta!.data.delta.stop_reason).toBe('end_turn')
-    expect(messageDelta!.data.usage).toBeUndefined()
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
+    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    expect(messageDelta.delta.stop_reason).toBe('end_turn')
+    expect(messageDelta.usage).toBeUndefined()
   })
 
   it('renders streaming tool use SSE events', async () => {
@@ -143,12 +155,13 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Verify tool_use block start
-    const blockStart = events.find((e) => e.event === 'content_block_start' && e.data?.content_block?.type === 'tool_use')
-    expect(blockStart).toBeDefined()
-    expect(blockStart!.data.content_block).toMatchObject({
+    const blockStart = events.find(
+      (e) => e.event === 'content_block_start' && (e.data as AnthropicSSEContentBlockStart).content_block?.type === 'tool_use',
+    )!
+    expect((blockStart.data as AnthropicSSEContentBlockStart).content_block).toMatchObject({
       type: 'tool_use',
       id: 'toolu_1',
       name: 'get_weather',
@@ -157,13 +170,13 @@ describe('Anthropic Messages renderer', () => {
 
     // Verify input_json_delta events
     const deltas = events.filter(
-      (e) => e.event === 'content_block_delta' && e.data?.delta?.type === 'input_json_delta',
+      (e) => e.event === 'content_block_delta' && (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
     )
-    expect(deltas.map((d) => d.data.delta.partial_json)).toEqual(['{"city"', ':"NYC"}'])
+    expect(deltas.map((d) => (d.data as AnthropicSSEContentBlockDelta & { delta: { type: 'input_json_delta'; partial_json: string } }).delta.partial_json)).toEqual(['{"city"', ':"NYC"}'])
 
     // Verify stop reason
-    const messageDelta = events.find((e) => e.event === 'message_delta')
-    expect(messageDelta!.data.delta.stop_reason).toBe('tool_use')
+    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    expect(messageDelta.delta.stop_reason).toBe('tool_use')
   })
 
   it('renders complete tool-call events (non-streaming input)', async () => {
@@ -173,14 +186,16 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Should have content_block_start with tool_use, then input_json_delta, then stop
-    const blockStart = events.find((e) => e.event === 'content_block_start')
-    expect(blockStart!.data.content_block.type).toBe('tool_use')
+    const blockStart = events.find((e) => e.event === 'content_block_start')!.data as AnthropicSSEContentBlockStart
+    expect(blockStart.content_block.type).toBe('tool_use')
 
-    const jsonDelta = events.find((e) => e.data?.delta?.type === 'input_json_delta')
-    expect(jsonDelta!.data.delta.partial_json).toBe('{"city":"NYC"}')
+    const jsonDelta = events.find(
+      (e) => e.event === 'content_block_delta' && (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
+    )!.data as AnthropicSSEContentBlockDelta & { delta: { type: 'input_json_delta'; partial_json: string } }
+    expect(jsonDelta.delta.partial_json).toBe('{"city":"NYC"}')
   })
 
   it('uses named SSE events format', async () => {
@@ -190,7 +205,7 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
-    const events = await collectSSEEvents(stream)
+    const events = await collectSSEFrames<AnthropicSSEData>(stream)
     const eventTypes = events.map((e) => e.event)
 
     // Anthropic SSE uses named events
@@ -200,5 +215,23 @@ describe('Anthropic Messages renderer', () => {
     expect(eventTypes).toContain('content_block_stop')
     expect(eventTypes).toContain('message_delta')
     expect(eventTypes).toContain('message_stop')
+  })
+
+  it('formats SSEOutput correctly via formatSSE', async () => {
+    async function* parts() {
+      yield { type: 'text-delta', text: 'hi' }
+      yield { type: 'finish', finishReason: 'stop' }
+    }
+
+    const outputs = []
+    for await (const chunk of renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })) {
+      outputs.push(chunk)
+    }
+
+    // Verify wire format via formatSSE
+    const wire = outputs.map((o) => formatSSE(o)).join('')
+    expect(wire).toContain('event: message_start\n')
+    expect(wire).toContain('event: content_block_delta\n')
+    expect(wire).toContain('event: message_stop\n')
   })
 })

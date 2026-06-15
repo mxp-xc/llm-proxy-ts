@@ -1,3 +1,7 @@
+import { formatSSE, type SSEOutput } from '../providers/shared/sse-utils.js'
+
+const textEncoder = new TextEncoder()
+
 export class RequestTimeoutError extends Error {
   constructor() {
     super('Request timed out')
@@ -26,8 +30,8 @@ export async function withRequestTimeout<T>(
   }
 }
 
-export function readableStreamFromAsyncIterable(
-  iterable: AsyncIterable<Uint8Array>,
+export function readableStreamFromAsyncIterable<T>(
+  iterable: AsyncIterable<SSEOutput<T>>,
   onError: (error: unknown) => void,
 ): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]()
@@ -38,7 +42,7 @@ export function readableStreamFromAsyncIterable(
         if (next.done) {
           controller.close()
         } else {
-          controller.enqueue(next.value)
+          controller.enqueue(textEncoder.encode(formatSSE(next.value)))
         }
       } catch (error) {
         onError(error)

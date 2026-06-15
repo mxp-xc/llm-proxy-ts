@@ -1,4 +1,5 @@
 import type { AISDKInput, ProxyStreamPart } from './aisdk-types.js'
+import type { SSEOutput } from './sse-utils.js'
 import type { RenderResultInput } from '../protocol-types.js'
 import type { ProtocolErrorFormatter } from './error-format.js'
 
@@ -6,7 +7,7 @@ import type { ProtocolErrorFormatter } from './error-format.js'
  * 策略模式接口：封装特定协议的验证、映射、渲染和错误格式化逻辑。
  * 每种协议格式（openai-compatible、openai-responses、anthropic）提供一个实现。
  */
-export interface ProtocolStrategy<TRequest = unknown> {
+export interface ProtocolStrategy<TRequest = unknown, TSSEData = never> {
   /** 验证请求体，无效时抛出 Zod 错误 */
   validate(body: unknown): TRequest
   /** 验证失败时的错误消息（用于 formatErrors.validation） */
@@ -19,8 +20,8 @@ export interface ProtocolStrategy<TRequest = unknown> {
   mapToAISDKInput(request: TRequest): AISDKInput
   /** 非流式渲染：将 AI SDK 结果渲染为协议特定响应 */
   renderResult(input: RenderResultInput): unknown
-  /** 流式渲染：将 AI SDK 流渲染为 SSE Uint8Array 异步迭代 */
-  renderStreamSSE(input: { model: string; stream: AsyncIterable<ProxyStreamPart> }): AsyncIterable<Uint8Array>
+  /** 流式渲染：将 AI SDK 流渲染为结构化 SSE 帧异步迭代 */
+  renderStreamSSE(input: { model: string; stream: AsyncIterable<ProxyStreamPart> }): AsyncIterable<SSEOutput<TSSEData>>
   /** 错误格式化器：按协议风格格式化各类错误 */
   formatErrors: ProtocolErrorFormatter
 }
