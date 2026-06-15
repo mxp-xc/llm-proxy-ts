@@ -1,11 +1,17 @@
-import type { Settings } from '../index.js'
-import type { ResolvedPlugin, ProxyPlugin, PluginResponse } from '../index.js'
+import type { Settings, ProviderConfig } from '../index.js'
+import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../index.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
+function isProxyPluginWithInspect(plugin: Plugin): plugin is ProxyPlugin {
+  return 'inspectStreamChunk' in plugin
+}
+
+function isPluginResponse(value: unknown): value is PluginResponse {
+  return value !== null && typeof value === 'object' && 'status' in value
+}
+
 export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream: AsyncIterable<ProxyStreamPart>) {
-  const inspectors = plugins.filter(
-    (rp) => typeof (rp.plugin as ProxyPlugin).inspectStreamChunk === 'function',
-  )
+  const inspectors = plugins.filter((rp) => isProxyPluginWithInspect(rp.plugin))
 
   const iterator = stream[Symbol.asyncIterator]()
   const first = await iterator.next()
@@ -15,16 +21,17 @@ export async function inspectFirstStreamChunk(plugins: ResolvedPlugin[], stream:
 
   if (inspectors.length > 0) {
     for (const rp of inspectors) {
-      const result = await (rp.plugin as ProxyPlugin).inspectStreamChunk!({
+      const plugin = rp.plugin as ProxyPlugin
+      const result = await plugin.inspectStreamChunk!({
         requestId: '',
         settings: {} as Settings,
-        provider: { id: '', provider: {} as any },
+        provider: { id: '', provider: {} as ProviderConfig },
         config: rp.config,
         chunk: first.value,
       })
-      if (result && typeof result === 'object' && 'status' in result) {
+      if (isPluginResponse(result)) {
         return {
-          error: result as PluginResponse,
+          error: result,
           stream: replayStream(undefined, iterator, plugins),
         }
       }
@@ -62,16 +69,17 @@ async function inspectStreamChunk(
   chunk: ProxyStreamPart,
 ): Promise<PluginResponse | undefined> {
   for (const rp of plugins) {
-    if (typeof (rp.plugin as ProxyPlugin).inspectStreamChunk !== 'function') continue
-    const result = await (rp.plugin as ProxyPlugin).inspectStreamChunk!({
+    if (!isProxyPluginWithInspect(rp.plugin)) continue
+    const plugin = rp.plugin as ProxyPlugin
+    const result = await plugin.inspectStreamChunk!({
       requestId: '',
       settings: {} as Settings,
-      provider: { id: '', provider: {} as any },
+      provider: { id: '', provider: {} as ProviderConfig },
       config: rp.config,
       chunk,
     })
-    if (result && typeof result === 'object' && 'status' in result) {
-      return result as PluginResponse
+    if (isPluginResponse(result)) {
+      return result
     }
   }
   return undefined

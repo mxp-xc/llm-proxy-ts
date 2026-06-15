@@ -67,7 +67,7 @@ describe('OpenAI chat protocol mapping', () => {
       messages: [
         {
           role: 'assistant',
-          content: null,
+          content: undefined,
           tool_calls: [
             {
               id: 'call_1',
@@ -178,7 +178,7 @@ describe('OpenAI chat protocol mapping', () => {
     })
     const jsonInput = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
-      messages: [{ role: 'tool', tool_call_id: 'call_2', content: { temp: 72 } }],
+      messages: [{ role: 'tool', tool_call_id: 'call_2', content: [{ temp: 72 } as Record<string, unknown>] }],
     })
 
     expect(textInput.messages[0]).toEqual({
@@ -199,7 +199,7 @@ describe('OpenAI chat protocol mapping', () => {
           type: 'tool-result',
           toolCallId: 'call_2',
           toolName: 'call_2',
-          output: { type: 'json', value: { temp: 72 } },
+          output: { type: 'json', value: [{ temp: 72 }] },
         },
       ],
     })

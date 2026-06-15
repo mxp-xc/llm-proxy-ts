@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { parse, type ParseError } from 'jsonc-parser'
 import { z } from 'zod/v3'
 import { zodToJsonSchema } from 'zod-to-json-schema'
+import { isRecord } from './providers/protocol-types.js'
 
 // ─── Plugin entry schema ────────────────────────────────────────
 
@@ -22,7 +23,7 @@ export const pluginEntrySchema = z
   .union([z.string().min(1), pluginEntryObjectSchema])
   .transform((v) =>
     typeof v === 'string'
-      ? { name: v, config: {} as Record<string, unknown>, providers: [] as string[] }
+      ? { name: v, config: {} as Record<string, unknown>, providers: [] }
       : v,
   )
   .refine((v) => v.name || v.module, { message: 'Plugin must have name or module' })
@@ -203,17 +204,17 @@ const MIGRATED_PROVIDER_FIELDS = new Set([
  * 必须在 Zod 解析之前运行，因为 Zod 默认 strip 模式会静默丢弃这些字段。
  */
 function checkMigratedTopLevelFields(parsed: unknown): void {
-  const providers = (parsed as Record<string, unknown>)?.providers
-  if (!providers || typeof providers !== 'object') return
-
-  for (const [providerName, provider] of Object.entries(providers as Record<string, unknown>)) {
-    if (!provider || typeof provider !== 'object') continue
-    for (const key of Object.keys(provider as Record<string, unknown>)) {
+  if (!isRecord(parsed)) return
+  const providers = parsed['providers']
+  if (!isRecord(providers)) return
+  for (const [providerName, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) continue
+    for (const key of Object.keys(provider)) {
       if (MIGRATED_PROVIDER_FIELDS.has(key)) {
         throw new Error(
-          `Provider "${providerName}" has a top-level "${key}" field, which was moved into "options" in a recent version. ` +
-            `Please update your config: move "${key}" into the "options" object. ` +
-            `Example: { "options": { "${key}": ${(provider as Record<string, unknown>)[key]} } }`,
+          `Provider "${providerName}": "${key}" has been migrated to provider.options. ` +
+          `Move \`${key}: ${String(provider[key])}\` to \`options: { ${key}: ... }\`. ` +
+          `See docs/migration.md for details.`,
         )
       }
     }

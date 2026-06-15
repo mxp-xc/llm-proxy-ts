@@ -1,4 +1,5 @@
 import type { RoutingError } from '../../routing.js'
+import { isRecord } from '../protocol-types.js'
 
 /** OpenAI 风格错误响应体 */
 export interface OpenAIErrorBody {
@@ -76,7 +77,13 @@ export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
   },
 
   rateLimit(errorBody: unknown, errorStatus?: number) {
-    return { body: errorBody as OpenAIErrorBody, status: errorStatus ?? 429 }
+    if (isRecord(errorBody) && isRecord(errorBody['error']) && typeof errorBody['error']?.message === 'string') {
+      return { body: errorBody as unknown as OpenAIErrorBody, status: errorStatus ?? 429 }
+    }
+    return {
+      body: { error: { type: 'rate_limit_error', code: 'rate_limited', message: String(errorBody) } },
+      status: errorStatus ?? 429,
+    }
   },
 
   timeout() {

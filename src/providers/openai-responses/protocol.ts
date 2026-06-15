@@ -1,5 +1,5 @@
 import { jsonSchema, type ToolSet } from 'ai'
-import type { AISDKInput } from '../shared/aisdk-types.js'
+import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions } from '../shared/protocol-utils.js'
 import { z } from 'zod/v3'
 
@@ -65,7 +65,10 @@ export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesR
 
 // ─── Helpers ────────────────────────────────────────────────
 
-function extractTextFromContent(content: Array<Record<string, unknown>>): string {
+type EasyInputContent = z.infer<typeof easyInputMessageSchema>['content']
+
+function extractTextFromContent(content: EasyInputContent): string {
+  if (typeof content === 'string') return content
   return content
     .filter((item) => item.type === 'input_text' || item.type === 'text')
     .map((item) => String(item.text ?? ''))
@@ -74,17 +77,21 @@ function extractTextFromContent(content: Array<Record<string, unknown>>): string
 }
 
 function mapEasyInputContent(
-  content: string | Array<Record<string, unknown>>,
-): string | Array<Record<string, unknown>> {
+  content: EasyInputContent,
+): string | ProtocolMessagePart[] {
   if (typeof content === 'string') return content
-  return content.map((item) => {
+  return content.map((item): ProtocolMessagePart => {
     if (item.type === 'input_text' || item.type === 'output_text') {
-      return { type: 'text', text: item.text ?? '' }
+      return { type: 'text', text: String(item.text ?? '') }
     }
+    // input_image: ProtocolMessagePart does not carry image variants;
+    // AI SDK image content is handled at the gateway layer via raw passthrough.
+    // Map to text placeholder so the message shape stays valid.
     if (item.type === 'input_image') {
-      return { type: 'image', image: item.image_url ?? item.url ?? item.image }
+      return { type: 'text', text: String(item.image_url ?? item.url ?? item.image ?? '') }
     }
-    return item
+    // Fallback for unrecognized content parts: map to text
+    return { type: 'text', text: String(item.text ?? '') }
   })
 }
 
@@ -98,7 +105,7 @@ const mappedResponsesRequestKeys = new Set([
 export function mapResponsesRequestToAISDKInput(
   request: OpenAIResponsesRequest,
 ): AISDKInput {
-  const messages: Array<Record<string, unknown>> = []
+  const messages: ProtocolMessage[] = []
   const systemParts: string[] = []
 
   // instructions → system option
@@ -113,7 +120,7 @@ export function mapResponsesRequestToAISDKInput(
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
         // function_call → assistant message with tool-call content part
-        let args: unknown = {}
+        let args: Record<string, unknown> | string = {}
         try {
           args = JSON.parse(item.arguments)
         } catch {
@@ -198,7 +205,7 @@ export function mapResponsesRequestToAISDKInput(
   // providerOptions key 固定为 "openai"：
   // @ai-sdk/openai 始终读此 key，passthrough 正常工作；
   // 其他 provider（如 @ai-sdk/openai-compatible）不认识此 key，自动忽略 → 不泄漏
-  const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedResponsesRequestKeys)
+  const providerOptions = mapProviderOptions(request, mappedResponsesRequestKeys)
   // parallel_tool_calls 在 mappedResponsesRequestKeys 中被排除（不走 passthrough），
   // 但 @ai-sdk/openai 期望 providerOptions.openai.parallelToolCalls（camelCase）
   if (request.parallel_tool_calls !== undefined) {

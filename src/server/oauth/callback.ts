@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { Settings, OAuthConfig } from '../../index.js'
 import type { TokenManager } from '../../index.js'
+import { isRecord } from '../../providers/protocol-types.js'
 
 /**
  * OAuth 回调路由的依赖项。
@@ -132,24 +133,19 @@ interface DecodedState {
   nonce: string
 }
 
+function isDecodedState(value: unknown): value is DecodedState {
+  return isRecord(value) &&
+    typeof value['provider'] === 'string' &&
+    typeof value['nonce'] === 'string'
+}
+
 /**
  * 解码 state 参数。
  */
 function decodeState(state: string): DecodedState | null {
   try {
-    const json = Buffer.from(state, 'base64url').toString('utf8')
-    const parsed = JSON.parse(json) as unknown
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'provider' in parsed &&
-      'nonce' in parsed &&
-      typeof (parsed as Record<string, unknown>)['provider'] === 'string' &&
-      typeof (parsed as Record<string, unknown>)['nonce'] === 'string'
-    ) {
-      return parsed as DecodedState
-    }
-    return null
+    const parsed: unknown = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'))
+    return isDecodedState(parsed) ? parsed : null
   } catch {
     return null
   }

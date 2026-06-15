@@ -479,7 +479,7 @@ describe('config', () => {
     )
 
     await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow(
-      /enableFlatModelLookup.*moved into "options"/,
+      /enableFlatModelLookup.*migrated to provider\.options/,
     )
   })
 
@@ -502,7 +502,7 @@ describe('config', () => {
     )
 
     await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow(
-      /anthropicVersion.*moved into "options"/,
+      /anthropicVersion.*migrated to provider\.options/,
     )
   })
 
@@ -525,7 +525,7 @@ describe('config', () => {
     )
 
     await expect(loadSettingsFromFile(settingsPath)).rejects.toThrow(
-      /organization.*moved into "options"/,
+      /organization.*migrated to provider\.options/,
     )
   })
 

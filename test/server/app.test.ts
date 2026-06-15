@@ -7,6 +7,10 @@ import type { Settings, ProviderRegistry } from '../../src/index.js'
 import { loadEnvironmentFiles, resolveSettingsPath, inspectVendorSseError } from '../../src/index.js'
 import { redact, safeProxyHost } from '../../src/server/logging.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
+import type { generateText } from 'ai'
+
+/** generateText 的返回类型 */
+type GenerateTextReturn = Awaited<ReturnType<typeof generateText>>
 
 // ── Shared helpers ──────────────────────────────────────────────
 
@@ -149,7 +153,7 @@ describe('chat endpoint', () => {
           text: 'hello',
           finishReason: 'stop',
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        }
+        } as GenerateTextReturn
       },
       stream() {
         throw new Error('not used')
@@ -193,7 +197,7 @@ describe('chat endpoint', () => {
     })
     const gateway: ModelGateway = {
       async generate() {
-        return result
+        return result as GenerateTextReturn
       },
       stream() {
         throw new Error('not used')
@@ -222,7 +226,7 @@ describe('chat endpoint', () => {
     const gateway: ModelGateway = {
       async generate() {
         calls += 1
-        return { text: 'wrong' }
+        return { text: 'wrong' } as GenerateTextReturn
       },
       stream() {
         calls += 1
@@ -403,7 +407,7 @@ describe('streamOnly provider', () => {
           text: 'from generate',
           finishReason: 'stop',
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        }
+        } as GenerateTextReturn
       },
       stream() {
         throw new Error('stream should not be called')
@@ -504,7 +508,7 @@ describe('messages endpoint', () => {
           finishReason: 'stop',
           usage: { inputTokens: 10, outputTokens: 5 },
           response: { id: 'msg_test123', timestamp: new Date() },
-        }
+        } as GenerateTextReturn
       },
       stream() {
         throw new Error('not used')
@@ -608,7 +612,7 @@ describe('messages endpoint', () => {
           finishReason: 'stop',
           usage: { inputTokens: 5, outputTokens: 3 },
           response: { id: 'chatcmpl-test', timestamp: new Date() },
-        }
+        } as GenerateTextReturn
       },
       stream() {
         throw new Error('not used')

@@ -25,6 +25,13 @@ export type { ModelGateway, AppDependencies, AppEnv } from './types.js'
 export { handleProtocolRequest, type ProtocolContext } from './handle-protocol.js'
 export { defaultGateway } from './gateway.js'
 
+interface HealthResponse {
+  status: 'ok'
+  service: string
+  providersConfigured: number
+  auth?: Record<string, { status: string; loginUrl?: string | undefined }>
+}
+
 export function createApp({
   settings,
   tokenManager,
@@ -100,7 +107,7 @@ export function createApp({
   })
 
   app.get('/health', (c) => {
-    const base: Record<string, unknown> = {
+    const base: HealthResponse = {
       status: 'ok',
       service: settings.service.name,
       providersConfigured: Object.keys(settings.providers).length,

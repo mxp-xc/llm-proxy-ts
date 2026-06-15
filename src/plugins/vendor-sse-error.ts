@@ -65,11 +65,26 @@ export function inspectVendorSseError(
 
 // ─── Built-in Plugin ─────────────────────────────────────────────
 
+const defaultVendorSseErrorConfig: VendorSseErrorConfig = {
+  maxPreviewEvents: 3,
+  maxPreviewBytes: 65536,
+  rateLimitCodes: ['rate_limit', 'too_many_requests', 'rate_limit_error'],
+}
+
+function isVendorSseErrorConfig(value: unknown): value is VendorSseErrorConfig {
+  if (value === null || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  if ('maxPreviewEvents' in obj && typeof obj.maxPreviewEvents !== 'number') return false
+  if ('maxPreviewBytes' in obj && typeof obj.maxPreviewBytes !== 'number') return false
+  if ('rateLimitCodes' in obj && !Array.isArray(obj.rateLimitCodes)) return false
+  return true
+}
+
 const vendorSseErrorPlugin: ProxyPlugin = {
   name: 'vendor_sse_error',
 
   inspectStreamChunk(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse> {
-    const config = ctx.config as VendorSseErrorConfig
+    const config = isVendorSseErrorConfig(ctx.config) ? ctx.config : defaultVendorSseErrorConfig
     const result = inspectVendorSseError(config, ctx.chunk)
     if (result) {
       return Promise.resolve(result)

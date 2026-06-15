@@ -111,12 +111,12 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hello' }] }])
   })
 
-  it('maps input_image content to AI SDK image type', () => {
+  it('maps input_image content to text placeholder (ProtocolMessagePart has no image variant)', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'https://example.com/img.png' }] }],
     })
-    expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'image', image: 'https://example.com/img.png' }] }])
+    expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'https://example.com/img.png' }] }])
   })
 
   it('falls back tool_choice to auto when referencing non-function tool', () => {

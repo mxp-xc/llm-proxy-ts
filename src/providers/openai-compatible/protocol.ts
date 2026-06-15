@@ -1,6 +1,6 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod/v3'
-import type { AISDKInput } from '../shared/aisdk-types.js'
+import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions } from '../shared/protocol-utils.js'
 
 export type { AISDKInput } from '../shared/aisdk-types.js'
@@ -17,7 +17,7 @@ const openAIToolCallSchema = z.object({
 const messageSchema = z
   .object({
     role: z.enum(['system', 'user', 'assistant', 'tool']),
-    content: z.unknown().optional(),
+    content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]).optional(),
     tool_call_id: z.string().optional(),
     tool_calls: z.array(openAIToolCallSchema).optional(),
   })
@@ -140,7 +140,7 @@ export function mapOpenAIChatRequestToAISDKInput(
   // providerOptions key 固定为 "openaiCompatible"：
   // @ai-sdk/openai-compatible 的 4 级 fallback 包含此 key，passthrough 正常工作；
   // 其他 provider（如 @ai-sdk/anthropic）不认识此 key，自动忽略 → 不泄漏
-  const providerOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
+  const providerOptions = mapProviderOptions(request, mappedRequestKeys)
   // parallel_tool_calls: AI SDK openai-compatible 不原生支持，通过 providerOptions 透传
   if (request.parallel_tool_calls !== undefined) providerOptions.parallel_tool_calls = request.parallel_tool_calls
   if (Object.keys(providerOptions).length > 0) {
@@ -166,10 +166,10 @@ export function mapOpenAIChatRequestToAISDKInput(
   return input
 }
 
-function mapMessage(message: z.infer<typeof messageSchema>): Record<string, unknown> {
+function mapMessage(message: z.infer<typeof messageSchema>): ProtocolMessage {
   if (message.role === 'assistant' && message.tool_calls?.length) {
-    const content: Array<Record<string, unknown>> = message.tool_calls.map((toolCall) => ({
-      type: 'tool-call',
+    const content: ProtocolMessagePart[] = message.tool_calls.map((toolCall) => ({
+      type: 'tool-call' as const,
       toolCallId: toolCall.id,
       toolName: toolCall.function.name,
       input: parseToolCallInput(toolCall.function.arguments),
@@ -190,7 +190,7 @@ function mapMessage(message: z.infer<typeof messageSchema>): Record<string, unkn
       content: [
         {
           type: 'tool-result',
-          toolCallId: message.tool_call_id,
+          toolCallId: message.tool_call_id ?? 'tool',
           toolName: message.tool_call_id ?? 'tool',
           output: mapToolResultOutput(message.content),
         },
@@ -198,10 +198,14 @@ function mapMessage(message: z.infer<typeof messageSchema>): Record<string, unkn
     }
   }
 
-  return message as Record<string, unknown>
+  // user or system messages: content is string | content-part array | undefined
+  const content = message.content ?? ''
+  return { role: message.role as 'user' | 'system', content } as ProtocolMessage
 }
 
-function extractSystemText(content: unknown): string {
+type MessageContent = z.infer<typeof messageSchema>['content']
+
+function extractSystemText(content: MessageContent): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content
@@ -219,17 +223,17 @@ function extractSystemText(content: unknown): string {
   return String(content)
 }
 
-function parseToolCallInput(value: string | undefined): unknown {
+function parseToolCallInput(value: string | undefined): Record<string, unknown> | string {
   if (!value) return {}
   try {
-    return JSON.parse(value) as unknown
+    return JSON.parse(value)
   } catch {
     return value
   }
 }
 
 function mapToolResultOutput(
-  content: unknown,
+  content: MessageContent,
 ): { type: 'text'; value: string } | { type: 'json'; value: unknown } {
   if (typeof content === 'string') {
     return { type: 'text', value: content }

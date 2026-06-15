@@ -1,5 +1,5 @@
-import type { LanguageModel } from 'ai'
-import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
+import type { LanguageModel, generateText } from 'ai'
+import type { AISDKInput, ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 import type { Settings, TokenManager } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
@@ -7,16 +7,19 @@ import pino from 'pino'
 
 export type { Settings } from '../index.js'
 
+/** generateText 的返回类型 — 避免直接引用 Output 命名空间 */
+type GenerateTextReturn = Awaited<ReturnType<typeof generateText>>
+
 export interface ModelGateway {
   generate(input: {
     model: LanguageModel
-    callInput: any
+    callInput: AISDKInput
     requestModel: string
     abortSignal?: AbortSignal
-  }): Promise<any>
+  }): Promise<GenerateTextReturn>
   stream(input: {
     model: LanguageModel
-    callInput: any
+    callInput: AISDKInput
     requestModel: string
     abortSignal?: AbortSignal
   }): AsyncIterable<ProxyStreamPart>
