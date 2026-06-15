@@ -1,10 +1,27 @@
 import type { ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from 'ai'
 
+/** 协议映射器产生的消息内容分片 */
+export type ProtocolMessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> | string }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; output:
+      | { type: 'text'; value: string }
+      | { type: 'error-text'; value: string }
+      | { type: 'json'; value: unknown }   // json value 本质任意，属工具结果例外
+    }
+
+/** 协议映射器产生的消息 — 统一三种协议的消息表达 */
+export type ProtocolMessage =
+  | { role: 'user'; content: string | ProtocolMessagePart[] }
+  | { role: 'assistant'; content: string | ProtocolMessagePart[] }
+  | { role: 'system'; content: string }
+  | { role: 'tool'; content: ProtocolMessagePart[] }
+
 export interface AISDKInput {
   system?: string
-  /** 协议映射器产生的消息——来自不同协议的请求体，形状不确定；
+  /** 协议映射器产生的消息 — 由 ProtocolMessage 判别联合统一三种协议的消息表达；
    *  由 gateway.ts 的 `as Parameters<typeof generateText>[0]` 转换为 SDK 类型 */
-  messages: Array<Record<string, unknown>>
+  messages: ProtocolMessage[]
   temperature?: number
   topP?: number
   presencePenalty?: number

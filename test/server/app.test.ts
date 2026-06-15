@@ -5,6 +5,10 @@ import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
+import type { generateText } from 'ai'
+
+/** generateText 的返回类型 */
+type GenerateTextReturn = Awaited<ReturnType<typeof generateText>>
 
 // ── Shared helpers ──────────────────────────────────────────────
 
@@ -118,7 +122,7 @@ describe('chat endpoint', () => {
           text: 'hello',
           finishReason: 'stop',
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        }
+        } as GenerateTextReturn
       },
     })
     const app = createApp({
@@ -159,7 +163,7 @@ describe('chat endpoint', () => {
     })
     const gateway = makeGateway({
       async generate() {
-        return result
+        return result as GenerateTextReturn
       },
     })
     const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
@@ -185,7 +189,7 @@ describe('chat endpoint', () => {
     const gateway = makeGateway({
       async generate() {
         calls += 1
-        return { text: 'wrong' }
+        return { text: 'wrong' } as GenerateTextReturn
       },
       stream() {
         calls += 1
@@ -360,7 +364,7 @@ describe('streamOnly provider', () => {
           text: 'from generate',
           finishReason: 'stop',
           usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-        }
+        } as GenerateTextReturn
       },
     })
 
@@ -451,7 +455,7 @@ describe('messages endpoint', () => {
           finishReason: 'stop',
           usage: { inputTokens: 10, outputTokens: 5 },
           response: { id: 'msg_test123', timestamp: new Date() },
-        }
+        } as GenerateTextReturn
       },
     })
     const app = createApp({ settings: anthropicSettings, gateway, providerRegistry: stubRegistry })
@@ -549,7 +553,7 @@ describe('messages endpoint', () => {
           finishReason: 'stop',
           usage: { inputTokens: 5, outputTokens: 3 },
           response: { id: 'chatcmpl-test', timestamp: new Date() },
-        }
+        } as GenerateTextReturn
       },
     })
     const app = createApp({ settings: mixedSettings, gateway, providerRegistry: stubRegistry })

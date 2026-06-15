@@ -1,5 +1,6 @@
 import type { RenderResultInput } from '../protocol-types.js'
 import type { ProxyStreamPart } from './aisdk-types.js'
+import type { LanguageModelUsage } from 'ai'
 
 /** extractUsageFromFinishPart 的返回类型 */
 export interface ExtractedUsage {
@@ -17,27 +18,17 @@ export function extractUsageFromFinishPart(
   part: Extract<ProxyStreamPart, { type: 'finish' }>,
 ): ExtractedUsage | undefined {
   const totalUsage = part.totalUsage
-  if (!totalUsage || typeof totalUsage !== 'object') return undefined
+  if (totalUsage === undefined || totalUsage === null) return undefined
 
-  const inputTokenDetails = typeof totalUsage.inputTokenDetails === 'object' && totalUsage.inputTokenDetails !== null
-    ? totalUsage.inputTokenDetails as Record<string, unknown>
-    : undefined
-  const outputTokenDetails = typeof totalUsage.outputTokenDetails === 'object' && totalUsage.outputTokenDetails !== null
-    ? totalUsage.outputTokenDetails as Record<string, unknown>
-    : undefined
+  const inputTokenDetails = totalUsage.inputTokenDetails
+  const outputTokenDetails = totalUsage.outputTokenDetails
 
   return {
-    inputTokens: typeof totalUsage.inputTokens === 'number' ? totalUsage.inputTokens : undefined,
-    outputTokens: typeof totalUsage.outputTokens === 'number' ? totalUsage.outputTokens : undefined,
-    totalTokens: typeof totalUsage.totalTokens === 'number' ? totalUsage.totalTokens : undefined,
-    cacheReadTokens:
-      inputTokenDetails && typeof inputTokenDetails.cacheReadTokens === 'number'
-        ? inputTokenDetails.cacheReadTokens
-        : undefined,
-    reasoningTokens:
-      outputTokenDetails && typeof outputTokenDetails.reasoningTokens === 'number'
-        ? outputTokenDetails.reasoningTokens
-        : undefined,
+    inputTokens: totalUsage.inputTokens,
+    outputTokens: totalUsage.outputTokens,
+    totalTokens: totalUsage.totalTokens,
+    cacheReadTokens: inputTokenDetails?.cacheReadTokens,
+    reasoningTokens: outputTokenDetails?.reasoningTokens,
   }
 }
 
@@ -50,13 +41,7 @@ export function hasUsageData(usage: { inputTokens?: number | undefined; outputTo
 
 /** 将 AI SDK LanguageModelUsage（嵌套 details）展平为 RenderResultInput['usage'] */
 export function flattenUsage(
-  usage: {
-    inputTokens: number | undefined
-    outputTokens: number | undefined
-    totalTokens: number | undefined
-    inputTokenDetails?: { cacheReadTokens?: number }
-    outputTokenDetails?: { reasoningTokens?: number }
-  },
+  usage: LanguageModelUsage,
 ): NonNullable<RenderResultInput['usage']> {
   const result: NonNullable<RenderResultInput['usage']> = {}
   if (usage.inputTokens !== undefined) result.inputTokens = usage.inputTokens

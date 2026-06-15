@@ -30,7 +30,7 @@ export function renderAnthropicMessage(input: RenderResultInput): AnthropicMessa
         type: 'tool_use',
         id: call.toolCallId,
         name: call.toolName,
-        input: call.input ?? {},
+        input: (call.input as Record<string, unknown>) ?? {},
       })
     }
   }

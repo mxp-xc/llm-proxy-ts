@@ -87,7 +87,7 @@ export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
 
   rateLimit(errorBody: unknown, errorStatus?: number) {
     // 如果 errorBody 已经是合法的 OpenAI 错误格式，直接透传
-    if (isRecord(errorBody) && isRecord(errorBody.error)) {
+    if (isRecord(errorBody) && isRecord(errorBody['error']) && typeof errorBody['error']?.message === 'string') {
       return { body: errorBody as unknown as OpenAIErrorBody, status: errorStatus ?? 429 }
     }
     // 否则构造标准 OpenAI 错误体

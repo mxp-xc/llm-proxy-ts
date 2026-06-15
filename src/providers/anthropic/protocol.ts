@@ -1,6 +1,6 @@
 import { jsonSchema, type ToolSet } from 'ai'
 import { z } from 'zod/v3'
-import type { AISDKInput } from '../shared/aisdk-types.js'
+import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions } from '../shared/protocol-utils.js'
 
 // ─── Content Block Schemas ─────────────────────────────────────
@@ -132,7 +132,7 @@ const mappedRequestKeys = new Set([
 export function mapAnthropicMessagesRequestToAISDKInput(
   request: AnthropicMessagesRequest,
 ): AISDKInput {
-  const messages: Array<Record<string, unknown>> = []
+  const messages: ProtocolMessage[] = []
 
   // System prompt → AI SDK system 选项（不放入 messages，AI SDK v6 不允许 role: system）
   const systemParts: string[] = []
@@ -209,7 +209,7 @@ export function mapAnthropicMessagesRequestToAISDKInput(
   if (request.metadata !== undefined) providerOptions.metadata = request.metadata
 
   // passthrough 字段
-  const extraOptions = mapProviderOptions(request as Record<string, unknown>, mappedRequestKeys)
+  const extraOptions = mapProviderOptions(request, mappedRequestKeys)
   Object.assign(providerOptions, extraOptions)
 
   if (Object.keys(providerOptions).length > 0) {
@@ -224,15 +224,15 @@ export function mapAnthropicMessagesRequestToAISDKInput(
 function mapMessage(
   message: z.infer<typeof messageSchema>,
   toolUseIdToName: Map<string, string>,
-): Array<Record<string, unknown>> {
+): ProtocolMessage[] {
   if (typeof message.content === 'string') {
-    return [{ role: message.role, content: message.content }]
+    return [{ role: message.role as 'user' | 'assistant', content: message.content }]
   }
 
   // 处理 content block 数组
-  const textParts: Array<Record<string, unknown>> = []
-  const toolResultParts: Array<Record<string, unknown>> = []
-  const toolCallParts: Array<Record<string, unknown>> = []
+  const textParts: ProtocolMessagePart[] = []
+  const toolResultParts: ProtocolMessagePart[] = []
+  const toolCallParts: ProtocolMessagePart[] = []
 
   for (const block of message.content) {
     if (block.type === 'text') {
@@ -257,19 +257,19 @@ function mapMessage(
   // AI SDK 要求 tool-result 必须在 role:'tool' 消息里。
   // 当消息包含 tool_result 时，拆分为 role:'tool' + 原角色两条消息。
   if (toolResultParts.length > 0) {
-    const result: Array<Record<string, unknown>> = []
+    const result: ProtocolMessage[] = []
     // tool-result 部分放在 role:'tool' 消息里（排在前面）
     result.push({ role: 'tool', content: toolResultParts })
     // 非 tool-result 部分保留原角色（仅在有内容时）
     const remainingParts = [...textParts, ...toolCallParts]
     if (remainingParts.length > 0) {
-      result.push({ role: message.role, content: remainingParts })
+      result.push({ role: message.role as 'user' | 'assistant', content: remainingParts })
     }
     return result
   }
 
   // 无 tool_result 的场景，合并所有部分
-  return [{ role: message.role, content: [...textParts, ...toolCallParts] }]
+  return [{ role: message.role as 'user' | 'assistant', content: [...textParts, ...toolCallParts] }]
 }
 
 function mapToolResultOutput(

@@ -1,7 +1,7 @@
 export interface ResponseOutputText {
   type: 'output_text'
   text: string
-  annotations: unknown[]
+  annotations: Array<Record<string, unknown>>
 }
 
 export interface ResponseOutputMessage {
@@ -44,7 +44,7 @@ export interface OpenAIResponse {
   temperature: number | null
   top_p: number | null
   tool_choice: string | null
-  tools: unknown[]
+  tools: Array<{ type: string; name?: string; [key: string]: unknown }>
   parallel_tool_calls: boolean
   truncation: 'disabled'
 }

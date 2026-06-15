@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { parse, type ParseError } from 'jsonc-parser'
 import { loadSettingsFromFile, resolveEnvPlaceholders } from '../config.js'
 import type { ModelRouteInput, Settings } from '../config.js'
+import { isRecord } from '../providers/protocol-types.js'
 import { TokenManager, OAuthError } from '../oauth/index.js'
 import { PluginRegistry } from '../plugins/registry.js'
 import type { DiscoveredModel } from '../plugins/types.js'
@@ -62,10 +63,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
 
   // 解析原始 JSONC 以获取未解析 env 占位符的 apiKey
   const rawErrors: ParseError[] = []
-  const rawParsed = parse(rawText, rawErrors, { allowTrailingComma: true }) as Record<
-    string,
-    unknown
-  >
+  const rawParsed = parse(rawText, rawErrors, { allowTrailingComma: true }) as unknown
 
   // 初始化插件注册表（如果有插件配置）
   const settingsDir = dirname(settingsPath)
@@ -169,12 +167,13 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
       }
 
       // 回退：通过 OpenAI 协议 HTTP 发现
-      const rawProviders = rawParsed['providers'] as
-        | Record<string, Record<string, unknown>>
-        | undefined
-      const rawProvider = rawProviders?.[providerName]
+      if (!isRecord(rawParsed)) throw new Error('Invalid settings format')
+      const rawProviders = rawParsed['providers']
+      if (!isRecord(rawProviders)) throw new Error('No providers found in settings')
+      const rawProvider = rawProviders[providerName]
+      if (!isRecord(rawProvider)) throw new Error(`No raw provider config for ${providerName}`)
       const resolvedApiKey =
-        rawProvider?.['apiKey'] != null
+        rawProvider['apiKey'] != null
           ? (resolveEnvPlaceholders(rawProvider['apiKey']) as string | string[] | null)
           : provider.apiKey
 

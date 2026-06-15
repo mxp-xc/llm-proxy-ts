@@ -102,7 +102,7 @@ export interface AnthropicToolUseResponseBlock {
   type: 'tool_use'
   id: string
   name: string
-  input: unknown
+  input: Record<string, unknown>
 }
 
 export type AnthropicResponseContentBlock =

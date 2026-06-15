@@ -80,15 +80,27 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
     const options: Parameters<typeof request>[1] = { dispatcher }
 
     if (init?.method !== undefined) {
-      options.method = init.method as never
+      options.method = init.method
     }
 
     if (init?.body !== undefined && init.body !== null) {
-      options.body = init.body as never
+      // web BodyInit (ReadableStream, Blob, ArrayBuffer, etc.) 与 undici body
+      // (string | Buffer | Uint8Array | Readable | null | FormData) 部分重叠；
+      // 实际调用路径由 AI SDK 发起，只会传入重叠范围内的值。
+      // 两个 FormData 声明（DOM vs undici）Symbol.toStringTag 不同，需经 unknown 桥接。
+      options.body = init.body as unknown as NonNullable<typeof options.body>
     }
 
     if (init?.headers !== undefined) {
-      options.headers = init.headers as never
+      // 将 web HeadersInit (Headers | string[][] | Record<string, string>)
+      // 转为 undici 接受的 OutgoingHttpHeaders (Record<string, string | string[] | undefined>)
+      if (init.headers instanceof Headers) {
+        options.headers = Object.fromEntries(init.headers.entries())
+      } else if (Array.isArray(init.headers)) {
+        options.headers = Object.fromEntries(init.headers as [string, string][])
+      } else {
+        options.headers = init.headers as Record<string, string | string[]>
+      }
     }
 
     const response = await request(url, options)
@@ -105,7 +117,9 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
       }
     }
 
-    return new Response(response.body as never, {
+    // undici BodyReadable 是 Node.js Readable 子类，Response 构造函数接受 ReadableStream；
+    // 两者不重叠但运行时 Node 会将 Readable 适配为 web ReadableStream。
+    return new Response(response.body as unknown as ReadableStream, {
       status: response.statusCode,
       headers,
     })

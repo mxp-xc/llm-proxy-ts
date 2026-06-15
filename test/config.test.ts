@@ -330,7 +330,7 @@ describe('config', () => {
           }
         }
       }`),
-    ).toThrow(new RegExp(`${field}.*moved into "options"`))
+    ).toThrow(new RegExp(`${field}.*migrated to provider\\.options`))
   })
 
   // ── 跨类型选项验证 ──────────────────────────────────────

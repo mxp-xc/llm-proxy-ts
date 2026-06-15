@@ -1,5 +1,5 @@
-export function mapProviderOptions(
-  request: Record<string, unknown>,
+export function mapProviderOptions<T extends Record<string, unknown>>(
+  request: T,
   knownKeys: ReadonlySet<string>,
 ): Record<string, unknown> {
   return Object.fromEntries(
