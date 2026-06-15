@@ -5,10 +5,7 @@ import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
-import type { generateText } from 'ai'
-
-/** generateText 的返回类型 */
-type GenerateTextReturn = Awaited<ReturnType<typeof generateText>>
+import type { GenerateTextReturn } from '../../src/server/types.js'
 
 // ── Shared helpers ──────────────────────────────────────────────
 

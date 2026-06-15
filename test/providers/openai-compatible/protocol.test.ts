@@ -1,5 +1,6 @@
 import { assistantModelMessageSchema, toolModelMessageSchema } from 'ai'
 import { describe, expect, it } from 'vitest'
+import type { ProtocolMessagePart } from '../../../src/providers/shared/aisdk-types.js'
 import {
   mapOpenAIChatRequestToAISDKInput,
   validateOpenAIChatRequest,
@@ -67,7 +68,7 @@ describe('OpenAI chat protocol mapping', () => {
       messages: [
         {
           role: 'assistant',
-          content: undefined,
+          content: null,
           tool_calls: [
             {
               id: 'call_1',
@@ -126,6 +127,53 @@ describe('OpenAI chat protocol mapping', () => {
       ],
     })
     expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
+
+  it('accepts assistant content null with tool_calls', () => {
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openrouter/chat',
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"NYC"}' } },
+          ],
+        },
+      ],
+    })
+    expect(input.messages).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } },
+        ],
+      },
+    ])
+  })
+
+  it('resolves toolName from assistant tool_calls for tool result messages', () => {
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openrouter/chat',
+      messages: [
+        { role: 'user', content: 'weather?' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"NYC"}' } },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'call_1', content: 'sunny' },
+      ],
+    })
+    const toolResult = (input.messages[2] as { content: ProtocolMessagePart[] }).content[0]
+    expect(toolResult).toEqual({
+      type: 'tool-result',
+      toolCallId: 'call_1',
+      toolName: 'get_weather',
+      output: { type: 'text', value: 'sunny' },
+    })
   })
 
   it('rejects assistant null content without tool calls', () => {
