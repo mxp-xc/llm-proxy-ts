@@ -8,7 +8,7 @@ import { makeSettings } from '../helpers/settings.js'
 import { noopLogger } from '../helpers/registry.js'
 
 // Import to register vendor_sse_error as a built-in plugin
-import '../../src/plugins/vendor-sse-error.js'
+import '../../src/plugins/builtins/vendor-sse-error.js'
 
 /**
  * Create a mock AuthPlugin that tracks calls and returns a fetch wrapper

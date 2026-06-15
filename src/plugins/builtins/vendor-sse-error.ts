@@ -1,5 +1,5 @@
-import type { ProxyPlugin, PluginContext, PluginResponse } from './types.js'
-import { registerBuiltInPlugin } from './loader.js'
+import type { ProxyPlugin, PluginContext, PluginResponse } from '../types.js'
+import { registerBuiltInPlugin } from '../loader.js'
 
 export interface VendorSseErrorConfig {
   maxPreviewEvents?: number

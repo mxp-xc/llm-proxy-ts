@@ -275,6 +275,24 @@
                         ]
                       },
                       "default": []
+                    },
+                    "limit": {
+                      "type": "object",
+                      "properties": {
+                        "context": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "input": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "output": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -516,6 +534,24 @@
                         ]
                       },
                       "default": []
+                    },
+                    "limit": {
+                      "type": "object",
+                      "properties": {
+                        "context": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "input": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "output": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -753,6 +789,24 @@
                         ]
                       },
                       "default": []
+                    },
+                    "limit": {
+                      "type": "object",
+                      "properties": {
+                        "context": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "input": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        },
+                        "output": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "additionalProperties": false
                     }
                   },
                   "required": [

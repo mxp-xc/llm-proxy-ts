@@ -66,16 +66,17 @@ export type {
   DiscoveredModel,
   DiscoveredModelList,
   ResolvedPlugin,
+  PluginInitContext,
 } from './plugins/types.js'
 export { PluginRegistry, validatePluginConstraints } from './plugins/registry.js'
 export { registerBuiltInPlugin, loadPlugin } from './plugins/loader.js'
-export { inspectVendorSseError } from './plugins/vendor-sse-error.js'
+export { inspectVendorSseError } from './plugins/builtins/vendor-sse-error.js'
 export { createSimpleAuthFetch } from './plugins/helpers.js'
 export type { SimpleAuthCredentials } from './plugins/helpers.js'
 export { createPluginStore } from './plugins/store-adapter.js'
 
 // Protocol type exports
-export type { OpenAIModel, OpenAIModelList } from './providers/model-types.js'
+export type { OpenAIModel, OpenAIModelList, ModelLimit } from './providers/model-types.js'
 export type {
   AnthropicStopReason,
   AnthropicMessageResponse,

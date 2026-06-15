@@ -4,7 +4,7 @@ import { RoutingError, RoutingTable } from '../src/routing.js'
 import { makeSettings } from './helpers/settings.js'
 
 // Import to register vendor_sse_error as a built-in plugin
-import '../src/plugins/vendor-sse-error.js'
+import '../src/plugins/builtins/vendor-sse-error.js'
 
 function settings(enableFlatModelLookup = false): Settings {
   return makeSettings(
