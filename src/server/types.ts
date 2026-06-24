@@ -35,6 +35,7 @@ export interface AppDependencies {
   authStatuses?: ProviderAuthStatus[]
   pluginRegistry?: PluginRegistry
   authFilePath?: string
+  codexCatalogFetcher?: () => Promise<string>
 }
 
 export type AppEnv = {

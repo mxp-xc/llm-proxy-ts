@@ -9,6 +9,7 @@ function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLook
     proxy: null,
     routing: { enableFlatModelLookup },
     plugins: [],
+    codex: { templateSlug: 'gpt-5.4', context_window: 200000 },
     providers,
   }
 }

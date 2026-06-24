@@ -14,6 +14,7 @@ import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js
 import pino from 'pino'
 import { logger as defaultLogger, requestId } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
+import { createCodexApp } from './codex.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
@@ -42,6 +43,7 @@ export function createApp({
   authStatuses,
   pluginRegistry,
   authFilePath,
+  codexCatalogFetcher,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -154,6 +156,8 @@ export function createApp({
   app.post('/v1/responses', (c) =>
     handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
   )
+
+  app.route('/codex', createCodexApp({ settings, protocolCtx, codexCatalogFetcher }))
 
   return app
 }

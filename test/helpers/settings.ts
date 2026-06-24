@@ -6,6 +6,7 @@ export const baseSettings: Settings = {
   proxy: null,
   routing: { enableFlatModelLookup: false },
   plugins: [],
+  codex: { templateSlug: 'gpt-5.4', context_window: 200000 },
   providers: {},
 }
 
