@@ -140,7 +140,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         },
       )
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream request failed')
+      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream')
     }
   }
 
@@ -171,7 +171,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
       if (collected.usage) renderInput.usage = collected.usage
       return c.json(strategy.renderResult(renderInput))
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
+      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only')
     }
   }
 
@@ -197,18 +197,20 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     if (result.usage) renderInput.usage = flattenUsage(result.usage)
     return c.json(strategy.renderResult(renderInput))
   } catch (error) {
-    return handleUpstreamError(c, error, formatErrors, loginUrl, 'generation request failed')
+    return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate')
   }
 }
+
+export type ErrorPhase = 'stream' | 'stream-only' | 'generate'
 
 export function handleUpstreamError(
   c: Context<AppEnv>,
   error: unknown,
   formatErrors: ProtocolErrorFormatter,
   loginUrl: string,
-  logMessage: string,
+  phase: ErrorPhase,
 ): Response {
-  c.get('logger').error({ err: error }, logMessage)
+  c.get('logger').error({ err: error, phase }, 'upstream request failed')
   if (error instanceof OAuthError && error.code === 'auth_required') {
     const { body, status } = formatErrors.oauth(error.message, loginUrl)
     return c.json(body, status as 503)

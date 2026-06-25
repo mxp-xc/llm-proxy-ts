@@ -1,10 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import {
-  fetchCodexBundledCatalog,
-  buildCodexModelsResponse,
-  __resetCodexCatalogCacheForTest,
-} from '../../src/server/codex-catalog.js'
-import type { CodexModelInfo } from '../../src/config.js'
+import { describe, expect, it } from 'vitest'
+import { CodexCatalogCache, buildCodexModelsResponse } from '../../src/server/codex-catalog.js'
+import type { CodexModelInfo } from '../../src/codex-types.js'
 import { makeSettings } from '../helpers/settings.js'
 
 const FULL_MODEL = {
@@ -23,17 +19,16 @@ const FULL_MODEL = {
   experimental_supported_tools: [],
 }
 
-beforeEach(() => __resetCodexCatalogCacheForTest())
-
-describe('fetchCodexBundledCatalog', () => {
+describe('CodexCatalogCache', () => {
   it('fetches, indexes by slug, caches (lazy + dedup concurrent)', async () => {
     let calls = 0
     const fetcher = async () => {
       calls++
       return JSON.stringify({ models: [FULL_MODEL] })
     }
-    const [m1, m2] = await Promise.all([fetchCodexBundledCatalog(fetcher), fetchCodexBundledCatalog(fetcher)])
-    const m3 = await fetchCodexBundledCatalog(fetcher)
+    const cache = new CodexCatalogCache(fetcher)
+    const [m1, m2] = await Promise.all([cache.get(), cache.get()])
+    const m3 = await cache.get()
     expect(calls).toBe(1)
     expect(m1).toBe(m2)
     expect(m1).toBe(m3)
@@ -41,27 +36,29 @@ describe('fetchCodexBundledCatalog', () => {
   })
 
   it('throws on non-json stdout', async () => {
-    await expect(fetchCodexBundledCatalog(async () => 'not json')).rejects.toThrow()
+    const cache = new CodexCatalogCache(async () => 'not json')
+    await expect(cache.get()).rejects.toThrow()
   })
 
   it('throws on fetcher error', async () => {
-    await expect(
-      fetchCodexBundledCatalog(async () => {
-        throw new Error('codex not found')
-      }),
-    ).rejects.toThrow('codex not found')
+    const cache = new CodexCatalogCache(async () => {
+      throw new Error('codex not found')
+    })
+    await expect(cache.get()).rejects.toThrow('codex not found')
   })
 
   it('throws on entry missing slug', async () => {
-    await expect(
-      fetchCodexBundledCatalog(async () => JSON.stringify({ models: [{ ...FULL_MODEL, slug: undefined }] })),
-    ).rejects.toThrow()
+    const cache = new CodexCatalogCache(async () =>
+      JSON.stringify({ models: [{ ...FULL_MODEL, slug: undefined }] }),
+    )
+    await expect(cache.get()).rejects.toThrow()
   })
 
   it('throws on entry with empty slug', async () => {
-    await expect(
-      fetchCodexBundledCatalog(async () => JSON.stringify({ models: [{ ...FULL_MODEL, slug: '' }] })),
-    ).rejects.toThrow('empty slug')
+    const cache = new CodexCatalogCache(async () =>
+      JSON.stringify({ models: [{ ...FULL_MODEL, slug: '' }] }),
+    )
+    await expect(cache.get()).rejects.toThrow('empty slug')
   })
 })
 

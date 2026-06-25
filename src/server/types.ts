@@ -4,6 +4,7 @@ import type { Settings, TokenManager } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import type pino from 'pino'
+import type { CodexCatalogCache } from './codex-catalog.js'
 
 export type { Settings } from '../index.js'
 
@@ -35,7 +36,7 @@ export interface AppDependencies {
   authStatuses?: ProviderAuthStatus[]
   pluginRegistry?: PluginRegistry
   authFilePath?: string
-  codexCatalogFetcher?: () => Promise<string>
+  codexCatalogCache?: CodexCatalogCache
 }
 
 export type AppEnv = {

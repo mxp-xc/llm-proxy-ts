@@ -1,8 +1,8 @@
-import { jsonSchema, type ToolSet } from 'ai'
+import { type ToolSet } from 'ai'
 import { z } from 'zod/v3'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { isRecord } from '../protocol-types.js'
-import { mapProviderOptions } from '../shared/protocol-utils.js'
+import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 
 export type { AISDKInput } from '../shared/aisdk-types.js'
 
@@ -254,13 +254,7 @@ function mapToolResultOutput(
 }
 
 function mapFunctionTool(tool: z.infer<typeof functionToolSchema>): ToolSet[string] {
-  const definition: ToolSet[string] = {
-    inputSchema: jsonSchema(tool.function.parameters),
-  }
-  if (tool.function.description !== undefined) {
-    definition.description = tool.function.description
-  }
-  return definition
+  return mapToolToAISDK(tool.function.parameters, tool.function.description)
 }
 
 function mapToolChoice(

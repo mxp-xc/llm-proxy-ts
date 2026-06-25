@@ -1,6 +1,6 @@
-import { jsonSchema, type ToolSet } from 'ai'
+import { type ToolSet } from 'ai'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
-import { mapProviderOptions } from '../shared/protocol-utils.js'
+import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 import { isRecord } from '../protocol-types.js'
 import { z } from 'zod/v3'
 
@@ -233,13 +233,7 @@ export function mapResponsesRequestToAISDKInput(
 function mapResponsesFunctionTool(
   tool: Extract<NonNullable<OpenAIResponsesRequest['tools']>[number], { type: 'function' }>,
 ): ToolSet[string] {
-  const definition: ToolSet[string] = {
-    inputSchema: jsonSchema(tool.parameters ?? { type: 'object', properties: {} }),
-  }
-  if (tool.description !== undefined) {
-    definition.description = tool.description
-  }
-  return definition
+  return mapToolToAISDK(tool.parameters ?? { type: 'object', properties: {} }, tool.description)
 }
 
 function mapResponsesToolChoice(

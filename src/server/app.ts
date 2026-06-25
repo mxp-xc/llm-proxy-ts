@@ -15,6 +15,7 @@ import pino from 'pino'
 import { logger as defaultLogger, requestId } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
 import { createCodexApp } from './codex.js'
+import { CodexCatalogCache } from './codex-catalog.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
@@ -43,7 +44,7 @@ export function createApp({
   authStatuses,
   pluginRegistry,
   authFilePath,
-  codexCatalogFetcher,
+  codexCatalogCache,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -157,7 +158,9 @@ export function createApp({
     handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
   )
 
-  app.route('/codex', createCodexApp({ settings, protocolCtx, codexCatalogFetcher }))
+  // 进程级共享 cache(等价原模块级单例),在 createApp 作用域 new 一次,绝不在 per-request 路径 new
+  const catalogCache = codexCatalogCache ?? new CodexCatalogCache()
+  app.route('/codex', createCodexApp({ settings, protocolCtx, catalogCache }))
 
   return app
 }

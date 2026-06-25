@@ -1,6 +1,6 @@
 import type { Settings } from '../config.js'
 import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { ModelLimit, OpenAIModel, OpenAIModelList } from './model-types.js'
+import { enumerateModelEntries, type ModelLimit, type OpenAIModel, type OpenAIModelList } from './model-types.js'
 
 /** 构造 OpenAIModel，仅在 limit 有值时附带 */
 function makeModel(id: string, ownedBy: string, limit?: ModelLimit): OpenAIModel {
@@ -11,23 +11,9 @@ function makeModel(id: string, ownedBy: string, limit?: ModelLimit): OpenAIModel
 }
 
 export function listModels(settings: Settings): OpenAIModelList {
-  const data: OpenAIModel[] = []
-
-  for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const flatEnabled = isFlatLookupEnabled(provider, settings)
-
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      data.push(makeModel(`${providerName}/${modelKey}`, providerName, model.limit))
-
-      if (flatEnabled) {
-        data.push(makeModel(modelKey, providerName, model.limit))
-        for (const alias of model.aliases) {
-          data.push(makeModel(alias, providerName, model.limit))
-        }
-      }
-    }
-  }
-
+  const data: OpenAIModel[] = enumerateModelEntries(settings).flatMap((entry) =>
+    entry.ids.map((id) => makeModel(id, entry.providerName, entry.limit)),
+  )
   return { object: 'list', data }
 }
 

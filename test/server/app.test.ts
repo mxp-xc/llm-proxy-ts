@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import pino from 'pino'
 import { createApp } from '../../src/server/app.js'
 import type { Settings } from '../../src/index.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
@@ -6,6 +7,23 @@ import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
+
+/** 构造一个 pino logger，将 JSON 日志行收集到 logs 数组，便于断言 phase 字段。 */
+function capturingPino(): { logger: pino.Logger; logs: Array<Record<string, unknown>> } {
+  const logs: Array<Record<string, unknown>> = []
+  const stream = {
+    write(chunk: string) {
+      try {
+        logs.push(JSON.parse(chunk) as Record<string, unknown>)
+      } catch {
+        // 忽略非 JSON 行
+      }
+      return true
+    },
+  }
+  const logger = pino({ level: 'error' }, stream)
+  return { logger, logs }
+}
 
 // ── Shared helpers ──────────────────────────────────────────────
 
@@ -427,6 +445,111 @@ describe('streamOnly provider', () => {
     expect(body.error.code).toBe('rate_limit')
     expect(JSON.stringify(body)).not.toContain('secret text')
   })
+
+  it('returns safe JSON 504 when streamOnly collectStreamResult times out after first chunk', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        throw new Error('generate should not be called for streamOnly provider')
+      },
+      stream() {
+        return delayedSecondChunk() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({
+      settings: { ...streamOnlySettings, requestTimeoutMs: 5 },
+      gateway,
+      providerRegistry: stubRegistry,
+    })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    expect(response.status).toBe(504)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    const body = await response.json()
+    expect(body).toEqual({
+      error: {
+        type: 'upstream_error',
+        code: 'upstream_request_timeout',
+        message: 'Upstream provider request timed out',
+      },
+    })
+  })
+
+  it('returns safe JSON 502 when streamOnly first chunk throws upstream error', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        throw new Error('generate should not be called for streamOnly provider')
+      },
+      stream() {
+        return throwingFirstChunk() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings: streamOnlySettings, gateway, providerRegistry: stubRegistry })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    expect(response.status).toBe(502)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    const body = await response.json()
+    expect(body).toEqual({
+      error: {
+        type: 'upstream_error',
+        code: 'upstream_request_failed',
+        message: 'Upstream provider request failed',
+      },
+    })
+    expect(JSON.stringify(body)).not.toContain('first chunk secret')
+  })
+
+  it('logs phase "stream-only" when streamOnly upstream request fails', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        throw new Error('generate should not be called for streamOnly provider')
+      },
+      stream() {
+        return throwingFirstChunk() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({
+      settings: streamOnlySettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      }),
+    })
+
+    const upstreamErrorLog = logs.find(
+      (entry) => typeof entry.msg === 'string' && entry.msg === 'upstream request failed',
+    )
+    expect(upstreamErrorLog).toBeDefined()
+    expect(upstreamErrorLog?.phase).toBe('stream-only')
+  })
 })
 
 // ── messages endpoint ───────────────────────────────────────────
@@ -660,6 +783,13 @@ async function* throwingFirstChunk(): AsyncIterable<unknown> {
 async function* delayedFirstChunk(): AsyncIterable<unknown> {
   await new Promise((resolve) => setTimeout(resolve, 50))
   yield { type: 'text-delta', text: 'late' }
+}
+
+/** 首 chunk 立即到达（通过首包检查），第二个 chunk 长时间延迟——用于 streamOnly 收集阶段超时。 */
+async function* delayedSecondChunk(): AsyncIterable<unknown> {
+  yield { type: 'text-delta', text: 'first' }
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  yield { type: 'finish', finishReason: 'stop' }
 }
 
 async function* textDeltaStream(text: string): AsyncIterable<unknown> {

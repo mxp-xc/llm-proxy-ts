@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { createApp } from '../../src/server/app.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
-import { __resetCodexCatalogCacheForTest, type CodexCatalogFetcher } from '../../src/server/codex-catalog.js'
+import { CodexCatalogCache, type CodexCatalogFetcher } from '../../src/server/codex-catalog.js'
 
 const openrouterSettings = makeSettings({
   openrouter: {
@@ -38,13 +38,11 @@ const codexFetcher: CodexCatalogFetcher = async () =>
   JSON.stringify({ models: [FULL_MODEL] })
 
 describe('GET /codex/v1/models', () => {
-  beforeEach(() => __resetCodexCatalogCacheForTest())
-
   it('returns codex ModelsResponse with one entry per listModels id', async () => {
     const app = createApp({
       settings: openrouterSettings,
       providerRegistry: stubRegistry,
-      codexCatalogFetcher: codexFetcher,
+      codexCatalogCache: new CodexCatalogCache(codexFetcher),
     })
     const res = await app.request('/codex/v1/models')
     expect(res.status).toBe(200)
@@ -59,7 +57,7 @@ describe('GET /codex/v1/models', () => {
     const app = createApp({
       settings: openrouterSettings,
       providerRegistry: stubRegistry,
-      codexCatalogFetcher: codexFetcher,
+      codexCatalogCache: new CodexCatalogCache(codexFetcher),
     })
     const res = await app.request('/codex/v1/models')
     expect(res.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
@@ -69,9 +67,9 @@ describe('GET /codex/v1/models', () => {
     const app = createApp({
       settings: openrouterSettings,
       providerRegistry: stubRegistry,
-      codexCatalogFetcher: async () => {
+      codexCatalogCache: new CodexCatalogCache(async () => {
         throw new Error('codex not installed')
-      },
+      }),
     })
     const res = await app.request('/codex/v1/models')
     expect(res.status).toBe(503)

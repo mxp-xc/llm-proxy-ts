@@ -3,26 +3,18 @@ import * as clack from '@clack/prompts'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parse, type ParseError } from 'jsonc-parser'
-import { loadSettingsFromFile, resolveEnvPlaceholders } from '../config.js'
+import { loadSettingsFromFile } from '../config.js'
 import type { ModelRouteInput, Settings } from '../config.js'
-import { isRecord } from '../providers/protocol-types.js'
-import { TokenManager, OAuthError } from '../oauth/index.js'
+import { createTokenManagerIfNeeded } from '../oauth/index.js'
 import { PluginRegistry } from '../plugins/registry.js'
-import type { DiscoveredModel } from '../plugins/types.js'
-import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover-models.js'
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js'
 import { resolveCliContext } from './context.js'
+import { discoverProviderModels, type ProviderModelsResult } from './models-discovery.js'
 
 export interface ModelsSyncOptions {
   settingsPath: string
   provider?: string
   dryRun?: boolean
-}
-
-interface ProviderModelsResult {
-  providerName: string
-  models: DiscoveredModel[]
-  existingModels: Record<string, ModelRouteInput>
 }
 
 export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
@@ -117,13 +109,9 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
 
   // 3. 发现模型
 
-  // 延迟初始化 TokenManager（仅当存在 OAuth provider 且无插件覆盖时）
-  let tokenManager: TokenManager | undefined
+  // 延迟初始化 TokenManager（仅当存在 OAuth provider 时）
   const hasOAuthProviders = selectedProviders.some((name) => settings.providers[name]?.oauth)
-  if (hasOAuthProviders) {
-    tokenManager = TokenManager.fromFile(authFilePath)
-    await tokenManager.load()
-  }
+  const tokenManager = await createTokenManagerIfNeeded(authFilePath, hasOAuthProviders)
 
   const results: ProviderModelsResult[] = []
 
@@ -131,98 +119,29 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
     const provider = settings.providers[providerName]!
     const s = clack.spinner()
     s.start(`Fetching models from ${providerName}...`)
-
-    try {
-      let models: DiscoveredModel[]
-
-      // 优先使用 auth 插件的 discoverModels
-      if (pluginRegistry) {
-        try {
-          const discovered = await pluginRegistry.discoverModels(
-            providerName,
-            undefined,
-            authFilePath,
-          )
-          if (discovered) {
-            models = discovered.models
-            s.stop(`Found ${models.length} models from ${providerName} (via auth plugin)`)
-            results.push({ providerName, models, existingModels: provider.models })
-            continue
-          }
-        } catch (err) {
-          s.stop(`Skipped ${providerName}`)
-          clack.log.warn(
-            `${providerName}: Auth plugin discoverModels failed — ${err instanceof Error ? err.message : String(err)}`,
-          )
-          continue
-        }
-      }
-
-      // Anthropic / OpenAI 类型不支持 OpenAI 协议发现，跳过
-      if (provider.type === 'anthropic' || provider.type === 'openai') {
-        s.stop(
-          `Skipped ${providerName} (${provider.type} provider does not support OpenAI model discovery)`,
-        )
-        continue
-      }
-
-      // 回退：通过 OpenAI 协议 HTTP 发现
-      if (!isRecord(rawParsed)) throw new Error('Invalid settings format')
-      const rawProviders = rawParsed['providers']
-      if (!isRecord(rawProviders)) throw new Error('No providers found in settings')
-      const rawProvider = rawProviders[providerName]
-      if (!isRecord(rawProvider)) throw new Error(`No raw provider config for ${providerName}`)
-      const resolvedApiKey =
-        rawProvider['apiKey'] != null
-          ? (resolveEnvPlaceholders(rawProvider['apiKey']) as string | string[] | null)
-          : provider.apiKey
-
-      // 解析 OAuth token（如果配置了 OAuth）
-      let oauthToken: { tokenType: string; accessToken: string } | undefined
-      if (provider.oauth && tokenManager) {
-        const status = tokenManager.getStatus(providerName, provider.oauth)
-        if (status === 'needs_login') {
-          s.stop(`Skipped ${providerName}`)
-          clack.log.warn(
-            `${providerName}: OAuth login required. Start the server and visit /oauth/login/${providerName} to authenticate.`,
-          )
-          continue
-        }
-        try {
-          const token = await tokenManager.ensureValidToken(providerName, provider.oauth)
-          oauthToken = { tokenType: token.tokenType, accessToken: token.accessToken }
-        } catch (err) {
-          s.stop(`Skipped ${providerName}`)
-          const msg =
-            err instanceof OAuthError
-              ? err.message
-              : err instanceof Error
-                ? err.message
-                : String(err)
-          clack.log.warn(`${providerName}: OAuth token refresh failed — ${msg}`)
-          continue
-        }
-      }
-
-      const openaiModels = await fetchUpstreamModels({
-        baseURL: provider.baseURL,
-        apiKey: resolvedApiKey,
-        proxySettings: settings.proxy,
-        modelsEndpoint: provider.options?.modelsEndpoint,
-        headers: provider.headers,
-        oauthToken,
-      })
-      models = openAIToDiscoveredModels(openaiModels).models
-
-      s.stop(`Found ${models.length} models from ${providerName}`)
-      results.push({
-        providerName,
-        models,
-        existingModels: provider.models,
-      })
-    } catch (err) {
-      s.stop(`Failed to fetch models from ${providerName}`)
-      clack.log.warn(`${providerName}: ${err instanceof Error ? err.message : String(err)}`)
+    const result = await discoverProviderModels({
+      providerName,
+      provider,
+      settings,
+      rawParsed,
+      ...(pluginRegistry !== undefined ? { pluginRegistry } : {}),
+      ...(tokenManager !== undefined ? { tokenManager } : {}),
+      authFilePath,
+    })
+    if ('ok' in result) {
+      s.stop(
+        `Found ${result.ok.models.length} models from ${providerName}${
+          result.ok.source === 'plugin' ? ' (via auth plugin)' : ''
+        }`,
+      )
+      results.push(result.ok)
+    } else {
+      s.stop(
+        result.skipped.reason === 'fetch_failed'
+          ? `Failed to fetch models from ${providerName}`
+          : `Skipped ${providerName}`,
+      )
+      clack.log.warn(`${providerName}: ${result.skipped.message}`)
     }
   }
 

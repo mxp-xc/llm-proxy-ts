@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { z } from 'zod/v3'
-import { codexModelInfoSchema, type CodexModelInfo, type CodexModelOverride, type Settings } from '../config.js'
-import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { ModelLimit } from '../providers/model-types.js'
+import { codexModelInfoSchema, type CodexModelInfo, type CodexModelOverride } from '../codex-types.js'
+import type { Settings } from '../config.js'
+import { enumerateModelEntries, type ModelEntry } from '../providers/model-types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -13,66 +13,41 @@ const codexCatalogSchema = z.object({
 
 export type CodexCatalogFetcher = () => Promise<string>
 
-let cachedCatalog: Map<string, CodexModelInfo> | null = null
-let inflight: Promise<Map<string, CodexModelInfo>> | null = null
-
 async function defaultFetcher(): Promise<string> {
   const { stdout } = await execFileAsync('codex', ['debug', 'models', '--bundled'])
   return stdout
 }
 
-/** 懒加载获取 codex bundled catalog,按 slug 索引缓存;并发请求去重 */
-export async function fetchCodexBundledCatalog(
-  fetcher: CodexCatalogFetcher = defaultFetcher,
-): Promise<Map<string, CodexModelInfo>> {
-  if (cachedCatalog) return cachedCatalog
-  if (inflight) return inflight
-  inflight = (async () => {
-    const stdout = await fetcher()
-    const parsed = codexCatalogSchema.parse(JSON.parse(stdout))
-    const map = new Map<string, CodexModelInfo>()
-    for (const [index, m] of parsed.models.entries()) {
-      if (!m.slug) throw new Error(`codex catalog entry at index ${index} has empty slug`)
-      map.set(m.slug, m)
-    }
-    cachedCatalog = map
-    return map
-  })()
-  try {
-    return await inflight
-  } finally {
-    inflight = null
-  }
-}
+/**
+ * Codex bundled catalog 缓存。构造时绑定 fetcher,`get()` 封装懒加载 + 并发去重。
+ * 进程级共享(在 createApp 作用域 new 一次),无模块级可变状态。
+ */
+export class CodexCatalogCache {
+  private cached: Map<string, CodexModelInfo> | null = null
+  private inflight: Promise<Map<string, CodexModelInfo>> | null = null
 
-/** 测试用:重置模块级缓存 */
-export function __resetCodexCatalogCacheForTest(): void {
-  cachedCatalog = null
-  inflight = null
-}
+  constructor(private readonly fetcher: CodexCatalogFetcher = defaultFetcher) {}
 
-interface ModelEntry {
-  id: string
-  providerName: string
-  modelKey: string
-  limit: ModelLimit | undefined
-}
-
-function enumerateModelEntries(settings: Settings): ModelEntry[] {
-  const entries: ModelEntry[] = []
-  for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const flatEnabled = isFlatLookupEnabled(provider, settings)
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      entries.push({ id: `${providerName}/${modelKey}`, providerName, modelKey, limit: model.limit })
-      if (flatEnabled) {
-        entries.push({ id: modelKey, providerName, modelKey, limit: model.limit })
-        for (const alias of model.aliases) {
-          entries.push({ id: alias, providerName, modelKey, limit: model.limit })
-        }
+  async get(): Promise<Map<string, CodexModelInfo>> {
+    if (this.cached) return this.cached
+    if (this.inflight) return this.inflight
+    this.inflight = (async () => {
+      const stdout = await this.fetcher()
+      const parsed = codexCatalogSchema.parse(JSON.parse(stdout))
+      const map = new Map<string, CodexModelInfo>()
+      for (const [index, m] of parsed.models.entries()) {
+        if (!m.slug) throw new Error(`codex catalog entry at index ${index} has empty slug`)
+        map.set(m.slug, m)
       }
+      this.cached = map
+      return map
+    })()
+    try {
+      return await this.inflight
+    } finally {
+      this.inflight = null
     }
   }
-  return entries
 }
 
 function applyOverride(base: CodexModelInfo, override: NonNullable<CodexModelOverride>): CodexModelInfo {
@@ -119,25 +94,28 @@ export function buildCodexModelsResponse(
     if (!template) {
       throw new Error(`codex template slug not in catalog: ${templateSlug}`)
     }
-
-    // 1. 基底 = template
-    let info: CodexModelInfo = { ...template }
-    // 2. settings 推导默认(slug 固定)
-    info.slug = entry.id
-    info.display_name = entry.id
     const contextWindow = entry.limit?.context ?? resolveContextWindow(settings, entry)
-    info.context_window = contextWindow
-    info.max_context_window = contextWindow
-    info.visibility = 'list'
-    info.supported_in_api = true
-    info.priority = 0
-    info.experimental_supported_tools = []
-    // 3. 三层覆盖 global → provider → model
-    info = applyOverride(info, settings.codex)
-    if (provider?.options?.codex) info = applyOverride(info, provider.options.codex)
-    if (model?.codex) info = applyOverride(info, model.codex)
 
-    models.push(info)
+    // 每个 id 生成一条独立的 ModelInfo(template/overrides 在 id 间不共享可变状态)
+    for (const id of entry.ids) {
+      // 1. 基底 = template
+      let info: CodexModelInfo = { ...template }
+      // 2. settings 推导默认(slug 固定 = id)
+      info.slug = id
+      info.display_name = id
+      info.context_window = contextWindow
+      info.max_context_window = contextWindow
+      info.visibility = 'list'
+      info.supported_in_api = true
+      info.priority = 0
+      info.experimental_supported_tools = []
+      // 3. 三层覆盖 global → provider → model
+      info = applyOverride(info, settings.codex)
+      if (provider?.options?.codex) info = applyOverride(info, provider.options.codex)
+      if (model?.codex) info = applyOverride(info, model.codex)
+
+      models.push(info)
+    }
   }
   return { models }
 }

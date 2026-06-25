@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { loadSettingsFromFile } from '../config.js'
-import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { ModelRouteConfig, ProviderConfig, Settings } from '../config.js'
+import type { ModelRouteConfig, Settings } from '../config.js'
+import { enumerateModelEntries } from '../providers/model-types.js'
 import { resolveCliContext } from './context.js'
 
 export interface ModelsListOptions {
@@ -19,31 +19,15 @@ interface ModelRow {
 }
 
 function collectRows(settings: Settings): ModelRow[] {
-  const rows: ModelRow[] = []
-
-  for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const flat = isFlatLookupEnabled(provider as ProviderConfig, settings)
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      const ids: string[] = [`${providerName}/${modelKey}`]
-      if (flat) {
-        ids.push(modelKey)
-        for (const alias of model.aliases) {
-          ids.push(alias)
-        }
-      }
-      rows.push({
-        provider: providerName,
-        modelKey,
-        upstreamModel: model.upstreamModel,
-        aliases: model.aliases,
-        flat,
-        ids,
-        limit: model.limit ?? undefined,
-      })
-    }
-  }
-
-  return rows
+  return enumerateModelEntries(settings).map((entry) => ({
+    provider: entry.providerName,
+    modelKey: entry.modelKey,
+    upstreamModel: entry.upstreamModel,
+    aliases: entry.aliases,
+    flat: entry.flat,
+    ids: entry.ids,
+    limit: entry.limit ?? undefined,
+  }))
 }
 
 export function formatLimitNum(value: number | undefined): string {

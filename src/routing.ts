@@ -1,5 +1,6 @@
 import type { ProviderConfig, Settings } from './config.js'
 import { isFlatLookupEnabled } from './config-helpers.js'
+import { enumerateModelEntries } from './providers/model-types.js'
 import type { PluginRegistry, ResolvedPlugin } from './plugins/registry.js'
 import { getBuiltInPlugin } from './plugins/loader.js'
 
@@ -45,25 +46,26 @@ export class RoutingTable {
   static fromSettings(settings: Settings, pluginRegistry?: PluginRegistry): RoutingTable {
     const flatRoutes = new Map<string, RouteMatch>()
 
-    for (const [providerName, provider] of Object.entries(settings.providers)) {
-      const flatEnabled = isFlatLookupEnabled(provider, settings)
+    // 复用共享枚举核心 enumerateModelEntries —— 与 listModels/collectRows/buildCodexModelsResponse
+    // 共享同一 (provider, modelKey, flat, aliases) 视图。route 按 (provider, modelKey) 构建;
+    // flat 选择器(modelKey + aliases)写入 flatRoutes 并做 ambiguous 检测。
+    for (const entry of enumerateModelEntries(settings)) {
+      const provider = settings.providers[entry.providerName]
+      if (!provider) continue
+      const route = buildRoute(
+        entry.providerName,
+        provider,
+        entry.modelKey,
+        `${entry.providerName}/${entry.modelKey}`,
+        pluginRegistry,
+      )
 
-      for (const [modelKey, model] of Object.entries(provider.models)) {
-        const route = buildRoute(
-          providerName,
-          provider,
-          modelKey,
-          `${providerName}/${modelKey}`,
-          pluginRegistry,
-        )
-
-        if (flatEnabled) {
-          for (const selector of [modelKey, ...model.aliases]) {
-            if (flatRoutes.has(selector)) {
-              throw new Error(`ambiguous flat route '${selector}' is configured`)
-            }
-            flatRoutes.set(selector, route)
+      if (entry.flat) {
+        for (const selector of [entry.modelKey, ...entry.aliases]) {
+          if (flatRoutes.has(selector)) {
+            throw new Error(`ambiguous flat route '${selector}' is configured`)
           }
+          flatRoutes.set(selector, route)
         }
       }
     }

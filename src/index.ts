@@ -76,7 +76,8 @@ export type { SimpleAuthCredentials } from './plugins/helpers.js'
 export { createPluginStore } from './plugins/store-adapter.js'
 
 // Protocol type exports
-export type { OpenAIModel, OpenAIModelList, ModelLimit } from './providers/model-types.js'
+export type { OpenAIModel, OpenAIModelList, ModelLimit, ModelEntry } from './providers/model-types.js'
+export { enumerateModelEntries } from './providers/model-types.js'
 export type {
   AnthropicStopReason,
   AnthropicMessageResponse,

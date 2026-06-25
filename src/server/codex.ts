@@ -4,16 +4,16 @@ import type { Settings } from '../index.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
 import type { AppEnv } from './types.js'
-import { buildCodexModelsResponse, fetchCodexBundledCatalog, type CodexCatalogFetcher } from './codex-catalog.js'
+import { buildCodexModelsResponse, CodexCatalogCache } from './codex-catalog.js'
 
 interface CodexAppDeps {
   settings: Settings
   protocolCtx: ProtocolContext
-  codexCatalogFetcher?: CodexCatalogFetcher | undefined
+  catalogCache: CodexCatalogCache
 }
 
 export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
-  const { settings, protocolCtx, codexCatalogFetcher } = deps
+  const { settings, protocolCtx, catalogCache } = deps
   const app = new Hono<AppEnv>()
 
   app.post('/v1/responses', (c) =>
@@ -22,7 +22,7 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
 
   app.get('/v1/models', async (c) => {
     try {
-      const catalog = await fetchCodexBundledCatalog(codexCatalogFetcher)
+      const catalog = await catalogCache.get()
       return c.json(buildCodexModelsResponse(settings, catalog))
     } catch (err) {
       c.get('logger').error({ err }, 'codex /v1/models failed')

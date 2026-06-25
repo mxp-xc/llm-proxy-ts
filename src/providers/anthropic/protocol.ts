@@ -1,7 +1,7 @@
-import { jsonSchema, type ToolSet } from 'ai'
+import { type ToolSet } from 'ai'
 import { z } from 'zod/v3'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
-import { mapProviderOptions } from '../shared/protocol-utils.js'
+import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 
 // ─── Content Block Schemas ─────────────────────────────────────
 
@@ -285,13 +285,7 @@ function mapToolResultOutput(
 }
 
 function mapAnthropicTool(tool: z.infer<typeof anthropicToolSchema>): ToolSet[string] {
-  const definition: ToolSet[string] = {
-    inputSchema: jsonSchema(tool.input_schema),
-  }
-  if (tool.description !== undefined) {
-    definition.description = tool.description
-  }
-  return definition
+  return mapToolToAISDK(tool.input_schema, tool.description)
 }
 
 function mapToolChoice(

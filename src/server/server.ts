@@ -8,10 +8,10 @@ import {
   loadEnvironmentFiles,
   resolveSettingsPath,
   settingsSchema,
-  TokenManager,
   PluginRegistry,
   createProviderRegistry,
 } from '../index.js'
+import { createTokenManagerIfNeeded } from '../oauth/index.js'
 import { logger } from './logging.js'
 import { validateOAuthStatus, generateNonce } from './oauth/startup.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
@@ -42,15 +42,11 @@ async function main(): Promise<void> {
   await pluginRegistry.initAll(logger, authFilePath)
 
   // OAuth 初始化
-  let tokenManager: TokenManager | undefined
+  const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth)
+  const tokenManager = await createTokenManagerIfNeeded(authFilePath, hasOAuthProviders)
   let nonce: string | undefined
   let authStatuses: ProviderAuthStatus[] | undefined
-
-  const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth)
-
-  if (hasOAuthProviders) {
-    tokenManager = TokenManager.fromFile(authFilePath)
-    await tokenManager.load()
+  if (tokenManager) {
     nonce = generateNonce()
   }
 
