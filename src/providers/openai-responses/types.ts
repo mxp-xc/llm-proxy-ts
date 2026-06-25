@@ -30,7 +30,22 @@ export interface ResponseCustomToolCall {
   input: string
 }
 
-export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall
+export interface ResponseWebSearchAction {
+  type: 'search' | 'open_page' | 'find_in_page'
+  query?: string
+  queries?: string[]
+  url?: string
+  pattern?: string
+}
+
+export interface ResponseWebSearchCall {
+  id: string
+  type: 'web_search_call'
+  status: 'completed' | 'incomplete'
+  action: ResponseWebSearchAction | null
+}
+
+export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall | ResponseWebSearchCall
 
 export interface ResponseUsage {
   input_tokens: number
@@ -95,6 +110,14 @@ interface StreamCustomToolCallItem {
   input: string
 }
 
+/** Web search call item (hosted web_search tool) as it appears in streaming output_item events */
+interface StreamWebSearchCallItem {
+  id: string
+  type: 'web_search_call'
+  status: string
+  action: ResponseWebSearchAction | null
+}
+
 /** Reasoning item as it appears in streaming output_item events */
 interface StreamReasoningItem {
   id: string
@@ -104,7 +127,7 @@ interface StreamReasoningItem {
 }
 
 /** Union of all item shapes that can appear in streaming output_item events */
-type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamReasoningItem
+type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamWebSearchCallItem | StreamReasoningItem
 
 /** Minimal response object for created/in_progress events */
 interface StreamResponsePartial {

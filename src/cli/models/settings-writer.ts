@@ -1,6 +1,6 @@
 import { modify, applyEdits } from 'jsonc-parser'
 import { writeFile } from 'node:fs/promises'
-import type { ModelRouteInput } from '../config.js'
+import type { ModelRouteInput } from '../../config.js'
 
 export interface WriteModelsOptions {
   settingsPath: string

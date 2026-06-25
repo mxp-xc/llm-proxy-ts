@@ -20,34 +20,36 @@ export function listModels(settings: Settings): OpenAIModelList {
 export function getModel(settings: Settings, modelId: string): OpenAIModel | null {
   const slashIndex = modelId.indexOf('/')
 
-  // provider/modelKey 格式
+  // provider/<modelKey 或 alias-name> 格式
   if (slashIndex > 0) {
     const providerName = modelId.slice(0, slashIndex)
-    const modelKey = modelId.slice(slashIndex + 1)
-    if (!modelKey) {
+    const requestedModel = modelId.slice(slashIndex + 1)
+    if (!requestedModel) {
       return null
     }
 
     const provider = settings.providers[providerName]
-    const model = provider?.models[modelKey]
-    if (!model) {
-      return null
+    if (provider?.models[requestedModel]) {
+      return makeModel(modelId, providerName, provider.models[requestedModel].limit)
     }
-
-    return makeModel(modelId, providerName, model.limit)
-  }
-
-  // 扁平名称查找 — 仅搜索启用了 flat lookup 的 provider
-  for (const [providerName, provider] of Object.entries(settings.providers)) {
-    if (!isFlatLookupEnabled(provider, settings)) {
-      continue
-    }
-
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      if (modelKey === modelId) {
+    for (const model of Object.values(provider?.models ?? {})) {
+      if (model.aliases.some((a) => a.name === requestedModel)) {
         return makeModel(modelId, providerName, model.limit)
       }
-      if (model.aliases.includes(modelId)) {
+    }
+    return null
+  }
+
+  // 扁平名称查找 — modelKey/alias 裸名在 provider/model/alias 级 flat 任一启用时生效
+  for (const [providerName, provider] of Object.entries(settings.providers)) {
+    const providerFlat = isFlatLookupEnabled(provider, settings)
+
+    for (const [modelKey, model] of Object.entries(provider.models)) {
+      const modelFlat = providerFlat || !!model.flat
+      if (modelFlat && modelKey === modelId) {
+        return makeModel(modelId, providerName, model.limit)
+      }
+      if (model.aliases.some((a) => (modelFlat || a.flat) && a.name === modelId)) {
         return makeModel(modelId, providerName, model.limit)
       }
     }

@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { createServeCommand } from './serve.js'
-import { createModelsCommand } from './models.js'
-import { createCodexCommand } from './codex.js'
+import { createModelsCommand } from './models/index.js'
+import { createCodexCommand } from './codex/index.js'
 
 const program = new Command()
   .name('llm-proxy')

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { enumerateModelEntries } from '../../src/providers/model-types.js'
-import type { Settings } from '../../src/config.js'
+import type { AliasEntry, ModelRouteConfig, Settings } from '../../src/config.js'
 
 function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLookup = false): Settings {
   return {
@@ -26,7 +26,7 @@ describe('enumerateModelEntries', () => {
         models: {
           chat: {
             upstreamModel: 'openrouter/auto',
-            aliases: ['default'],
+            aliases: [{ name: 'default', flat: false }],
             headers: {},
             plugins: [],
             limit: { context: 128000, output: 4096 },
@@ -43,13 +43,17 @@ describe('enumerateModelEntries', () => {
 
     const entries = enumerateModelEntries(settings)
     expect(entries).toHaveLength(2)
-    expect(entries.map((e) => e.ids)).toEqual([['openrouter/chat'], ['openrouter/basic']])
+    // flat off: provider/modelKey + prefixed alias entries (no bare names)
+    expect(entries.map((e) => e.ids)).toEqual([
+      ['openrouter/chat', 'openrouter/default'],
+      ['openrouter/basic'],
+    ])
     // modelKey + providerName populated
     expect(entries[0]!.modelKey).toBe('chat')
     expect(entries[0]!.providerName).toBe('openrouter')
-    // flat false → ids only contains the provider/modelKey
-    expect(entries[0]!.flat).toBe(false)
-    expect(entries[0]!.aliases).toEqual(['default'])
+    // flat false → ids only contains the provider/modelKey (+ prefixed alias entries)
+    expect(entries[0]!.modelFlat).toBe(false)
+    expect(entries[0]!.aliases).toEqual([{ name: 'default', flat: false }])
     expect(entries[0]!.upstreamModel).toBe('openrouter/auto')
     expect(entries[0]!.limit).toEqual({ context: 128000, output: 4096 })
     // limit undefined when not configured
@@ -68,7 +72,7 @@ describe('enumerateModelEntries', () => {
           models: {
             chat: {
               upstreamModel: 'openrouter/auto',
-              aliases: ['default', 'fast'],
+              aliases: [{ name: 'default', flat: false }, { name: 'fast', flat: false }],
               headers: {},
               plugins: [],
               limit: { context: 200000 },
@@ -82,9 +86,16 @@ describe('enumerateModelEntries', () => {
     const entries = enumerateModelEntries(settings)
     expect(entries).toHaveLength(1)
     const entry = entries[0]!
-    expect(entry.flat).toBe(true)
-    // ids order: provider/modelKey, modelKey, then each alias in config order
-    expect(entry.ids).toEqual(['openrouter/chat', 'chat', 'default', 'fast'])
+    expect(entry.modelFlat).toBe(true)
+    // ids order: provider/modelKey, modelKey, then each alias as [provider/name, name]
+    expect(entry.ids).toEqual([
+      'openrouter/chat',
+      'chat',
+      'openrouter/default',
+      'default',
+      'openrouter/fast',
+      'fast',
+    ])
   })
 
   it('respects per-provider enableFlatModelLookup override (on while global off)', () => {
@@ -97,7 +108,7 @@ describe('enumerateModelEntries', () => {
         plugins: [],
         options: { enableFlatModelLookup: true },
         models: {
-          chat: { upstreamModel: 'u', aliases: ['a1'], headers: {}, plugins: [] },
+          chat: { upstreamModel: 'u', aliases: [{ name: 'a1', flat: false }], headers: {}, plugins: [] },
         },
       },
       deepseek: {
@@ -108,20 +119,24 @@ describe('enumerateModelEntries', () => {
         plugins: [],
         // no override, global off → flat false
         models: {
-          coder: { upstreamModel: 'd', aliases: ['a2'], headers: {}, plugins: [] },
+          coder: { upstreamModel: 'd', aliases: [{ name: 'a2', flat: false }], headers: {}, plugins: [] },
         },
       },
     })
 
     const entries = enumerateModelEntries(settings)
-    // openrouter flat → 3 ids; deepseek not flat → 1 id
+    // openrouter flat → [p/m, m, p/a1, a1]; deepseek not flat → [p/coder, p/a2]
     expect(entries.find((e) => e.providerName === 'openrouter')!.ids).toEqual([
       'openrouter/chat',
       'chat',
+      'openrouter/a1',
       'a1',
     ])
-    expect(entries.find((e) => e.providerName === 'deepseek')!.ids).toEqual(['deepseek/coder'])
-    expect(entries.find((e) => e.providerName === 'deepseek')!.flat).toBe(false)
+    expect(entries.find((e) => e.providerName === 'deepseek')!.ids).toEqual([
+      'deepseek/coder',
+      'deepseek/a2',
+    ])
+    expect(entries.find((e) => e.providerName === 'deepseek')!.modelFlat).toBe(false)
   })
 
   it('iterates providers in insertion order and models in insertion order', () => {
@@ -171,12 +186,61 @@ describe('enumerateModelEntries', () => {
         headers: {},
         plugins: [],
         models: {
-          m: { upstreamModel: 'u', aliases: ['x', 'y'], headers: {}, plugins: [] },
+          m: { upstreamModel: 'u', aliases: [{ name: 'x', flat: false }, { name: 'y', flat: false }], headers: {}, plugins: [] },
         },
       },
     })
     const entry = enumerateModelEntries(settings)[0]!
-    expect(entry.aliases).toEqual(['x', 'y'])
+    expect(entry.aliases).toEqual([{ name: 'x', flat: false }, { name: 'y', flat: false }])
     expect(entry.aliases).not.toBe(settings.providers.p!.models.m!.aliases) // defensive copy
+  })
+})
+
+const P = (models: Record<string, ModelRouteConfig>, flat = false) => ({
+  type: 'openai-compatible' as const,
+  baseURL: 'http://x',
+  apiKey: 'k',
+  headers: {},
+  plugins: [],
+  options: flat ? { enableFlatModelLookup: true } : undefined,
+  models,
+})
+const M = (upstreamModel: string, aliases: AliasEntry[] = [], flat = false): ModelRouteConfig => ({
+  upstreamModel,
+  aliases,
+  flat,
+  headers: {},
+  plugins: [],
+})
+
+describe('enumerateModelEntries ids (new semantics)', () => {
+  it('flat off + 1 string alias → [p/m, p/a]', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: false }]) }) })
+    const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!
+    expect(e.ids).toEqual(['p/m', 'p/a'])
+    expect(e.modelFlat).toBe(false)
+  })
+
+  it('flat on + 2 string alias → [p/m, m, p/a1, a1, p/a2, a2]', () => {
+    const s = makeSettings({
+      p: P({ m: M('up', [{ name: 'a1', flat: false }, { name: 'a2', flat: false }]) }, true),
+    })
+    const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!
+    expect(e.ids).toEqual(['p/m', 'm', 'p/a1', 'a1', 'p/a2', 'a2'])
+    expect(e.modelFlat).toBe(true)
+  })
+
+  it('flat off + record alias {flat:true} → [p/m, p/a, a]', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: true }]) }) })
+    const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!
+    expect(e.ids).toEqual(['p/m', 'p/a', 'a'])
+    expect(e.modelFlat).toBe(false)
+  })
+
+  it('model.flat=true (provider flat off) → [p/m, m, p/a, a]', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: false }], true) }) })
+    const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!
+    expect(e.ids).toEqual(['p/m', 'm', 'p/a', 'a'])
+    expect(e.modelFlat).toBe(true)
   })
 })

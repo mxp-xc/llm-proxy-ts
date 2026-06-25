@@ -98,6 +98,21 @@ export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesR
   return openAIResponsesRequestSchema.parse(value)
 }
 
+/** Collect names of declared custom grammar tools (type:'custom') from the request.
+ *  Used by the renderer to discriminate custom_tool_call vs function_call, since
+ *  AI SDK @3.0.71 does not expose a toolCallType signal on custom_tool_call parts. */
+export function getResponsesCustomToolNames(request: OpenAIResponsesRequest): Set<string> | undefined {
+  if (!request.tools) return undefined
+  const names = new Set<string>()
+  for (const tool of request.tools) {
+    if (tool.type === 'custom') {
+      const customTool = tool as { name?: string }
+      if (customTool.name) names.add(customTool.name)
+    }
+  }
+  return names.size > 0 ? names : undefined
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
 type EasyInputContent = z.infer<typeof easyInputMessageSchema>['content']
@@ -141,6 +156,8 @@ function mapEasyInputContent(
 const mappedResponsesRequestKeys = new Set([
   'model', 'input', 'instructions', 'stream', 'temperature', 'top_p',
   'max_output_tokens', 'tools', 'tool_choice', 'parallel_tool_calls',
+  // 以下字段由显式 camelCase 映射处理（AI SDK zod 只认 camelCase），不从 passthrough 透传
+  'reasoning', 'text', 'store', 'prompt_cache_key', 'client_metadata',
 ])
 
 export function mapResponsesRequestToAISDKInput(
@@ -266,12 +283,17 @@ export function mapResponsesRequestToAISDKInput(
   if (request.max_output_tokens !== undefined) input.maxOutputTokens = request.max_output_tokens
 
   // tools — function tool 直接映射；custom grammar tool（如 apply_patch）仅 openai provider 透传
+  // toolSet 提升到 if 外，供下方 tool_choice 校验复用（包含 flattened MCP 工具名）。
+  // selectableToolNames 记录可被 tool_choice 选中的 tool（function/custom/flatten），
+  // 不含 hosted tool（web_search/tool_search 由 provider 执行，不可 function-select）。
+  const toolSet: ToolSet = {}
+  const selectableToolNames = new Set<string>()
   if (request.tools) {
-    const toolSet: ToolSet = {}
     for (const tool of request.tools) {
       if (tool.type === 'function') {
         const fnTool = tool as ResponsesFunctionTool
         toolSet[fnTool.name] = mapResponsesFunctionTool(fnTool)
+        selectableToolNames.add(fnTool.name)
       } else if (ctx?.providerType === 'openai' && tool.type === 'custom') {
         // apply_patch 等 custom grammar tool：@ai-sdk/openai customTool 透传（仅 openai provider，
         // openai-compatible 会丢弃 provider tool）。必须保持 type:'custom'，不可降级为 function tool
@@ -284,23 +306,87 @@ export function mapResponsesRequestToAISDKInput(
             args.format = customTool.format as Exclude<Parameters<typeof openai.tools.customTool>[0]['format'], undefined>
           }
           toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
+          selectableToolNames.add(customTool.name)
         }
+      } else if (tool.type === 'namespace') {
+        // namespace tool：Codex 把 MCP server 的工具包成 {type:'namespace', name, tools:[function...]}。
+        // AI SDK 不认 namespace tool（prepareResponsesTools 无此 case），原样透传会被丢弃 → MCP 工具不可用。
+        // flatten 成顶层 function tool，name 用 mcp__<server>__<tool> 匹配 Codex 扁平回路命名（codex issue #20652）。
+        // 对 compatible + openai 上游均生效（function tool 不会被丢弃）。
+        const nsTool = tool as { name?: string; tools?: ResponsesFunctionTool[] }
+        if (nsTool.name && Array.isArray(nsTool.tools)) {
+          for (const subTool of nsTool.tools) {
+            // Fix 4: 校验 subTool.name，避免 malformed sub-tool 变成 `mcp__x__undefined`
+            if (!subTool.name) continue
+            // 只展开 function 子工具；非 function（如 custom）子工具跳过，避免被当 function 注册
+            if ((subTool as { type?: string }).type !== 'function') continue
+            const flatName = `${nsTool.name}__${subTool.name}`
+            toolSet[flatName] = mapResponsesFunctionTool({ ...subTool, name: flatName })
+            selectableToolNames.add(flatName)
+          }
+        }
+      } else if (ctx?.providerType === 'openai' && tool.type === 'web_search') {
+        // web_search hosted tool：@ai-sdk/openai webSearch helper 透传（仅 openai provider，
+        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
+        // 已知限制：helper schema 不认 search_content_types / index_gated_web_access，被丢弃。
+        // filters.allowed_domains → allowedDomains、user_location → userLocation（snake→camel）。
+        const wsTool = tool as {
+          external_web_access?: boolean
+          search_context_size?: 'low' | 'medium' | 'high'
+          filters?: { allowed_domains?: string[] }
+          user_location?: { type?: string; country?: string; region?: string; city?: string; timezone?: string }
+        }
+        type WebSearchArgs = NonNullable<Parameters<typeof openai.tools.webSearch>[0]>
+        const args: WebSearchArgs = {}
+        if (wsTool.external_web_access !== undefined) args.externalWebAccess = wsTool.external_web_access
+        if (wsTool.search_context_size !== undefined) args.searchContextSize = wsTool.search_context_size
+        if (wsTool.filters !== undefined) {
+          const allowedDomains = wsTool.filters.allowed_domains
+          const filters: NonNullable<WebSearchArgs['filters']> = {}
+          if (allowedDomains !== undefined) filters.allowedDomains = allowedDomains
+          args.filters = filters
+        }
+        if (wsTool.user_location !== undefined) {
+          // Codex 发送 user_location（type 通常为 "approximate"）；helper schema 要求 type: "approximate"
+          // 字面量。逐字段映射以兼容 exactOptionalPropertyTypes。
+          const ul = wsTool.user_location
+          const userLocation: NonNullable<WebSearchArgs['userLocation']> = { type: 'approximate' }
+          if (ul.country !== undefined) userLocation.country = ul.country
+          if (ul.region !== undefined) userLocation.region = ul.region
+          if (ul.city !== undefined) userLocation.city = ul.city
+          if (ul.timezone !== undefined) userLocation.timezone = ul.timezone
+          args.userLocation = userLocation
+        }
+        toolSet['web_search'] = openai.tools.webSearch(args) as ToolSet[string]
+      } else if (ctx?.providerType === 'openai' && tool.type === 'tool_search') {
+        // tool_search hosted tool：@ai-sdk/openai toolSearch helper 透传（仅 openai provider，
+        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
+        const tsTool = tool as {
+          execution?: string
+          description?: string
+          parameters?: Record<string, unknown>
+        }
+        type ToolSearchArgs = NonNullable<Parameters<typeof openai.tools.toolSearch>[0]>
+        const args: ToolSearchArgs = {}
+        if (tsTool.execution === 'server' || tsTool.execution === 'client') args.execution = tsTool.execution
+        if (tsTool.description !== undefined) args.description = tsTool.description
+        if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
+        toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
       }
-      // 其他非 function tool（web_search/namespace/tool_search）：v0 跳过
     }
     if (Object.keys(toolSet).length > 0) input.tools = toolSet
   }
 
-  // tool_choice — validate non-function tool references
+  // tool_choice — validate against built toolSet (includes flattened MCP names like
+  // mcp__server__tool). Fix 5: 之前只查 request.tools（不含 namespace 内嵌的 flattened 名），
+  // 导致 tool_choice 引用 flattened MCP 工具名时静默回退 'auto'。
+  // 仅当声明了 tools（toolSet 非空）时才校验；未声明 tools 时直接映射（保留原行为）。
   if (request.tool_choice) {
     if (typeof request.tool_choice === 'object' && request.tools) {
       const functionName = request.tool_choice.name
-      const isFunctionTool = request.tools.some(
-        (t) => t.type === 'function' && t.name === functionName,
-      )
-      if (!isFunctionTool) {
-        // tool_choice references a non-function tool (e.g. web_search_preview)
-        // that can't be mapped to AI SDK ToolSet — fall back to 'auto'
+      // 只允许选中 function/custom/flatten 工具；hosted tool（web_search/tool_search）
+      // 由 provider 执行不可 function-select，引用它们或未知名时回退 'auto'
+      if (!selectableToolNames.has(functionName)) {
         input.toolChoice = 'auto'
       } else {
         input.toolChoice = mapResponsesToolChoice(request.tool_choice)
@@ -311,13 +397,37 @@ export function mapResponsesRequestToAISDKInput(
   }
 
   // providerOptions key 固定为 "openai"：
-  // @ai-sdk/openai 始终读此 key，passthrough 正常工作；
+  // @ai-sdk/openai 始终读此 key（Responses 模式期望 camelCase 字段）；
   // 其他 provider（如 @ai-sdk/openai-compatible）不认识此 key，自动忽略 → 不泄漏
   const providerOptions = mapProviderOptions(request, mappedResponsesRequestKeys)
-  // parallel_tool_calls 在 mappedResponsesRequestKeys 中被排除（不走 passthrough），
-  // 但 @ai-sdk/openai 期望 providerOptions.openai.parallelToolCalls（camelCase）
+  // parallel_tool_calls：AI SDK 期望 parallelToolCalls（camelCase）
   if (request.parallel_tool_calls !== undefined) {
     providerOptions.parallelToolCalls = request.parallel_tool_calls
+  }
+  // reasoning.effort/summary：AI SDK 期望 reasoningEffort/reasoningSummary（扁平 camelCase），
+  // 非 reasoning.effort 嵌套对象（原样透传会被 zod 丢弃）
+  if (request.reasoning !== undefined) {
+    const reasoning = request.reasoning as { effort?: string; summary?: string }
+    if (reasoning.effort !== undefined) providerOptions.reasoningEffort = reasoning.effort
+    if (reasoning.summary !== undefined) providerOptions.reasoningSummary = reasoning.summary
+  }
+  // text.verbosity：AI SDK 期望 textVerbosity
+  if (request.text !== undefined) {
+    const text = request.text as { verbosity?: string }
+    if (text.verbosity !== undefined) providerOptions.textVerbosity = text.verbosity
+  }
+  // store：字段名恰好匹配 AI SDK 期望（providerOptions.openai.store）
+  if (request.store !== undefined) {
+    providerOptions.store = request.store
+  }
+  // prompt_cache_key：AI SDK 期望 promptCacheKey
+  if (request.prompt_cache_key !== undefined) {
+    providerOptions.promptCacheKey = request.prompt_cache_key
+  }
+  // client_metadata：Codex 自定义字段，OpenAI Responses API 无 client_metadata；
+  // 映射到标准 metadata 字段（AI SDK 支持 metadata: z.any()），供上游观测/计费关联
+  if (request.client_metadata !== undefined) {
+    providerOptions.metadata = request.client_metadata
   }
   if (Object.keys(providerOptions).length > 0) {
     input.providerOptions = { openai: providerOptions }

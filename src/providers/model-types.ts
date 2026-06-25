@@ -1,5 +1,5 @@
 import { isFlatLookupEnabled } from '../config-helpers.js'
-import type { Settings } from '../config.js'
+import type { AliasEntry, Settings } from '../config.js'
 
 /** 模型 token 限制 */
 export interface ModelLimit {
@@ -27,16 +27,21 @@ export interface OpenAIModelList {
 /**
  * 单个 modelKey 的枚举条目,携带该 model 对外暴露的全部 id。
  *
- * `ids` 顺序固定为:`[`${providerName}/${modelKey}`, ...(flat ? [modelKey, ...aliases] : [])]`,
- * 与原 `listModels` / `collectRows` / `buildCodexModelsResponse` 三处独立遍历的输出顺序一致。
+ * `ids` 顺序固定为:
+ * `[`${providerName}/${modelKey}`,
+ *  ...(modelFlat ? [modelKey] : []),
+ *  ...flatMap(alias => [`${providerName}/${alias.name}`, ...(modelFlat || alias.flat ? [alias.name] : [])])]`
+ *
+ * 带前缀入口(`provider/name`)始终存在;裸名入口仅当 `modelFlat || alias.flat` 时出现。
+ * `modelFlat = isFlatLookupEnabled(provider, settings) || !!model.flat`。
  */
 export interface ModelEntry {
   providerName: string
   modelKey: string
   upstreamModel: string
-  aliases: string[]
+  aliases: AliasEntry[]
   limit: ModelLimit | undefined
-  flat: boolean
+  modelFlat: boolean
   ids: string[]
 }
 
@@ -49,13 +54,17 @@ export interface ModelEntry {
 export function enumerateModelEntries(settings: Settings): ModelEntry[] {
   const entries: ModelEntry[] = []
   for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const flat = isFlatLookupEnabled(provider, settings)
+    const providerFlat = isFlatLookupEnabled(provider, settings)
     for (const [modelKey, model] of Object.entries(provider.models)) {
+      const modelFlat = providerFlat || !!model.flat
       const ids: string[] = [`${providerName}/${modelKey}`]
-      if (flat) {
+      if (modelFlat) {
         ids.push(modelKey)
-        for (const alias of model.aliases) {
-          ids.push(alias)
+      }
+      for (const alias of model.aliases) {
+        ids.push(`${providerName}/${alias.name}`)
+        if (modelFlat || alias.flat) {
+          ids.push(alias.name)
         }
       }
       entries.push({
@@ -64,7 +73,7 @@ export function enumerateModelEntries(settings: Settings): ModelEntry[] {
         upstreamModel: model.upstreamModel,
         aliases: [...model.aliases],
         limit: model.limit,
-        flat,
+        modelFlat,
         ids,
       })
     }

@@ -5,7 +5,7 @@ import type { Settings } from '../index.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
 import type { AppEnv } from './types.js'
-import { buildCodexModelsResponse, CodexCatalogCache } from './codex-catalog.js'
+import { buildCodexModelsResponse, CodexCatalogCache } from '../codex-catalog.js'
 
 interface CodexAppDeps {
   settings: Settings

@@ -8,6 +8,7 @@ export {
 } from './config.js'
 export type {
   PluginEntry,
+  AliasEntry,
   ModelRouteConfig,
   OAuthConfig,
   OpenAICompatibleProviderConfig,

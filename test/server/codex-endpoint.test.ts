@@ -5,7 +5,7 @@ import { stubRegistry } from '../helpers/registry.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
-import { CodexCatalogCache, type CodexCatalogFetcher } from '../../src/server/codex-catalog.js'
+import { CodexCatalogCache, type CodexCatalogFetcher } from '../../src/codex-catalog.js'
 
 const openrouterSettings = makeSettings({
   openrouter: {
@@ -269,6 +269,75 @@ describe('POST /codex/v1/responses', () => {
     const text = await res.text()
     expect(text).toContain('custom_tool_call')
     expect(text).toContain('response.custom_tool_call_input.delta')
+  })
+
+  // 非 apply_patch 的 custom tool（通过请求侧声明的 customToolNames 集合判别）端到端：
+  // 上游返回 toolName='my_grammar_tool'，请求侧声明该工具为 type:'custom'，
+  // renderer 应渲染为 custom_tool_call 而非 function_call。
+  it('renders non-apply_patch custom tool as custom_tool_call via declared customToolNames', async () => {
+    const settings = makeSettings({
+      openai: {
+        type: 'openai',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
+      },
+    })
+    const gateway = makeGateway({
+      stream() {
+        return (async function* () {
+          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'my_grammar_tool', input: JSON.stringify('payload') }
+          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+        })() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openai/chat',
+      input: 'hi',
+      stream: true,
+      tools: [{ type: 'custom', name: 'my_grammar_tool', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('custom_tool_call')
+    expect(text).not.toContain('"function_call"')
+  })
+
+  it('renders web_search_call for openai provider hosted tool', async () => {
+    const settings = makeSettings({
+      openai: {
+        type: 'openai', apiKey: 'secret', headers: {}, plugins: [],
+        models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
+      },
+    })
+    const gateway = makeGateway({
+      stream() {
+        return (async function* () {
+          yield { type: 'tool-call', toolCallId: 'ws_1', toolName: 'web_search', input: '{}', providerExecuted: true }
+          yield { type: 'tool-result', toolCallId: 'ws_1', toolName: 'web_search', output: { action: { type: 'search', query: 'test' } } }
+          yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+        })() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openai/chat', input: 'hi', stream: true,
+      tools: [{ type: 'web_search', external_web_access: true }],
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body,
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('web_search_call')
+    expect(text).not.toContain('"function_call"')
   })
 
   it('injects x-request-id (middleware covers /codex)', async () => {

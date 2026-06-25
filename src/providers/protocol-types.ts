@@ -23,7 +23,10 @@ export interface RenderResultInput {
     reasoningTokens?: number
   }
   response?: { id?: string; timestamp?: Date }
-  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
+  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown; providerExecuted?: boolean }>
+  /** 请求侧声明的 custom grammar tool（type:'custom'）名称集合。
+   *  供 openai-responses renderer 判别 custom_tool_call；其他 renderer 忽略。 */
+  customToolNames?: Set<string>
 }
 
 /**

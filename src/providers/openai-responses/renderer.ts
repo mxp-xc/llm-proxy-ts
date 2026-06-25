@@ -9,6 +9,8 @@ import type {
   ResponseOutputMessage,
   ResponseFunctionToolCall,
   ResponseCustomToolCall,
+  ResponseWebSearchCall,
+  ResponseWebSearchAction,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -20,6 +22,7 @@ export type {
   ResponseOutputMessage,
   ResponseFunctionToolCall,
   ResponseCustomToolCall,
+  ResponseWebSearchCall,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -42,10 +45,40 @@ function mapResponseStatus(
   return 'completed'
 }
 
-/** Codex 的 apply_patch 是 freeform custom tool；AI SDK 把上游 custom_tool_call 映射成
- * tool-call (toolName='apply_patch')。renderer 渲染为 custom_tool_call output item。 */
-function isCustomToolName(toolName: string): boolean {
+/** 判别 custom tool（apply_patch 等 freeform grammar tool）：
+ *  优先看请求侧声明的 custom tool name 集合（type:'custom'）；
+ *  回退到 toolName === 'apply_patch'（防御：无集合时仍识别 Codex 的 apply_patch）。
+ *  AI SDK @3.0.71 不提供 toolCallType 信号，故靠请求侧声明的 name 集合判别。 */
+function isCustomToolName(toolName: string, customToolNames?: Set<string>): boolean {
+  if (customToolNames?.has(toolName)) return true
   return toolName === 'apply_patch'
+}
+
+/** 判别 hosted tool（web_search 等）：AI SDK 把上游 web_search_call 映射成 tool-call(providerExecuted:true)。
+ *  providerExecuted 是 hosted tool 的决定性标志（function/custom tool 的 tool-call 不带此字段）。 */
+function isHostedToolCall(part: { providerExecuted?: boolean }): boolean {
+  return part.providerExecuted === true
+}
+
+/** 把 AI SDK tool-result.output 还原成 Codex 期望的 web_search_call.action。
+ *  AI SDK mapWebSearchOutput 把上游 snake_case action.type 转成 camelCase
+ *  （open_page→openPage、find_in_page→findInPage；search 不变），Codex 期望 snake_case，这里转回。 */
+function mapWebSearchAction(output: unknown): ResponseWebSearchAction | null {
+  if (!output || typeof output !== 'object') return null
+  const o = output as { action?: { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string } }
+  const a = o.action
+  if (!a || typeof a.type !== 'string') return null
+  const actionType: ResponseWebSearchAction['type'] =
+    a.type === 'openPage' ? 'open_page'
+    : a.type === 'findInPage' ? 'find_in_page'
+    : a.type === 'search' ? 'search'
+    : a.type as ResponseWebSearchAction['type']
+  const action: ResponseWebSearchAction = { type: actionType }
+  if (a.query !== undefined) action.query = a.query
+  if (a.queries !== undefined) action.queries = a.queries
+  if (a.url !== undefined) action.url = a.url
+  if (a.pattern !== undefined) action.pattern = a.pattern
+  return action
 }
 
 /** 还原 custom_tool_call 的 input：AI SDK 对 custom_tool_call.input 做 JSON.stringify
@@ -65,6 +98,7 @@ function decodeCustomToolInput(raw: unknown): string {
 export async function* renderOpenAIResponseSSE(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
+  customToolNames?: Set<string>
 }): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -85,14 +119,48 @@ export async function* renderOpenAIResponseSSE(input: {
   let reasoningItemId = ''
   let reasoningEncryptedContent: string | undefined
   const streamedToolCalls: Array<ResponseFunctionToolCall | ResponseCustomToolCall> = []
+  // hosted web_search_call items: tracked separately so they appear in the final
+  // output array but do NOT trigger 'incomplete' status (Fix 1). Hosted tools are
+  // executed inline by the upstream and do not pause the Codex agent loop.
+  const streamedHostedCalls: ResponseWebSearchCall[] = []
 
   const toolCallFcIds = new Map<string, string>()
   const toolCallToolNames = new Map<string, string>()
   const toolCallsWithArgumentDeltas = new Set<string>()
   const toolCallStartEmitted = new Set<string>()
+  const hostedToolCallIds = new Set<string>()
+  const customToolNames = input.customToolNames
 
   function nextSeq(): number {
     return ++sequenceNumber
+  }
+
+  /** Close the in-progress text message item: emit output_text.done +
+   *  content_part.done + output_item.done, reset outputItemStarted/
+   *  contentPartStarted, and advance outputIndex. No-op when no text
+   *  content part is open. Replaces ~4 duplicated close-text blocks. */
+  function* closeCurrentTextMessage(): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
+    if (!contentPartStarted) return
+    yield { event: 'response.output_text.done', data: {
+      type: 'response.output_text.done',
+      sequence_number: nextSeq(),
+      item_id: currentMsgId, output_index: outputIndex, content_index: 0,
+      text: fullText,
+    } }
+    yield { event: 'response.content_part.done', data: {
+      type: 'response.content_part.done',
+      sequence_number: nextSeq(),
+      item_id: currentMsgId, output_index: outputIndex, content_index: 0,
+      part: { type: 'output_text', text: fullText, annotations: [] },
+    } }
+    yield { event: 'response.output_item.done', data: {
+      type: 'response.output_item.done',
+      sequence_number: nextSeq(), output_index: outputIndex,
+      item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
+    } }
+    outputIndex++
+    outputItemStarted = false
+    contentPartStarted = false
   }
 
   try {
@@ -217,34 +285,17 @@ export async function* renderOpenAIResponseSSE(input: {
       if (part.type === 'tool-input-start') {
         const toolCallId = part.id
         const toolName = part.toolName
+        if (isHostedToolCall(part)) {
+          hostedToolCallIds.add(toolCallId)
+          continue
+        }
         const fcId = `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         toolCallFcIds.set(toolCallId, fcId)
         toolCallToolNames.set(toolCallId, toolName)
 
-        if (contentPartStarted) {
-          yield { event: 'response.output_text.done', data: {
-            type: 'response.output_text.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            text: fullText,
-          } }
-          yield { event: 'response.content_part.done', data: {
-            type: 'response.content_part.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            part: { type: 'output_text', text: fullText, annotations: [] },
-          } }
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done',
-            sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          } }
-          outputIndex++
-          outputItemStarted = false
-          contentPartStarted = false
-        }
+        yield* closeCurrentTextMessage()
 
-        const isCustom = isCustomToolName(toolName)
+        const isCustom = isCustomToolName(toolName, customToolNames)
         const addedItem = isCustom
           ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
           : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
@@ -258,13 +309,14 @@ export async function* renderOpenAIResponseSSE(input: {
       if (part.type === 'tool-input-delta') {
         const toolCallId = part.id
         const argsDelta = part.delta
+        if (toolCallId != null && hostedToolCallIds.has(toolCallId)) continue
         if (toolCallId == null || argsDelta == null) continue
 
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         const toolName = toolCallToolNames.get(toolCallId) ?? ''
 
-        if (isCustomToolName(toolName)) {
+        if (isCustomToolName(toolName, customToolNames)) {
           yield { event: 'response.custom_tool_call_input.delta', data: {
             type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
             item_id: fcId, output_index: outputIndex, delta: argsDelta,
@@ -280,31 +332,20 @@ export async function* renderOpenAIResponseSSE(input: {
       if (part.type === 'tool-call') {
         const toolCallId = part.toolCallId
         const toolName = part.toolName
-        const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-        const isCustom = isCustomToolName(toolName)
 
-        if (contentPartStarted) {
-          yield { event: 'response.output_text.done', data: {
-            type: 'response.output_text.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            text: fullText,
-          } }
-          yield { event: 'response.content_part.done', data: {
-            type: 'response.content_part.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            part: { type: 'output_text', text: fullText, annotations: [] },
-          } }
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done',
-            sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          } }
-          outputIndex++
-          outputItemStarted = false
-          contentPartStarted = false
+        if (isHostedToolCall(part)) {
+          // web_search 等 hosted tool：AI SDK 把上游 web_search_call 拆成 tool-call + tool-result 对。
+          // Fix 2: tool-call 只记录 id，不占用 outputIndex；added+done 都在 tool-result 分支同步发出，
+          // 避免在 tool-call 与 tool-result 之间 outputIndex 被 in-flight web_search_call 占据
+          // （若其间到达 text-delta 会在同一 outputIndex 开新 message item 覆盖）。
+          hostedToolCallIds.add(toolCallId)
+          continue
         }
+
+        const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const isCustom = isCustomToolName(toolName, customToolNames)
+
+        yield* closeCurrentTextMessage()
 
         const rawArgs = part.input ?? {}
         // custom_tool_call: input 是 JSON.stringify(裸文本)，还原为裸文本；function_call: 保持原样
@@ -362,6 +403,26 @@ export async function* renderOpenAIResponseSSE(input: {
         outputIndex++
       }
 
+      if (part.type === 'tool-result' && hostedToolCallIds.has(part.toolCallId)) {
+        // hosted tool 结果到达：tool-call 分支已记录 id（未占 outputIndex）。
+        // 这里同步发出 added(action:null) + done(带 action)，item id 用 toolCallId 即上游 ws_ id。
+        // 先关闭可能 in-progress 的 text message，避免 outputIndex 冲突。
+        yield* closeCurrentTextMessage()
+        const action = mapWebSearchAction(part.output)
+        yield { event: 'response.output_item.added', data: {
+          type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
+          item: { id: part.toolCallId, type: 'web_search_call', status: 'in_progress', action: null },
+        } }
+        const wsCall: ResponseWebSearchCall = { id: part.toolCallId, type: 'web_search_call', status: 'completed', action }
+        yield { event: 'response.output_item.done', data: {
+          type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
+          item: wsCall,
+        } }
+        streamedHostedCalls.push(wsCall)
+        outputIndex++
+        hostedToolCallIds.delete(part.toolCallId)
+      }
+
       if (part.type === 'finish') {
         if (reasoningItemStarted) {
           yield { event: 'response.reasoning_summary_text.done', data: {
@@ -387,30 +448,10 @@ export async function* renderOpenAIResponseSSE(input: {
           fullReasoning = ''
           reasoningEncryptedContent = undefined
         }
-        if (contentPartStarted) {
-          yield { event: 'response.output_text.done', data: {
-            type: 'response.output_text.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            text: fullText,
-          } }
-          yield { event: 'response.content_part.done', data: {
-            type: 'response.content_part.done',
-            sequence_number: nextSeq(),
-            item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-            part: { type: 'output_text', text: fullText, annotations: [] },
-          } }
-        }
-        if (outputItemStarted) {
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-          } }
-        }
+        yield* closeCurrentTextMessage()
 
         const finishReason = part.finishReason
+        // Fix 1: hosted web_search_call 不参与 incomplete 判定（streamedToolCalls 已不含 hosted）
         const status = mapResponseStatus(finishReason, streamedToolCalls)
         const usage = extractUsageFromFinishPart(part)
         const finishResponse = part.response
@@ -426,7 +467,7 @@ export async function* renderOpenAIResponseSSE(input: {
           created_at: Math.floor(Date.now() / 1000),
           model: input.model,
           status,
-          output: [...textOutput, ...streamedToolCalls],
+          output: [...textOutput, ...streamedToolCalls, ...streamedHostedCalls],
           output_text: fullText,
           instructions: null,
           temperature: null,
@@ -520,6 +561,7 @@ export async function* renderOpenAIResponseSSE(input: {
 
 export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
   const output: ResponseOutputItem[] = []
+  const customToolNames = input.customToolNames
 
   if (input.text != null) {
     output.push({
@@ -533,7 +575,14 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
 
   if (input.toolCalls?.length) {
     for (const call of input.toolCalls) {
-      if (isCustomToolName(call.toolName)) {
+      if (call.providerExecuted === true) {
+        output.push({
+          id: call.toolCallId,
+          type: 'web_search_call',
+          status: 'completed',
+          action: null,  // 非流式 generateText 无 tool-result 配对，action 未知
+        })
+      } else if (isCustomToolName(call.toolName, customToolNames)) {
         output.push({
           id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
           type: 'custom_tool_call',
@@ -556,12 +605,16 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
     }
   }
 
+  // Fix 1: hosted web_search_call (providerExecuted) 不参与 incomplete 判定——
+  // 上游内联执行，不暂停 Codex agent loop；仅 function/custom tool call 触发 incomplete。
+  const nonHostedToolCalls = input.toolCalls?.filter((c) => c.providerExecuted !== true)
+
   const response: OpenAIResponse = {
     id: input.response?.id ?? `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
     object: 'response',
     created_at: Math.floor((input.response?.timestamp?.getTime() ?? Date.now()) / 1000),
     model: input.model,
-    status: mapResponseStatus(input.finishReason, input.toolCalls),
+    status: mapResponseStatus(input.finishReason, nonHostedToolCalls),
     output,
     output_text: input.text ?? '',
     instructions: null,

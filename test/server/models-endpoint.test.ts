@@ -21,7 +21,7 @@ const singleProvider: Settings['providers'] = {
     models: {
       chat: {
         upstreamModel: 'openrouter/auto',
-        aliases: ['default'],
+        aliases: [{ name: 'default', flat: false }],
         headers: {},
         plugins: [],
       },
@@ -77,6 +77,7 @@ describe('GET /v1/models', () => {
     expect(body.object).toBe('list')
     expect(body.data).toEqual([
       { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter' },
+      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter' },
     ])
   })
 
@@ -109,6 +110,7 @@ describe('GET /v1/models', () => {
     expect(body.data).toEqual([
       { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter' },
       { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter' },
+      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter' },
       { id: 'default', object: 'model', created: 0, owned_by: 'openrouter' },
     ])
   })
@@ -124,6 +126,7 @@ describe('GET /v1/models', () => {
     const body = await response.json()
     expect(body.data).toEqual([
       { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter' },
+      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter' },
     ])
   })
 })
@@ -233,7 +236,7 @@ describe('GET /v1/models/:id', () => {
         models: {
           chat: {
             upstreamModel: 'openrouter/auto',
-            aliases: ['default'],
+            aliases: [{ name: 'default', flat: false }],
             headers: {},
             plugins: [],
           },
@@ -258,10 +261,11 @@ describe('GET /v1/models/:id', () => {
 
     expect(response.status).toBe(200)
     const body = await response.json()
-    // openrouter gets flat names (chat + default alias), deepseek does not
+    // openrouter gets flat names (chat + default alias with prefixed entries), deepseek does not
     expect(body.data).toEqual([
       { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter' },
       { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter' },
+      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter' },
       { id: 'default', object: 'model', created: 0, owned_by: 'openrouter' },
       { id: 'deepseek/reasoner', object: 'model', created: 0, owned_by: 'deepseek' },
     ])
@@ -355,7 +359,7 @@ describe('GET /v1/models — limit', () => {
         models: {
           chat: {
             upstreamModel: 'openrouter/auto',
-            aliases: ['default'],
+            aliases: [{ name: 'default', flat: false }],
             headers: {},
             plugins: [],
             limit: { context: 200000, input: 200000, output: 8192 },
@@ -372,6 +376,7 @@ describe('GET /v1/models — limit', () => {
     expect(body.data).toEqual([
       { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
       { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
       { id: 'default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
     ])
   })
@@ -422,7 +427,7 @@ describe('GET /v1/models/:id — limit', () => {
         models: {
           chat: {
             upstreamModel: 'openrouter/auto',
-            aliases: ['default'],
+            aliases: [{ name: 'default', flat: false }],
             headers: {},
             plugins: [],
             limit: { context: 128000, output: 4096 },

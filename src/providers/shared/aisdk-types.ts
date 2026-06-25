@@ -48,7 +48,7 @@ export interface AISDKInput {
  * - 加入 openai-error（代理层首包检测注入）
  * - finish 额外携带 response?（由 stream-normalize 从 finish-step.response 注入，
  *   AI SDK 原生 finish 无此字段）
- * - tool-input-start 省略 AI SDK 的 toolMetadata / providerExecuted
+ * - tool-input-start 保留 providerExecuted（hosted tool 判别标志），省略 toolMetadata
  */
 export type ProxyStreamPart =
   | { type: 'text-start'; id: string; providerMetadata?: ProviderMetadata }
@@ -57,10 +57,10 @@ export type ProxyStreamPart =
   | { type: 'reasoning-start'; id: string; providerMetadata?: ProviderMetadata }
   | { type: 'reasoning-delta'; id: string; providerMetadata?: ProviderMetadata; text: string }
   | { type: 'reasoning-end'; id: string; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-input-start'; id: string; toolName: string; providerMetadata?: ProviderMetadata; dynamic?: boolean; title?: string }
+  | { type: 'tool-input-start'; id: string; toolName: string; providerMetadata?: ProviderMetadata; providerExecuted?: boolean; dynamic?: boolean; title?: string }
   | { type: 'tool-input-end'; id: string; providerMetadata?: ProviderMetadata }
   | { type: 'tool-input-delta'; id: string; delta: string; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; providerMetadata?: ProviderMetadata; providerExecuted?: boolean; dynamic?: boolean }
   | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; providerMetadata?: ProviderMetadata }
   | { type: 'tool-error'; toolCallId: string; toolName: string; input: unknown; error: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
   | { type: 'tool-output-denied'; toolCallId: string; toolName: string; providerExecuted?: boolean; dynamic?: boolean }

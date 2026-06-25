@@ -7,6 +7,7 @@ import type {
   ResponseOutputItemAddedEvent,
   ResponseOutputItemDoneEvent,
   ResponseFunctionCallArgumentsDeltaEvent,
+  ResponseWebSearchCall,
 } from '../../../src/providers/openai-responses/types.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../../../src/providers/openai-responses/renderer.js'
 import { collectSSEFrames } from '../../helpers/sse.js'
@@ -407,5 +408,148 @@ describe('renderOpenAIResponseSSE', () => {
     }
     expect(events.some(e => e.event === 'response.custom_tool_call_input.delta')).toBe(true)
     expect(events.some(e => e.event === 'response.function_call_arguments.delta')).toBe(false)
+  })
+
+  // web_search_call 渲染：AI SDK 把上游 web_search_call 映射成 tool-call(providerExecuted:true) + tool-result 对
+  async function* webSearchCallStream() {
+    yield { type: 'tool-input-start', id: 'ws_1', toolName: 'web_search', providerExecuted: true }
+    yield { type: 'tool-input-end', id: 'ws_1' }
+    yield { type: 'tool-call', toolCallId: 'ws_1', toolName: 'web_search', input: '{}', providerExecuted: true }
+    yield { type: 'tool-result', toolCallId: 'ws_1', toolName: 'web_search', output: { action: { type: 'search', query: 'rust async' } } }
+    yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_ws' } }
+  }
+
+  it('renders web_search tool-call + tool-result as web_search_call output item', async () => {
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: webSearchCallStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const item = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(item.type).toBe('web_search_call')
+    if (item.type === 'web_search_call') {
+      expect(item.id).toBe('ws_1')
+      expect(item.status).toBe('completed')
+      expect(item.action).toEqual({ type: 'search', query: 'rust async' })
+    }
+  })
+
+  // AI SDK mapWebSearchOutput 把上游 snake_case action.type 转成 camelCase（open_page→openPage），
+  // mapWebSearchAction 需转回 snake_case（Codex 期望）。
+  it('converts web_search action.type from camelCase back to snake_case (openPage→open_page)', async () => {
+    async function* openPageStream() {
+      yield { type: 'tool-call', toolCallId: 'ws_2', toolName: 'web_search', input: '{}', providerExecuted: true }
+      yield { type: 'tool-result', toolCallId: 'ws_2', toolName: 'web_search', output: { action: { type: 'openPage', url: 'https://example.com' } } }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_op' } }
+    }
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: openPageStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const item = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(item.type).toBe('web_search_call')
+    if (item.type === 'web_search_call') {
+      expect(item.action).toEqual({ type: 'open_page', url: 'https://example.com' })
+    }
+  })
+
+  // Fix 1: hosted web_search_call 不应触发 'incomplete' status。
+  // 上游内联执行 web_search，finishReason='stop' 时 Codex 期望 status='completed'。
+  it('web_search + finish(stop) yields response.completed with status completed (not incomplete)', async () => {
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: webSearchCallStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.status).toBe('completed')
+    // web_search_call 仍在 output 中
+    expect(completed.response.output.some((o) => o.type === 'web_search_call')).toBe(true)
+  })
+
+  // Fix 1 (non-streaming): hosted web_search_call 不触发 incomplete
+  it('non-streaming web_search + finish(stop) yields status completed', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: 'answer',
+      finishReason: 'stop',
+      toolCalls: [
+        { toolCallId: 'ws_1', toolName: 'web_search', input: {}, providerExecuted: true },
+      ],
+    })
+    expect(result.status).toBe('completed')
+    expect(result.output.some((o) => o.type === 'web_search_call')).toBe(true)
+  })
+
+  // Fix 2: hosted tool-call 后紧跟 text-delta 再 tool-result —— text message 和 web_search_call
+  // 必须在各自独立的 output_index，互不覆盖。AI SDK 实际背靠背发 tool-call/tool-result，
+  // 此测试构造交错序列以验证状态机在 outputIndex 被占用时不冲突。
+  it('hosted tool-call + text-delta + tool-result render at distinct output indices without overwriting', async () => {
+    async function* interleavedStream() {
+      yield { type: 'text-delta', text: 'before' }
+      yield { type: 'tool-input-start', id: 'ws_2', toolName: 'web_search', providerExecuted: true }
+      yield { type: 'tool-input-end', id: 'ws_2' }
+      // hosted tool-call 到达：只记录 id，不占 outputIndex，不关闭 in-progress text message
+      yield { type: 'tool-call', toolCallId: 'ws_2', toolName: 'web_search', input: '{}', providerExecuted: true }
+      // text-delta 到达：继续写入同一个 in-progress text message（不被 web_search_call 覆盖）
+      yield { type: 'text-delta', text: '-after' }
+      // hosted tool-result 到达：关闭 text message（index 0），再 added+done web_search_call（index 1）
+      yield { type: 'tool-result', toolCallId: 'ws_2', toolName: 'web_search', output: { action: { type: 'search', query: 'q' } } }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_inter' } }
+    }
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: interleavedStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const addedItems = events
+      .filter(e => e.event === 'response.output_item.added')
+      .map(e => e.data as ResponseOutputItemAddedEvent)
+    const doneItems = events
+      .filter(e => e.event === 'response.output_item.done')
+      .map(e => e.data as ResponseOutputItemDoneEvent)
+
+    // message item 在 index 0，web_search_call 在 index 1
+    const msgAdded = addedItems.find(e => e.item?.type === 'message')
+    const wsAdded = addedItems.find(e => e.item?.type === 'web_search_call')
+    expect(msgAdded).toBeDefined()
+    expect(wsAdded).toBeDefined()
+    expect(msgAdded!.output_index).toBe(0)
+    expect(wsAdded!.output_index).toBe(1)
+
+    // text message 累积了 before-after（未被 web_search 覆盖）
+    const msgDone = doneItems.find(e => e.item?.type === 'message')
+    expect(msgDone).toBeDefined()
+    if (msgDone!.item.type === 'message') {
+      expect(msgDone!.item.content[0]!.text).toBe('before-after')
+    }
+    // web_search_call done 带正确 action
+    const wsDone = doneItems.find(e => e.item?.type === 'web_search_call')
+    expect(wsDone).toBeDefined()
+    expect(wsDone!.output_index).toBe(1)
+
+    // completed.output 包含 message + web_search_call，status completed
+    const completed = events.find(e => e.event === 'response.completed')!.data as ResponseCompletedEvent
+    expect(completed.response.status).toBe('completed')
+    expect(completed.response.output.some((o) => o.type === 'message')).toBe(true)
+    expect(completed.response.output.some((o) => o.type === 'web_search_call')).toBe(true)
+  })
+
+  // 非 apply_patch 的 custom tool（通过请求侧声明的 customToolNames 集合判别）也应渲染为 custom_tool_call。
+  // AI SDK @3.0.71 不暴露 toolCallType 信号，故 renderer 依赖请求侧传入的 name 集合。
+  it('renders custom tool by customToolNames set, not just apply_patch name', async () => {
+    async function* customStream() {
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'my_grammar_tool', input: JSON.stringify('payload') }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_c' } }
+    }
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: customStream() as AsyncIterable<ProxyStreamPart>, customToolNames: new Set(['my_grammar_tool']) })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    expect((done!.data as ResponseOutputItemDoneEvent).item.type).toBe('custom_tool_call')
+  })
+
+  // 非流式路径也应通过 customToolNames 集合判别 custom tool
+  it('renders custom tool by customToolNames set in non-streaming renderOpenAIResponse', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'call_1', toolName: 'my_grammar_tool', input: JSON.stringify('payload') }],
+      customToolNames: new Set(['my_grammar_tool']),
+    })
+    const item = result.output.find(o => o.type === 'custom_tool_call')
+    expect(item).toBeDefined()
+    expect(result.output.some(o => o.type === 'function_call')).toBe(false)
   })
 })

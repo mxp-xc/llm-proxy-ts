@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { CodexCatalogCache, buildCodexModelsResponse } from '../../src/server/codex-catalog.js'
-import type { CodexModelInfo } from '../../src/codex-types.js'
-import { makeSettings } from '../helpers/settings.js'
+import { CodexCatalogCache, buildCodexModelsResponse } from '../src/codex-catalog.js'
+import type { CodexModelInfo } from '../src/codex-types.js'
+import { makeSettings } from './helpers/settings.js'
 
 const FULL_MODEL = {
   slug: 'gpt-5.4',
@@ -139,13 +139,13 @@ describe('buildCodexModelsResponse', () => {
         apiKey: 'k',
         headers: {},
         plugins: [],
-        models: { 'glm-5.1': { upstreamModel: 'glm-5.1', aliases: ['g'], headers: {}, plugins: [] } },
+        models: { 'glm-5.1': { upstreamModel: 'glm-5.1', aliases: [{ name: 'g', flat: false }], headers: {}, plugins: [] } },
       },
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)
-    // flat lookup 默认关闭:只 provider/modelKey
-    expect(models.map((m) => m.slug).sort()).toEqual(['zhipu/glm-5.1'])
-    const m = models[0]!
+    // flat lookup 默认关闭:provider/modelKey + provider/alias(带前缀入口始终有)
+    expect(models.map((m) => m.slug).sort()).toEqual(['zhipu/g', 'zhipu/glm-5.1'])
+    const m = models.find((x) => x.slug === 'zhipu/glm-5.1')!
     expect(m.slug).toBe('zhipu/glm-5.1')
     expect(m.display_name).toBe('zhipu/glm-5.1') // 默认 = slug
     expect(m.context_window).toBe(200000) // 无 limit → fallback
@@ -155,6 +155,10 @@ describe('buildCodexModelsResponse', () => {
     expect(m.priority).toBe(0)
     expect(m.experimental_supported_tools).toEqual([])
     expect(m.base_instructions).toBe('codex-5.5') // 动态默认选 gpt-5.5(首个 supported_in_api)
+    // provider/<alias> slug 共享主 slug 的 context_window(同 entry.limit)
+    const aliasM = models.find((x) => x.slug === 'zhipu/g')!
+    expect(aliasM.context_window).toBe(m.context_window)
+    expect(aliasM.max_context_window).toBe(m.max_context_window)
   })
 
   it('context_window from limit.context; flat lookup adds modelKey + alias slugs', () => {
@@ -169,7 +173,7 @@ describe('buildCodexModelsResponse', () => {
           models: {
             'glm-5.1': {
               upstreamModel: 'glm-5.1',
-              aliases: ['g'],
+              aliases: [{ name: 'g', flat: false }],
               headers: {},
               plugins: [],
               limit: { context: 128000 },
@@ -180,7 +184,7 @@ describe('buildCodexModelsResponse', () => {
       { routing: { enableFlatModelLookup: true } },
     )
     const { models } = buildCodexModelsResponse(settings, CATALOG)
-    expect(models.map((m) => m.slug).sort()).toEqual(['g', 'glm-5.1', 'zhipu/glm-5.1'])
+    expect(models.map((m) => m.slug).sort()).toEqual(['g', 'glm-5.1', 'zhipu/g', 'zhipu/glm-5.1'])
     const main = models.find((m) => m.slug === 'zhipu/glm-5.1')!
     expect(main.context_window).toBe(128000)
     expect(main.max_context_window).toBe(128000)

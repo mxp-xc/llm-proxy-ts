@@ -4,7 +4,7 @@ import type { Settings, TokenManager } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import type pino from 'pino'
-import type { CodexCatalogCache } from './codex-catalog.js'
+import type { CodexCatalogCache } from '../codex-catalog.js'
 
 export type { Settings } from '../index.js'
 

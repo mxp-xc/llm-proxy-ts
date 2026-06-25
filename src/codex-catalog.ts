@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { z } from 'zod/v3'
-import { codexModelInfoSchema, type CodexModelInfo, type CodexModelOverride } from '../codex-types.js'
-import type { Settings } from '../config.js'
-import { enumerateModelEntries, type ModelEntry } from '../providers/model-types.js'
+import { codexModelInfoSchema, type CodexModelInfo, type CodexModelOverride } from './codex-types.js'
+import type { Settings } from './config.js'
+import { enumerateModelEntries, type ModelEntry } from './providers/model-types.js'
 
 const execFileAsync = promisify(execFile)
 

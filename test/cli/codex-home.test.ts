@@ -5,7 +5,7 @@ vi.mock('node:os', () => ({
 }))
 
 import { homedir } from 'node:os'
-import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath } from '../../src/cli/codex-home.js'
+import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath } from '../../src/cli/codex/home.js'
 
 const mockedHomedir = vi.mocked(homedir)
 

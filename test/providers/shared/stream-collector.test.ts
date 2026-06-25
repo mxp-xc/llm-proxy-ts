@@ -121,4 +121,15 @@ describe('collectStreamResult', () => {
     expect(result.response?.id).toBe('chatcmpl-123')
     expect(result.response?.timestamp).toEqual(ts)
   })
+
+  it('preserves providerExecuted on tool-call for hosted tools', async () => {
+    async function* stream() {
+      yield { type: 'tool-call', toolCallId: 'ws_1', toolName: 'web_search', input: '{}', providerExecuted: true } as ProxyStreamPart
+      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 1 } } as ProxyStreamPart
+    }
+    const result = await collectStreamResult(stream())
+    expect(result.toolCalls).toEqual([
+      { toolCallId: 'ws_1', toolName: 'web_search', input: {}, providerExecuted: true },
+    ])
+  })
 })

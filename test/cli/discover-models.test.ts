@@ -4,7 +4,7 @@ import {
   fetchUpstreamModels,
   openAIToDiscoveredModels,
   resolveModelsUrl,
-} from '../../src/cli/discover-models.js'
+} from '../../src/cli/models/discover.js'
 
 describe('resolveModelsUrl', () => {
   it('defaults to {baseURL}/models when modelsEndpoint is absent', () => {

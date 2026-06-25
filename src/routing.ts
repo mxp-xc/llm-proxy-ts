@@ -1,5 +1,4 @@
 import type { ProviderConfig, Settings } from './config.js'
-import { isFlatLookupEnabled } from './config-helpers.js'
 import { enumerateModelEntries } from './providers/model-types.js'
 import type { PluginRegistry, ResolvedPlugin } from './plugins/registry.js'
 import { getBuiltInPlugin } from './plugins/loader.js'
@@ -45,10 +44,12 @@ export class RoutingTable {
 
   static fromSettings(settings: Settings, pluginRegistry?: PluginRegistry): RoutingTable {
     const flatRoutes = new Map<string, RouteMatch>()
+    // 带前缀入口唯一性检测:同 provider 内 {modelKey} ∪ {alias name} 全局唯一,跨 provider 不误报
+    const prefixed = new Set<string>()
 
     // 复用共享枚举核心 enumerateModelEntries —— 与 listModels/collectRows/buildCodexModelsResponse
     // 共享同一 (provider, modelKey, flat, aliases) 视图。route 按 (provider, modelKey) 构建;
-    // flat 选择器(modelKey + aliases)写入 flatRoutes 并做 ambiguous 检测。
+    // 裸名入口(modelKey + 满足条件的 aliases)写入 flatRoutes 并做 ambiguous 检测。
     for (const entry of enumerateModelEntries(settings)) {
       const provider = settings.providers[entry.providerName]
       if (!provider) continue
@@ -60,12 +61,32 @@ export class RoutingTable {
         pluginRegistry,
       )
 
-      if (entry.flat) {
-        for (const selector of [entry.modelKey, ...entry.aliases]) {
-          if (flatRoutes.has(selector)) {
-            throw new Error(`ambiguous flat route '${selector}' is configured`)
-          }
-          flatRoutes.set(selector, route)
+      // 带前缀入口唯一性:同 provider 内 {modelKey} ∪ {alias name} 全局唯一
+      const assertPrefixedUnique = (name: string) => {
+        const key = `${entry.providerName}/${name}`
+        if (prefixed.has(key)) {
+          throw new Error(`duplicate model selector '${name}' in provider '${entry.providerName}'`)
+        }
+        prefixed.add(key)
+      }
+      assertPrefixedUnique(entry.modelKey)
+      for (const alias of entry.aliases) {
+        assertPrefixedUnique(alias.name)
+      }
+
+      // 裸名入口注册 + ambiguous 检测(flatRoutes 跨 provider 全局)
+      const registerBare = (selector: string) => {
+        if (flatRoutes.has(selector)) {
+          throw new Error(`ambiguous flat route '${selector}' is configured`)
+        }
+        flatRoutes.set(selector, route)
+      }
+      if (entry.modelFlat) {
+        registerBare(entry.modelKey)
+      }
+      for (const alias of entry.aliases) {
+        if (entry.modelFlat || alias.flat) {
+          registerBare(alias.name)
         }
       }
     }
@@ -84,19 +105,6 @@ export class RoutingTable {
     }
 
     if (!selector.includes('/')) {
-      const anyFlatEnabled = Object.values(this.settings.providers).some((p) =>
-        isFlatLookupEnabled(p, this.settings),
-      )
-
-      if (!anyFlatEnabled) {
-        throw new RoutingError(
-          404,
-          'flat_lookup_disabled',
-          selector,
-          'Flat model lookup is disabled',
-        )
-      }
-
       const route = this.flatRoutes.get(selector)
       if (!route) {
         throw new RoutingError(
@@ -134,7 +142,7 @@ export class RoutingTable {
     }
 
     for (const [modelKey, model] of Object.entries(provider.models)) {
-      if (model.aliases.includes(requestedModel)) {
+      if (model.aliases.some((a) => a.name === requestedModel)) {
         return buildRoute(providerName, provider, modelKey, selector, this.pluginRegistry)
       }
     }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   generateSettingsJsonSchema,
   loadSettingsFromFile,
+  modelRouteConfigSchema,
   parseAndValidateSettings,
   resolveEnvPlaceholders,
 } from '../src/config.js'
@@ -375,5 +376,40 @@ describe('config', () => {
     // 通过验证关键属性存在即可
     expect(json).toContain('streamOnly')
     expect(json).toContain('enableFlatModelLookup')
+  })
+})
+
+describe('modelRouteConfigSchema aliases', () => {
+  it('accepts string aliases and normalizes to {name, flat:false}', () => {
+    const r = modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['a1', 'a2'] })
+    expect(r.aliases).toEqual([{ name: 'a1', flat: false }, { name: 'a2', flat: false }])
+    expect(r.flat).toBeUndefined()
+  })
+
+  it('accepts record aliases with flat', () => {
+    const r = modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: 'a', flat: true }, 'b'] })
+    expect(r.aliases).toEqual([{ name: 'a', flat: true }, { name: 'b', flat: false }])
+  })
+
+  it('accepts model-level flat', () => {
+    expect(modelRouteConfigSchema.parse({ upstreamModel: 'm', flat: true }).flat).toBe(true)
+  })
+
+  it('rejects empty alias name', () => {
+    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [''] })).toThrow()
+    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: '' }] })).toThrow()
+  })
+
+  it('rejects alias name containing "/" (string and record)', () => {
+    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['a/b'] })).toThrow()
+    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: 'a/b' }] })).toThrow()
+  })
+
+  it('rejects record alias missing name', () => {
+    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ flat: true }] })).toThrow()
+  })
+
+  it('does not trim whitespace-only alias name', () => {
+    expect(modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['  '] }).aliases).toEqual([{ name: '  ', flat: false }])
   })
 })

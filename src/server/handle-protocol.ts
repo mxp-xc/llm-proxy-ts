@@ -95,6 +95,9 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
 
   // 3. Map to AI SDK input
   const callInput = strategy.mapToAISDKInput(request, { providerType: route.provider.type })
+  // 3.1 Collect declared custom grammar tool names for renderer discrimination
+  // (openai-responses only; other strategies don't implement getCustomToolNames)
+  const customToolNames = strategy.getCustomToolNames?.(request)
 
   // 4. Get LanguageModel
   const loginUrl = `http://127.0.0.1:${ctx.settings.service.port}/oauth/login/${route.providerName}`
@@ -130,7 +133,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
       const reqLogger = c.get('logger')
       return new Response(
         readableStreamFromAsyncIterable(
-          strategy.renderStreamSSE({ model: requestModel, stream: acquired.stream }),
+          strategy.renderStreamSSE({ model: requestModel, stream: acquired.stream, ...(customToolNames && { customToolNames }) }),
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
           },
@@ -169,6 +172,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         ...(collected.toolCalls && { toolCalls: collected.toolCalls }),
       }
       if (collected.usage) renderInput.usage = collected.usage
+      if (customToolNames) renderInput.customToolNames = customToolNames
       return c.json(strategy.renderResult(renderInput))
     } catch (error) {
       return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only')
@@ -195,6 +199,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         toolCalls: result.toolCalls,
       }
     if (result.usage) renderInput.usage = flattenUsage(result.usage)
+    if (customToolNames) renderInput.customToolNames = customToolNames
     return c.json(strategy.renderResult(renderInput))
   } catch (error) {
     return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate')

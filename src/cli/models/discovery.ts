@@ -1,10 +1,10 @@
-import { resolveEnvPlaceholders } from '../config.js'
-import type { ModelRouteInput, ProviderConfig, Settings } from '../config.js'
-import { isRecord } from '../providers/protocol-types.js'
-import type { TokenManager } from '../oauth/index.js'
-import type { PluginRegistry } from '../plugins/registry.js'
-import type { DiscoveredModel } from '../plugins/types.js'
-import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover-models.js'
+import { resolveEnvPlaceholders } from '../../config.js'
+import type { ModelRouteInput, ProviderConfig, Settings } from '../../config.js'
+import { isRecord } from '../../providers/protocol-types.js'
+import type { TokenManager } from '../../oauth/index.js'
+import type { PluginRegistry } from '../../plugins/registry.js'
+import type { DiscoveredModel } from '../../plugins/types.js'
+import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover.js'
 
 export interface ProviderModelsResult {
   providerName: string

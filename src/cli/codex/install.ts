@@ -1,79 +1,19 @@
 import { Command } from 'commander'
 import * as clack from '@clack/prompts'
-import { z } from 'zod/v3'
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises'
-import { codexModelInfoSchema } from '../codex-types.js'
-import type { CodexModelInfo } from '../codex-types.js'
-import { loadSettingsFromFile } from '../config.js'
-import type { Settings } from '../config.js'
-import { resolveCliContext } from './context.js'
-import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath, DEFAULT_CATALOG_FILENAME } from './codex-home.js'
-import { applyCodexConfigEdits } from './codex-toml.js'
-
-const codexModelsResponseSchema = z.object({ models: z.array(codexModelInfoSchema) })
-
-export type CodexEndpointErrorKind = 'network' | 'http503' | 'http' | 'parse'
-
-export class CodexEndpointError extends Error {
-  constructor(
-    public kind: CodexEndpointErrorKind,
-    message: string,
-    public status?: number,
-    public body?: unknown,
-  ) {
-    super(message)
-    this.name = 'CodexEndpointError'
-  }
-}
+import type { CodexModelInfo } from '../../codex-types.js'
+import { CodexCatalogCache, buildCodexModelsResponse, type CodexCatalogFetcher } from '../../codex-catalog.js'
+import { loadSettingsFromFile } from '../../config.js'
+import type { Settings } from '../../config.js'
+import { resolveCliContext } from '../context.js'
+import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath, DEFAULT_CATALOG_FILENAME } from './home.js'
+import { applyCodexConfigEdits } from './toml.js'
 
 /** Build the codex base URL from service settings (no trailing slash; IPv6 bracketed). */
 export function buildCodexBaseUrl(settings: Settings): string {
   const { host, port } = settings.service
   const bracketed = host.includes(':') ? `[${host}]` : host
   return `http://${bracketed}:${port}/codex/v1`
-}
-
-/** Fetch and validate the /codex/v1/models response. Throws typed CodexEndpointError. */
-export async function fetchCodexModelsResponse(args: {
-  url: string
-  fetchImpl?: typeof fetch
-}): Promise<{ models: CodexModelInfo[] }> {
-  const fetchImpl = args.fetchImpl ?? globalThis.fetch
-  let res: Response
-  try {
-    res = await fetchImpl(args.url)
-  } catch (err) {
-    throw new CodexEndpointError('network', err instanceof Error ? err.message : String(err))
-  }
-  if (res.status === 503) {
-    let body: unknown
-    try {
-      body = await res.json()
-    } catch {
-      body = undefined
-    }
-    const message =
-      typeof body === 'object' && body !== null && 'error' in body
-        ? String((body as { error?: { message?: string } }).error?.message ?? 'unknown')
-        : 'unknown'
-    throw new CodexEndpointError('http503', message, 503, body)
-  }
-  if (!res.ok) {
-    // Consume the response body to avoid leaking the connection (mirrors the 503 branch).
-    await res.text().catch(() => {})
-    throw new CodexEndpointError('http', `HTTP ${res.status}`, res.status)
-  }
-  let json: unknown
-  try {
-    json = await res.json()
-  } catch (err) {
-    throw new CodexEndpointError('parse', err instanceof Error ? err.message : String(err))
-  }
-  const parsed = codexModelsResponseSchema.safeParse(json)
-  if (!parsed.success) {
-    throw new CodexEndpointError('parse', parsed.error.message)
-  }
-  return { models: parsed.data.models }
 }
 
 /** Injectable fs surface for runCodexInstall (avoids `unknown`). */
@@ -93,7 +33,7 @@ export interface CodexInstallPrompts {
 
 export interface CodexInstallOptions {
   settingsPath: string
-  fetchImpl?: typeof fetch
+  catalogFetcher?: CodexCatalogFetcher
   fs?: CodexInstallFs
   codexHome?: string
   prompts?: CodexInstallPrompts
@@ -162,21 +102,16 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     return
   }
 
-  // 3. Fetch catalog.
+  // 3. Build catalog locally (no server required): run `codex debug models --bundled`
+  //    via CodexCatalogCache, then merge settings providers into CodexModelInfo[].
   const baseUrl = buildCodexBaseUrl(settings)
-  clack.log.step(`Fetching model catalog from ${baseUrl}...`)
+  clack.log.step('Building model catalog from local codex CLI...')
   let modelsRes: { models: CodexModelInfo[] }
   try {
-    const fetchArgs: { url: string; fetchImpl?: typeof fetch } = { url: `${baseUrl}/models` }
-    if (options.fetchImpl !== undefined) fetchArgs.fetchImpl = options.fetchImpl
-    modelsRes = await fetchCodexModelsResponse(fetchArgs)
+    const catalog = await new CodexCatalogCache(options.catalogFetcher).get()
+    modelsRes = buildCodexModelsResponse(settings, catalog)
   } catch (err) {
-    if (err instanceof CodexEndpointError) {
-      const msg = mapEndpointError(err)
-      clack.log.error(msg)
-    } else {
-      clack.log.error(`Failed to fetch catalog: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    clack.log.error(mapCatalogError(err))
     clack.outro('Aborted')
     return
   }
@@ -285,17 +220,19 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   clack.outro('Done. Restart codex to load the new catalog and provider.')
 }
 
-function mapEndpointError(err: CodexEndpointError): string {
-  switch (err.kind) {
-    case 'network':
-      return `Could not connect to the proxy at the configured address. Is it running? Start it with: pnpm dev serve`
-    case 'http503':
-      return `Proxy could not build the codex catalog (${err.message}). Is codex CLI installed and on PATH on the host?`
-    case 'http':
-      return `Unexpected response from /codex/v1/models: ${err.status}`
-    case 'parse':
-      return `Malformed response from proxy: ${err.message}`
+/** Map catalog build errors to user-facing messages. */
+function mapCatalogError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err)
+  // execFile 失败：codex CLI 未装（ENOENT）/ 超时 / 非零退出
+  if (message.includes('ENOENT')) {
+    return `Failed to run 'codex debug models --bundled': codex CLI not found. Is it installed and on PATH?`
   }
+  // buildCodexModelsResponse：settings 配的 templateSlug 不在 catalog
+  if (message.includes('template slug not in catalog')) {
+    return `${message} — check the 'codex.templateSlug' setting (global/provider/model layers).`
+  }
+  // CodexCatalogCache：stdout 畸形 / schema 校验失败 / 其他
+  return `Failed to build codex catalog: ${message}`
 }
 
 export function createCodexInstallCommand(): Command {

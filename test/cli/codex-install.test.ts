@@ -3,8 +3,8 @@ import { createTempDir, writeTempSettings } from '../helpers/temp-file.js'
 import { makeSettings } from '../helpers/settings.js'
 import { writeFile, readFile, mkdir, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildCodexBaseUrl, fetchCodexModelsResponse, runCodexInstall } from '../../src/cli/codex-install.js'
-import type { CodexInstallFs } from '../../src/cli/codex-install.js'
+import { buildCodexBaseUrl, runCodexInstall } from '../../src/cli/codex/install.js'
+import type { CodexInstallFs } from '../../src/cli/codex/install.js'
 
 /** Wrap raw node:fs/promises fns to match the narrower CodexInstallFs interface. */
 function wrapFs(over: { writeFile?: CodexInstallFs['writeFile']; access?: CodexInstallFs['access'] }): CodexInstallFs {
@@ -16,6 +16,7 @@ function wrapFs(over: { writeFile?: CodexInstallFs['writeFile']; access?: CodexI
   }
 }
 
+/** Minimal codex bundled catalog entry (passes codexModelInfoSchema). */
 function makeModel(slug: string, displayName = slug) {
   return {
     slug,
@@ -34,6 +35,34 @@ function makeModel(slug: string, displayName = slug) {
   }
 }
 
+/** Catalog fetcher returning a single supported_in_api template (gpt-5.4). */
+const catalogFetcher = (): Promise<string> =>
+  Promise.resolve(JSON.stringify({ models: [makeModel('gpt-5.4')] }))
+
+function zhipuProvider(models: Record<string, unknown>) {
+  return {
+    type: 'openai-compatible',
+    baseURL: 'https://x',
+    apiKey: 'k',
+    headers: {},
+    plugins: [],
+    models,
+  }
+}
+
+function modelDef(upstreamModel: string) {
+  return { upstreamModel, aliases: [], headers: {}, plugins: [] }
+}
+
+function settingsJson(providers: unknown, codex: unknown = { context_window: 204800 }): string {
+  return JSON.stringify({
+    service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
+    providers,
+    routing: { enableFlatModelLookup: false },
+    codex,
+  })
+}
+
 describe('buildCodexBaseUrl', () => {
   it('builds http url without trailing slash', () => {
     const settings = makeSettings({}, { service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 } })
@@ -45,323 +74,262 @@ describe('buildCodexBaseUrl', () => {
   })
 })
 
-describe('fetchCodexModelsResponse', () => {
-  it('parses a 200 models response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
-    const res = await fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl })
-    expect(res.models).toHaveLength(2)
-  })
-  it('throws http503 on 503', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      json: async () => ({ error: { type: 'server_error', message: 'codex CLI missing' } }),
-    }) as unknown as typeof fetch
-    await expect(fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl })).rejects.toMatchObject({
-      kind: 'http503',
-    })
-  })
-  it('throws network on TypeError', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed')) as unknown as typeof fetch
-    await expect(fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl })).rejects.toMatchObject({
-      kind: 'network',
-    })
-  })
-})
-
 describe('runCodexInstall', () => {
   let tmp: { dir: string; cleanup: () => Promise<void> }
   let settings: { path: string; cleanup: () => Promise<void> }
+  const extraCleanups: Array<() => Promise<void>> = []
 
   beforeEach(async () => {
     tmp = await createTempDir('codex-install-')
-    settings = await writeTempSettings(JSON.stringify({
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
-      providers: {},
-      routing: { enableFlatModelLookup: true },
-      codex: { templateSlug: 'gpt-5.5', context_window: 204800 },
-    }))
+    // 默认 settings:zhipu 下两个 model → buildCodexModelsResponse 产出
+    // zhipu/glm-5.2、zhipu/gpt-5（flat lookup 关闭,slug = provider/modelKey）
+    settings = await writeTempSettings(
+      settingsJson({
+        zhipu: zhipuProvider({
+          'glm-5.2': modelDef('glm-5.2'),
+          'gpt-5': modelDef('gpt-5'),
+        }),
+      }),
+    )
+    extraCleanups.length = 0
   })
   afterEach(async () => {
     await tmp.cleanup()
     await settings.cleanup()
+    await Promise.all(extraCleanups.map((c) => c()))
   })
 
-  it('aborts when config.toml missing, no fetch, no catalog written', async () => {
-    const fetchImpl = vi.fn()
+  async function writeSettings(providers: unknown, codex?: unknown): Promise<string> {
+    const s = await writeTempSettings(settingsJson(providers, codex))
+    extraCleanups.push(s.cleanup)
+    return s.path
+  }
+
+  /** fs that captures written config.toml + catalog file content. */
+  function capturingFs(): { fs: CodexInstallFs; writtenConfig: () => string; writtenCatalog: () => string } {
+    let writtenConfig = ''
+    let writtenCatalog = ''
+    const fs: CodexInstallFs = {
+      readFile: async (p) => readFile(p, 'utf8'),
+      writeFile: async (p, d) => {
+        if (p.endsWith('config.toml')) writtenConfig = d
+        if (p.endsWith('.json')) writtenCatalog = d
+      },
+      mkdir: (p, o) => mkdir(p, o).then(() => undefined),
+      access: async () => {},
+    }
+    return { fs, writtenConfig: () => writtenConfig, writtenCatalog: () => writtenCatalog }
+  }
+
+  it('aborts when config.toml missing, no catalog fetch, no catalog written', async () => {
+    const fetcher = vi.fn(catalogFetcher)
     const writeFileSpy = vi.fn()
-    const selectModels = vi.fn().mockResolvedValue(['a'])
-    const selectDefaultModel = vi.fn().mockResolvedValue('a')
+    const selectModels = vi.fn().mockResolvedValue(['zhipu/glm-5.2'])
+    const selectDefaultModel = vi.fn().mockResolvedValue('zhipu/glm-5.2')
     const fs = wrapFs({ writeFile: writeFileSpy, access: async () => { throw new Error('enoent') } })
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      catalogFetcher: fetcher,
       fs,
       codexHome: tmp.dir,
       prompts: { selectModels, selectDefaultModel },
     })
-    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(fetcher).not.toHaveBeenCalled()
     expect(writeFileSpy).not.toHaveBeenCalled()
     expect(selectModels).not.toHaveBeenCalled()
   })
 
-  it('aborts on fetch network error', async () => {
+  it('aborts when catalog fetcher throws', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed'))
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
+      catalogFetcher: async () => { throw new Error('codex not found') },
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['a'], selectDefaultModel: async () => 'a' },
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
-  it('aborts on empty models', async () => {
+  it('aborts when settings has no providers (empty models)', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [] }),
-    }) as unknown as typeof fetch
+    const emptySettingsPath = await writeSettings({})
     const writeFileSpy = vi.fn()
     await runCodexInstall({
-      settingsPath: settings.path,
-      fetchImpl,
+      settingsPath: emptySettingsPath,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['a'], selectDefaultModel: async () => 'a' },
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+    })
+    expect(writeFileSpy).not.toHaveBeenCalled()
+  })
+
+  it('aborts when configured templateSlug is not in catalog', async () => {
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const badSettingsPath = await writeSettings(
+      { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
+      { templateSlug: 'nonexistent', context_window: 204800 },
+    )
+    const writeFileSpy = vi.fn()
+    await runCodexInstall({
+      settingsPath: badSettingsPath,
+      catalogFetcher,
+      fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
+      codexHome: tmp.dir,
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
   it('succeeds with default-all: writes full catalog + edits config.toml', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), '# codex\nmodel = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('zhipu/glm-5.2', 'GLM-5.2'), makeModel('gpt-5', 'GPT-5')] }),
-    }) as unknown as typeof fetch
-    let writtenConfig = ''
-    let writtenCatalog = ''
-    const fs: CodexInstallFs = {
-      readFile: async (p) => readFile(p, 'utf8'),
-      writeFile: async (p, d) => {
-        if (p.endsWith('config.toml')) writtenConfig = d
-        if (p.endsWith('.json')) writtenCatalog = d
-      },
-      mkdir: (p, o) => mkdir(p, o).then(() => undefined),
-      access: async () => {},
-    }
+    const { fs, writtenConfig, writtenCatalog } = capturingFs()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs,
       codexHome: tmp.dir,
       prompts: {
-        selectModels: async () => ['zhipu/glm-5.2', 'gpt-5'],
+        selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'],
         selectDefaultModel: async () => 'zhipu/glm-5.2',
       },
     })
-    const catalog = JSON.parse(writtenCatalog) as { models: { slug: string }[] }
-    expect(catalog.models.map((m) => m.slug).sort()).toEqual(['gpt-5', 'zhipu/glm-5.2'])
-    expect(writtenConfig).toContain('model_catalog_json = "llm-proxy-model-catalog.json"')
-    expect(writtenConfig).toContain('model_provider = "llm-proxy"')
-    expect(writtenConfig).toContain('model = "zhipu/glm-5.2"')
-    expect(writtenConfig).toContain('[model_providers.llm-proxy]')
-    expect(writtenConfig).toContain('# codex') // comment preserved
+    const catalog = JSON.parse(writtenCatalog()) as { models: { slug: string }[] }
+    expect(catalog.models.map((m) => m.slug).sort()).toEqual(['zhipu/glm-5.2', 'zhipu/gpt-5'])
+    expect(writtenConfig()).toContain('model_catalog_json = "llm-proxy-model-catalog.json"')
+    expect(writtenConfig()).toContain('model_provider = "llm-proxy"')
+    expect(writtenConfig()).toContain('model = "zhipu/glm-5.2"')
+    expect(writtenConfig()).toContain('[model_providers.llm-proxy]')
+    expect(writtenConfig()).toContain('# codex') // comment preserved
   })
 
   it('filters catalog to the selected subset', async () => {
+    // 三 model:zhipu/glm-5.2、zhipu/gpt-5、zhipu/glm-5.1
+    const threeSettingsPath = await writeSettings({
+      zhipu: zhipuProvider({
+        'glm-5.2': modelDef('glm-5.2'),
+        'gpt-5': modelDef('gpt-5'),
+        'glm-5.1': modelDef('glm-5.1'),
+      }),
+    })
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b'), makeModel('c')] }),
-    }) as unknown as typeof fetch
-    let writtenCatalog = ''
-    let writtenConfig = ''
-    const fs: CodexInstallFs = {
-      readFile: async (p) => readFile(p, 'utf8'),
-      writeFile: async (p, d) => {
-        if (p.endsWith('config.toml')) writtenConfig = d
-        if (p.endsWith('.json')) writtenCatalog = d
-      },
-      mkdir: (p, o) => mkdir(p, o).then(() => undefined),
-      access: async () => {},
-    }
+    const { fs, writtenConfig, writtenCatalog } = capturingFs()
     await runCodexInstall({
-      settingsPath: settings.path,
-      fetchImpl,
+      settingsPath: threeSettingsPath,
+      catalogFetcher,
       fs,
       codexHome: tmp.dir,
       prompts: {
-        selectModels: async () => ['a', 'c'],
-        selectDefaultModel: async () => 'a',
+        selectModels: async () => ['zhipu/glm-5.2', 'zhipu/glm-5.1'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
       },
     })
-    const catalog = JSON.parse(writtenCatalog) as { models: { slug: string }[] }
-    expect(catalog.models.map((m) => m.slug).sort()).toEqual(['a', 'c'])
-    expect(writtenConfig).toContain('model = "a"')
+    const catalog = JSON.parse(writtenCatalog()) as { models: { slug: string }[] }
+    expect(catalog.models.map((m) => m.slug).sort()).toEqual(['zhipu/glm-5.1', 'zhipu/glm-5.2'])
+    expect(writtenConfig()).toContain('model = "zhipu/glm-5.2"')
   })
 
   it('skips default selection when subset has a single model', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
-    const selectDefaultModel = vi.fn().mockResolvedValue('a')
-    let writtenCatalog = ''
-    let writtenConfig = ''
-    const fs: CodexInstallFs = {
-      readFile: async (p) => readFile(p, 'utf8'),
-      writeFile: async (p, d) => {
-        if (p.endsWith('config.toml')) writtenConfig = d
-        if (p.endsWith('.json')) writtenCatalog = d
-      },
-      mkdir: (p, o) => mkdir(p, o).then(() => undefined),
-      access: async () => {},
-    }
+    const selectDefaultModel = vi.fn().mockResolvedValue('zhipu/gpt-5')
+    const { fs, writtenConfig, writtenCatalog } = capturingFs()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs,
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['b'], selectDefaultModel },
+      prompts: { selectModels: async () => ['zhipu/gpt-5'], selectDefaultModel },
     })
     expect(selectDefaultModel).not.toHaveBeenCalled()
-    expect(writtenConfig).toContain('model = "b"')
-    const catalog = JSON.parse(writtenCatalog) as { models: { slug: string }[] }
-    expect(catalog.models.map((m) => m.slug)).toEqual(['b'])
+    expect(writtenConfig()).toContain('model = "zhipu/gpt-5"')
+    const catalog = JSON.parse(writtenCatalog()) as { models: { slug: string }[] }
+    expect(catalog.models.map((m) => m.slug)).toEqual(['zhipu/gpt-5'])
   })
 
-  it('skips both prompts when catalog has a single model', async () => {
+  it('skips both prompts when settings has a single model', async () => {
+    const singleSettingsPath = await writeSettings({
+      zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }),
+    })
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('zhipu/glm-5.2', 'GLM-5.2')] }),
-    }) as unknown as typeof fetch
     const selectModels = vi.fn().mockResolvedValue(['zhipu/glm-5.2'])
     const selectDefaultModel = vi.fn().mockResolvedValue('zhipu/glm-5.2')
-    let writtenCatalog = ''
-    let writtenConfig = ''
-    const fs: CodexInstallFs = {
-      readFile: async (p) => readFile(p, 'utf8'),
-      writeFile: async (p, d) => {
-        if (p.endsWith('config.toml')) writtenConfig = d
-        if (p.endsWith('.json')) writtenCatalog = d
-      },
-      mkdir: (p, o) => mkdir(p, o).then(() => undefined),
-      access: async () => {},
-    }
+    const { fs, writtenConfig, writtenCatalog } = capturingFs()
     await runCodexInstall({
-      settingsPath: settings.path,
-      fetchImpl,
+      settingsPath: singleSettingsPath,
+      catalogFetcher,
       fs,
       codexHome: tmp.dir,
       prompts: { selectModels, selectDefaultModel },
     })
     expect(selectModels).not.toHaveBeenCalled()
     expect(selectDefaultModel).not.toHaveBeenCalled()
-    expect(writtenCatalog).toContain('zhipu/glm-5.2')
-    expect(writtenConfig).toContain('model = "zhipu/glm-5.2"')
+    expect(writtenCatalog()).toContain('zhipu/glm-5.2')
+    expect(writtenConfig()).toContain('model = "zhipu/glm-5.2"')
   })
 
   it('cancel at selectModels: nothing written', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => null, selectDefaultModel: async () => 'a' },
+      prompts: { selectModels: async () => null, selectDefaultModel: async () => 'zhipu/glm-5.2' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
   it('cancel at selectDefaultModel: nothing written', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['a', 'b'], selectDefaultModel: async () => null },
+      prompts: { selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'], selectDefaultModel: async () => null },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
   it('aborts when selectModels returns an empty array (injection guard)', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => [], selectDefaultModel: async () => 'a' },
+      prompts: { selectModels: async () => [], selectDefaultModel: async () => 'zhipu/glm-5.2' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
   it('aborts when selectModels returns a slug not in the catalog (injection guard)', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['nonexistent'], selectDefaultModel: async () => 'a' },
+      prompts: { selectModels: async () => ['nonexistent'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
 
   it('aborts when selectDefaultModel returns a slug not in the subset (injection guard)', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ models: [makeModel('a'), makeModel('b')] }),
-    }) as unknown as typeof fetch
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      fetchImpl,
+      catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['a', 'b'], selectDefaultModel: async () => 'nonexistent' },
+      prompts: { selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'], selectDefaultModel: async () => 'nonexistent' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })

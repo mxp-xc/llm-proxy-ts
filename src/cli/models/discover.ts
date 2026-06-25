@@ -1,7 +1,7 @@
-import { createProxyFetch } from '../providers/shared/provider-factory.js'
-import type { ModelLimit } from '../providers/model-types.js'
-import type { Settings } from '../config.js'
-import type { DiscoveredModelList } from '../plugins/types.js'
+import { createProxyFetch } from '../../providers/shared/provider-factory.js'
+import type { ModelLimit } from '../../providers/model-types.js'
+import type { Settings } from '../../config.js'
+import type { DiscoveredModelList } from '../../plugins/types.js'
 
 /** 上游 /models 端点返回的单个模型对象（原始格式） */
 export interface UpstreamModelResponse {

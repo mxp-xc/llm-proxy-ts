@@ -8,7 +8,7 @@ export interface CollectedResult {
   finishReason?: FinishReason
   usage?: RenderResultInput['usage']
   response?: { id?: string; timestamp?: Date }
-  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
+  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown; providerExecuted?: boolean }>
 }
 
 /**
@@ -20,7 +20,7 @@ export async function collectStreamResult(stream: AsyncIterable<ProxyStreamPart>
   let finishReason: FinishReason | undefined
   let usage: RenderResultInput['usage'] | undefined
   let response: { id?: string; timestamp?: Date } | undefined
-  const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = []
+  const toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown; providerExecuted?: boolean }> = []
 
   for await (const part of stream) {
     switch (part.type) {
@@ -38,7 +38,13 @@ export async function collectStreamResult(stream: AsyncIterable<ProxyStreamPart>
             // 防御性：input 为畸形 JSON 时保留原始字符串。实践中 AI SDK 总提供已解析对象。
           }
         }
-        toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input })
+        const call: { toolCallId: string; toolName: string; input: unknown; providerExecuted?: boolean } = {
+          toolCallId: part.toolCallId,
+          toolName: part.toolName,
+          input,
+        }
+        if (part.providerExecuted) call.providerExecuted = true
+        toolCalls.push(call)
         break
       }
       case 'finish': {

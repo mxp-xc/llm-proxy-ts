@@ -49,9 +49,24 @@ export const modelLimitSchema = z.object({
   output: z.number().int().positive().optional(),
 })
 
+// ─── Alias entry schema ─────────────────────────────────────────
+const aliasEntryObjectSchema = z.object({
+  name: z.string().min(1),
+  flat: z.boolean().optional().default(false),
+})
+
+/** alias 条目：string 短写等价于 { name, flat:false }。transform 后统一禁 "/" */
+export const aliasEntrySchema = z
+  .union([z.string().min(1), aliasEntryObjectSchema])
+  .transform((v) => (typeof v === 'string' ? { name: v, flat: false } : v))
+  .refine((v) => !v.name.includes('/'), "alias name must not contain '/'")
+
+export type AliasEntry = z.infer<typeof aliasEntrySchema>
+
 export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
-  aliases: z.array(z.string().min(1)).optional().default([]),
+  aliases: z.array(aliasEntrySchema).optional().default([]),
+  flat: z.boolean().optional(),
   headers: z.record(z.string(), z.string()).optional().default({}),
   plugins: z.array(pluginEntrySchema).optional().default([]),
   limit: modelLimitSchema.optional(),

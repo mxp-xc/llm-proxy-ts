@@ -7,7 +7,7 @@ import {
   setProviderTable,
   readTopLevelKey,
   readProviderTableField,
-} from '../../src/cli/toml-editor.js'
+} from '../../src/cli/codex/toml-editor.js'
 
 describe('formatTomlString', () => {
   it('wraps in double quotes and escapes backslash/quote', () => {

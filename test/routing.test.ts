@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../src/index.js'
+import type { AliasEntry, ModelRouteConfig } from '../src/config.js'
 import { RoutingError, RoutingTable } from '../src/routing.js'
 import { makeSettings } from './helpers/settings.js'
 
@@ -18,7 +19,7 @@ function settings(enableFlatModelLookup = false): Settings {
         models: {
           chat: {
             upstreamModel: 'openrouter/chat',
-            aliases: ['default'],
+            aliases: [{ name: 'default', flat: false }],
             headers: { 'X-Model': 'model' },
             plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
           },
@@ -48,35 +49,11 @@ describe('RoutingTable', () => {
     expect(table.resolve('openrouter/default').modelKey).toBe('chat')
   })
 
-  it('rejects flat lookup when disabled', () => {
-    const table = RoutingTable.fromSettings(settings(false))
-    expect(() => table.resolve('default')).toThrow(RoutingError)
-    try {
-      table.resolve('default')
-    } catch (error) {
-      expect((error as RoutingError).code).toBe('flat_lookup_disabled')
-    }
-  })
-
-  it('resolves flat aliases when enabled', () => {
+  it('resolves flat aliases when enabled (provider-level flat)', () => {
+    // openrouter inherits global enableFlatModelLookup=true; alias 'default' flat:false
+    // → registered as bare name because modelFlat is true
     const table = RoutingTable.fromSettings(settings(true))
     expect(table.resolve('default').upstreamModel).toBe('openrouter/chat')
-  })
-
-  it('rejects ambiguous flat selectors when enabled', () => {
-    const duplicate = settings(true)
-    const openrouter = duplicate.providers.openrouter
-    if (!openrouter) {
-      throw new Error('Expected openrouter provider in test settings')
-    }
-    openrouter.models.other = {
-      upstreamModel: 'openrouter/other',
-      aliases: ['default'],
-      headers: {},
-      plugins: [],
-    }
-
-    expect(() => RoutingTable.fromSettings(duplicate)).toThrow("ambiguous flat route 'default'")
   })
 
   it('resolves flat aliases when enabled per-provider but globally off', () => {
@@ -86,35 +63,16 @@ describe('RoutingTable', () => {
     expect(table.resolve('default').upstreamModel).toBe('openrouter/chat')
   })
 
-  it('rejects flat lookup when disabled per-provider but globally on', () => {
-    const s = settings(true)
-    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: false }
-    const table = RoutingTable.fromSettings(s)
-    try {
-      table.resolve('default')
-      expect.unreachable('should have thrown')
-    } catch (error) {
-      expect((error as RoutingError).code).toBe('flat_lookup_disabled')
-    }
-  })
-
-  it('allows same flat name across providers when only one has flat lookup enabled', () => {
+  it('returns unknown_model when no flat alias matches (no flat_lookup_disabled)', () => {
     const s = settings(false)
     s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
-    s.providers.deepseek = {
-      type: 'openai-compatible',
-      baseURL: 'https://api.deepseek.com/v1',
-      apiKey: 'secret',
-      headers: {},
-      plugins: [],
-      models: {
-        other: { upstreamModel: 'deepseek/other', aliases: ['default'], headers: {}, plugins: [] },
-      },
-    }
-    // deepseek has no enableFlatModelLookup override and global is false,
-    // so its 'default' alias is NOT in flatRoutes — no ambiguity
     const table = RoutingTable.fromSettings(s)
-    expect(table.resolve('default').providerName).toBe('openrouter')
+    try {
+      table.resolve('nonexistent')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      expect((error as RoutingError).code).toBe('unknown_model')
+    }
   })
 
   it('rejects ambiguous flat selectors across providers both with flat lookup enabled', () => {
@@ -126,44 +84,12 @@ describe('RoutingTable', () => {
       headers: {},
       plugins: [],
       models: {
-        other: { upstreamModel: 'deepseek/other', aliases: ['default'], headers: {}, plugins: [] },
+        other: { upstreamModel: 'deepseek/other', aliases: [{ name: 'default', flat: false }], headers: {}, plugins: [] },
       },
     }
     // Both openrouter (inherits global true) and deepseek (inherits global true)
-    // have 'default' alias — ambiguous
-    expect(() => RoutingTable.fromSettings(s)).toThrow("ambiguous flat route 'default'")
-  })
-
-  it('returns flat_lookup_disabled when no provider has flat lookup enabled', () => {
-    const s = settings(false)
-    s.providers.deepseek = {
-      type: 'openai-compatible',
-      baseURL: 'https://api.deepseek.com/v1',
-      apiKey: 'secret',
-      headers: {},
-      plugins: [],
-      options: { enableFlatModelLookup: false },
-      models: { other: { upstreamModel: 'deepseek/other', aliases: [], headers: {}, plugins: [] } },
-    }
-    const table = RoutingTable.fromSettings(s)
-    try {
-      table.resolve('anything')
-      expect.unreachable('should have thrown')
-    } catch (error) {
-      expect((error as RoutingError).code).toBe('flat_lookup_disabled')
-    }
-  })
-
-  it('returns unknown_model for flat selector when some providers have flat lookup enabled but none match', () => {
-    const s = settings(false)
-    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
-    const table = RoutingTable.fromSettings(s)
-    try {
-      table.resolve('nonexistent')
-      expect.unreachable('should have thrown')
-    } catch (error) {
-      expect((error as RoutingError).code).toBe('unknown_model')
-    }
+    // have 'default' alias registered as bare — ambiguous
+    expect(() => RoutingTable.fromSettings(s)).toThrow(/ambiguous flat route 'default'/)
   })
 
   it('model-level plugin overrides provider-level with same name (no PluginRegistry)', () => {
@@ -186,5 +112,65 @@ describe('RoutingTable', () => {
     // Should use PluginRegistry instead of resolveBuiltinPlugins
     expect(route.resolvedPlugins).toHaveLength(1)
     expect(route.resolvedPlugins[0]!.config).toEqual({ from: 'registry' })
+  })
+})
+
+const P = (models: Record<string, ModelRouteConfig>, flat = false) => ({
+  type: 'openai-compatible' as const,
+  baseURL: 'http://x',
+  apiKey: 'k',
+  headers: {},
+  plugins: [],
+  options: flat ? { enableFlatModelLookup: true } : undefined,
+  models,
+})
+const M = (upstreamModel: string, aliases: AliasEntry[] = [], flat = false): ModelRouteConfig => ({
+  upstreamModel,
+  aliases,
+  flat,
+  headers: {},
+  plugins: [],
+})
+
+describe('RoutingTable flat/alias resolution', () => {
+  it('resolves provider/<alias> prefixed entry without flat', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: false }]) }) })
+    expect(RoutingTable.fromSettings(s).resolve('p/a').modelKey).toBe('m')
+  })
+
+  it('resolves record alias flat:true naked name without provider flat', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: true }]) }) })
+    expect(RoutingTable.fromSettings(s).resolve('a').modelKey).toBe('m')
+  })
+
+  it('naked name miss returns unknown_model (no flat_lookup_disabled)', () => {
+    const s = makeSettings({ p: P({ m: M('up', []) }) })
+    try {
+      RoutingTable.fromSettings(s).resolve('nope')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      expect((error as RoutingError).code).toBe('unknown_model')
+    }
+  })
+
+  it('rejects ambiguous naked alias across providers (both alias.flat)', () => {
+    const mk = (flat: boolean) => P({ m: M('up', [{ name: 'shared', flat }]) })
+    const s = makeSettings({ p1: mk(true), p2: mk(true) })
+    expect(() => RoutingTable.fromSettings(s)).toThrow(/ambiguous flat route 'shared'/)
+  })
+
+  it('rejects duplicate prefixed selector: alias name == modelKey', () => {
+    const s = makeSettings({ p: P({ m: M('up', [{ name: 'm', flat: false }]) }) })
+    expect(() => RoutingTable.fromSettings(s)).toThrow(/duplicate model selector 'm' in provider 'p'/)
+  })
+
+  it('rejects duplicate prefixed selector: same alias name across models in same provider', () => {
+    const s = makeSettings({
+      p: P({
+        m1: M('up', [{ name: 'fast', flat: false }]),
+        m2: M('up', [{ name: 'fast', flat: false }]),
+      }),
+    })
+    expect(() => RoutingTable.fromSettings(s)).toThrow(/duplicate model selector 'fast' in provider 'p'/)
   })
 })

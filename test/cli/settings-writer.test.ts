@@ -7,7 +7,7 @@ import {
   computeModelsEdits,
   applyMultipleProviderModels,
   writeSettingsFile,
-} from '../../src/cli/settings-writer.js'
+} from '../../src/cli/models/settings-writer.js'
 import type { ModelRouteConfig } from '../../src/config.js'
 
 describe('settings-writer', () => {
