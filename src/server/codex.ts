@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { ZodError } from 'zod/v3'
 import { openaiResponsesStrategy } from '../index.js'
 import type { Settings } from '../index.js'
 import { handleProtocolRequest } from './handle-protocol.js'
@@ -25,10 +26,15 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
       const catalog = await catalogCache.get()
       return c.json(buildCodexModelsResponse(settings, catalog))
     } catch (err) {
-      c.get('logger').error({ err }, 'codex /v1/models failed')
-      const message = err instanceof Error ? err.message : String(err)
+      c.get('logger')?.error({ err }, 'codex /v1/models failed')
+      const reason =
+        err instanceof ZodError
+          ? 'codex catalog schema validation failed'
+          : err instanceof Error
+            ? err.message
+            : String(err)
       return c.json(
-        { error: { type: 'server_error', message: `Failed to fetch codex bundled catalog: ${message}` } },
+        { error: { type: 'server_error', message: `Failed to fetch codex bundled catalog: ${reason}` } },
         503,
       )
     }

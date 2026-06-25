@@ -6,7 +6,7 @@ export const baseSettings: Settings = {
   proxy: null,
   routing: { enableFlatModelLookup: false },
   plugins: [],
-  codex: { templateSlug: 'gpt-5.4', context_window: 200000 },
+  codex: { context_window: 200000 },
   providers: {},
 }
 
@@ -18,6 +18,7 @@ export function makeSettings(
     ...baseSettings,
     service: { ...baseSettings.service },
     routing: { ...baseSettings.routing },
+    codex: { ...baseSettings.codex },
     providers,
     ...overrides,
   }

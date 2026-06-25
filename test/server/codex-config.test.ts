@@ -23,7 +23,7 @@ describe('codex config mounting', () => {
     expect(settings.providers.zhipu?.models['glm-5.1']?.codex?.display_name).toBe('GLM-5.1')
   })
 
-  it('codex defaults to gpt-5.4 / 200000 when not configured; slug stripped from model.codex', () => {
+  it('codex defaults context_window=200000 when not configured; templateSlug undefined; slug stripped from model.codex', () => {
     const settings = settingsSchema.parse({
       providers: {
         zhipu: {
@@ -34,7 +34,7 @@ describe('codex config mounting', () => {
         },
       },
     })
-    expect(settings.codex.templateSlug).toBe('gpt-5.4')
+    expect(settings.codex.templateSlug).toBeUndefined()
     expect(settings.codex.context_window).toBe(200000)
     const codex = settings.providers.zhipu?.models['glm-5.1']?.codex
     expect(codex).toBeDefined()
@@ -48,5 +48,34 @@ describe('codex config mounting', () => {
     })
     expect(settings.codex.templateSlug).toBe('gpt-5.5')
     expect(settings.codex.context_window).toBe(128000)
+  })
+
+  it('rejects context_window <= 0 at model override layer', () => {
+    expect(() =>
+      settingsSchema.parse({
+        providers: {
+          zhipu: {
+            type: 'openai-compatible',
+            baseURL: 'https://x',
+            apiKey: 'k',
+            models: { 'glm-5.1': { upstreamModel: 'glm-5.1', codex: { context_window: 0 } } },
+          },
+        },
+      }),
+    ).toThrow()
+  })
+
+  it('accepts null context_window at override layer (signals "use lower layer")', () => {
+    const settings = settingsSchema.parse({
+      providers: {
+        zhipu: {
+          type: 'openai-compatible',
+          baseURL: 'https://x',
+          apiKey: 'k',
+          models: { 'glm-5.1': { upstreamModel: 'glm-5.1', codex: { context_window: null } } },
+        },
+      },
+    })
+    expect(settings.providers.zhipu?.models['glm-5.1']?.codex?.context_window).toBeNull()
   })
 })

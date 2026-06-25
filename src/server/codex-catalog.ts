@@ -14,7 +14,10 @@ const codexCatalogSchema = z.object({
 export type CodexCatalogFetcher = () => Promise<string>
 
 async function defaultFetcher(): Promise<string> {
-  const { stdout } = await execFileAsync('codex', ['debug', 'models', '--bundled'])
+  const { stdout } = await execFileAsync('codex', ['debug', 'models', '--bundled'], {
+    timeout: 10_000,
+    maxBuffer: 10 * 1024 * 1024,
+  })
   return stdout
 }
 
@@ -53,13 +56,18 @@ export class CodexCatalogCache {
 function applyOverride(base: CodexModelInfo, override: NonNullable<CodexModelOverride>): CodexModelInfo {
   const filtered = Object.fromEntries(
     Object.entries(override).filter(
-      ([k, v]) => k !== 'templateSlug' && k !== 'slug' && k !== 'context_window' && v !== undefined,
+      ([k, v]) =>
+        k !== 'templateSlug' &&
+        k !== 'slug' &&
+        k !== 'context_window' &&
+        k !== 'max_context_window' &&
+        v !== undefined,
     ),
   )
   return { ...base, ...filtered } as CodexModelInfo
 }
 
-function resolveTemplateSlug(settings: Settings, entry: ModelEntry): string {
+function resolveTemplateSlug(settings: Settings, entry: ModelEntry): string | undefined {
   const provider = settings.providers[entry.providerName]
   const model = provider?.models[entry.modelKey]
   return (
@@ -80,16 +88,27 @@ function resolveContextWindow(settings: Settings, entry: ModelEntry): number {
   )
 }
 
+const FALLBACK_DEFAULT_SLUG = 'gpt-5.4'
+
+/** 全层未配 templateSlug 时,动态取 catalog 首个 supported_in_api 的 slug;无则兜底 */
+function pickDefaultTemplateSlug(catalog: Map<string, CodexModelInfo>): string {
+  for (const m of catalog.values()) {
+    if (m.supported_in_api) return m.slug
+  }
+  return FALLBACK_DEFAULT_SLUG
+}
+
 /** 遍历 listModels id,按 4 层合并生成 codex ModelInfo[] */
 export function buildCodexModelsResponse(
   settings: Settings,
   catalog: Map<string, CodexModelInfo>,
 ): { models: CodexModelInfo[] } {
   const models: CodexModelInfo[] = []
+  const defaultSlug = pickDefaultTemplateSlug(catalog)
   for (const entry of enumerateModelEntries(settings)) {
     const provider = settings.providers[entry.providerName]
     const model = provider?.models[entry.modelKey]
-    const templateSlug = resolveTemplateSlug(settings, entry)
+    const templateSlug = resolveTemplateSlug(settings, entry) ?? defaultSlug
     const template = catalog.get(templateSlug)
     if (!template) {
       throw new Error(`codex template slug not in catalog: ${templateSlug}`)

@@ -77,6 +77,20 @@ describe('GET /codex/v1/models', () => {
     expect(body.error.type).toBe('server_error')
     expect(body.error.message).toContain('codex not installed')
   })
+
+  it('returns 503 with short reason (no ZodError JSON) on catalog schema failure', async () => {
+    const app = createApp({
+      settings: openrouterSettings,
+      providerRegistry: stubRegistry,
+      codexCatalogCache: new CodexCatalogCache(async () => JSON.stringify({ models: [{}] })),
+    })
+    const res = await app.request('/codex/v1/models')
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.error.type).toBe('server_error')
+    expect(body.error.message).toContain('schema validation failed')
+    expect(body.error.message).not.toMatch(/"issues"|"path"|"received"/)
+  })
 })
 
 /** 剥离响应中的随机字段(id / created_at),用于跨路径结构对比。 */

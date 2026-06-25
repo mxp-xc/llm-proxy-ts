@@ -80,7 +80,10 @@ export type CodexModelInfo = z.infer<typeof codexModelInfoSchema>
 export const codexModelOverrideSchema = codexModelInfoSchema
   .omit({ slug: true })
   .partial()
-  .extend({ templateSlug: z.string().min(1).optional() })
+  .extend({
+    templateSlug: z.string().min(1).optional(),
+    context_window: z.number().int().positive().nullable().optional(),
+  })
   .strip()
 
 export type CodexModelOverride = z.infer<typeof codexModelOverrideSchema>
@@ -88,7 +91,7 @@ export type CodexModelOverride = z.infer<typeof codexModelOverrideSchema>
 /** settings.codex 专属：在 codexModelOverrideSchema 基础上给 templateSlug / context_window 加默认值 */
 export const codexSettingsSchema = codexModelOverrideSchema
   .extend({
-    templateSlug: z.string().min(1).default('gpt-5.4'),
+    templateSlug: z.string().min(1).optional(),
     context_window: z.number().int().positive().default(200000),
   })
   .strip()

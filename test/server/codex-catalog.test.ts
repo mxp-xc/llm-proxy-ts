@@ -19,6 +19,16 @@ const FULL_MODEL = {
   experimental_supported_tools: [],
 }
 
+describe('makeSettings codex isolation', () => {
+  it('does not share codex reference across makeSettings calls', () => {
+    const a = makeSettings()
+    a.codex.default_reasoning_level = 'medium'
+    const b = makeSettings()
+    expect(a.codex).not.toBe(b.codex)
+    expect(b.codex.default_reasoning_level).toBeUndefined()
+  })
+})
+
 describe('CodexCatalogCache', () => {
   it('fetches, indexes by slug, caches (lazy + dedup concurrent)', async () => {
     let calls = 0
@@ -60,6 +70,20 @@ describe('CodexCatalogCache', () => {
     )
     await expect(cache.get()).rejects.toThrow('empty slug')
   })
+
+  it('recovers after fetcher rejection: inflight cleared, retry succeeds', async () => {
+    let calls = 0
+    const fetcher = async () => {
+      calls++
+      if (calls === 1) throw new Error('transient')
+      return JSON.stringify({ models: [FULL_MODEL] })
+    }
+    const cache = new CodexCatalogCache(fetcher)
+    await expect(cache.get()).rejects.toThrow('transient')
+    const m = await cache.get()
+    expect(m.get('gpt-5.4')?.slug).toBe('gpt-5.4')
+    expect(calls).toBe(2)
+  })
 })
 
 const CATALOG = new Map<string, CodexModelInfo>([
@@ -88,6 +112,25 @@ const CATALOG = new Map<string, CodexModelInfo>([
 ])
 
 describe('buildCodexModelsResponse', () => {
+  it('max_context_window stays equal to context_window (max override ignored)', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        options: { codex: { context_window: 128000, max_context_window: 999000 } },
+        models: {
+          'glm-5.1': { upstreamModel: 'glm-5.1', aliases: [], headers: {}, plugins: [] },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    expect(models[0]!.context_window).toBe(128000)
+    expect(models[0]!.max_context_window).toBe(128000)
+  })
+
   it('emits one ModelInfo per listModels id, slug fixed = id, settings-derived defaults', () => {
     const settings = makeSettings({
       zhipu: {
@@ -111,7 +154,7 @@ describe('buildCodexModelsResponse', () => {
     expect(m.supported_in_api).toBe(true)
     expect(m.priority).toBe(0)
     expect(m.experimental_supported_tools).toEqual([])
-    expect(m.base_instructions).toBe('codex-base') // template
+    expect(m.base_instructions).toBe('codex-5.5') // 动态默认选 gpt-5.5(首个 supported_in_api)
   })
 
   it('context_window from limit.context; flat lookup adds modelKey + alias slugs', () => {
@@ -244,7 +287,7 @@ describe('buildCodexModelsResponse', () => {
     expect(m2[0]!.context_window).toBe(99000)
   })
 
-  it('settings codex templateSlug default gpt-5.4 applies when no override', () => {
+  it('dynamic default templateSlug picks first supported_in_api catalog entry', () => {
     const settings = makeSettings({
       zhipu: {
         type: 'openai-compatible',
@@ -256,6 +299,6 @@ describe('buildCodexModelsResponse', () => {
       },
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)
-    expect(models[0]!.base_instructions).toBe('codex-base') // gpt-5.4 template
+    expect(models[0]!.base_instructions).toBe('codex-5.5') // 动态默认选 gpt-5.5
   })
 })

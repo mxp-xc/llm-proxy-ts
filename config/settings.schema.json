@@ -356,8 +356,7 @@
         },
         "templateSlug": {
           "type": "string",
-          "minLength": 1,
-          "default": "gpt-5.4"
+          "minLength": 1
         }
       },
       "additionalProperties": false,
@@ -719,9 +718,14 @@
                           "type": "boolean"
                         },
                         "context_window": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "max_context_window": {
@@ -1033,9 +1037,14 @@
                         "type": "boolean"
                       },
                       "context_window": {
-                        "type": [
-                          "number",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "max_context_window": {
@@ -1472,9 +1481,14 @@
                           "type": "boolean"
                         },
                         "context_window": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "max_context_window": {
@@ -1786,9 +1800,14 @@
                         "type": "boolean"
                       },
                       "context_window": {
-                        "type": [
-                          "number",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "max_context_window": {
@@ -2221,9 +2240,14 @@
                           "type": "boolean"
                         },
                         "context_window": {
-                          "type": [
-                            "number",
-                            "null"
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "max_context_window": {
@@ -2535,9 +2559,14 @@
                         "type": "boolean"
                       },
                       "context_window": {
-                        "type": [
-                          "number",
-                          "null"
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
                         ]
                       },
                       "max_context_window": {
