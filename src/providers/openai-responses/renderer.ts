@@ -8,6 +8,7 @@ import type {
   ResponseOutputText,
   ResponseOutputMessage,
   ResponseFunctionToolCall,
+  ResponseCustomToolCall,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -18,6 +19,7 @@ export type {
   ResponseOutputText,
   ResponseOutputMessage,
   ResponseFunctionToolCall,
+  ResponseCustomToolCall,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -38,6 +40,24 @@ function mapResponseStatus(
     return 'incomplete'
   }
   return 'completed'
+}
+
+/** Codex 的 apply_patch 是 freeform custom tool；AI SDK 把上游 custom_tool_call 映射成
+ * tool-call (toolName='apply_patch')。renderer 渲染为 custom_tool_call output item。 */
+function isCustomToolName(toolName: string): boolean {
+  return toolName === 'apply_patch'
+}
+
+/** 还原 custom_tool_call 的 input：AI SDK 对 custom_tool_call.input 做 JSON.stringify
+ * (裸 patch 文本 → JSON 字符串)，这里 JSON.parse 还原为裸文本。 */
+function decodeCustomToolInput(raw: unknown): string {
+  if (typeof raw !== 'string') return JSON.stringify(raw ?? '')
+  try {
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'string' ? parsed : raw
+  } catch {
+    return raw
+  }
 }
 
 // ─── Streaming SSE Renderer ───────────────────────────────────
@@ -63,9 +83,11 @@ export async function* renderOpenAIResponseSSE(input: {
   let reasoningItemStarted = false
   let fullReasoning = ''
   let reasoningItemId = ''
-  const streamedToolCalls: ResponseFunctionToolCall[] = []
+  let reasoningEncryptedContent: string | undefined
+  const streamedToolCalls: Array<ResponseFunctionToolCall | ResponseCustomToolCall> = []
 
   const toolCallFcIds = new Map<string, string>()
+  const toolCallToolNames = new Map<string, string>()
   const toolCallsWithArgumentDeltas = new Set<string>()
   const toolCallStartEmitted = new Set<string>()
 
@@ -125,6 +147,8 @@ export async function* renderOpenAIResponseSSE(input: {
       }
 
       if (part.type === 'reasoning-start') {
+        const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
+        if (typeof enc === 'string') reasoningEncryptedContent = enc
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -139,6 +163,8 @@ export async function* renderOpenAIResponseSSE(input: {
 
       if (part.type === 'reasoning-delta') {
         const delta = part.text
+        const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
+        if (typeof enc === 'string') reasoningEncryptedContent = enc
 
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
@@ -174,11 +200,17 @@ export async function* renderOpenAIResponseSSE(input: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(),
             output_index: outputIndex,
-            item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
+            item: {
+              id: reasoningItemId,
+              type: 'reasoning',
+              summary: [{ type: 'summary_text', text: fullReasoning }],
+              ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+            },
           } }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
+          reasoningEncryptedContent = undefined
         }
       }
 
@@ -187,6 +219,7 @@ export async function* renderOpenAIResponseSSE(input: {
         const toolName = part.toolName
         const fcId = `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         toolCallFcIds.set(toolCallId, fcId)
+        toolCallToolNames.set(toolCallId, toolName)
 
         if (contentPartStarted) {
           yield { event: 'response.output_text.done', data: {
@@ -211,9 +244,13 @@ export async function* renderOpenAIResponseSSE(input: {
           contentPartStarted = false
         }
 
+        const isCustom = isCustomToolName(toolName)
+        const addedItem = isCustom
+          ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
+          : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
         yield { event: 'response.output_item.added', data: {
           type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
-          item: { id: fcId, type: 'function_call', status: 'in_progress', call_id: toolCallId, name: toolName, arguments: '' },
+          item: addedItem,
         } }
         toolCallStartEmitted.add(toolCallId)
       }
@@ -225,17 +262,26 @@ export async function* renderOpenAIResponseSSE(input: {
 
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const toolName = toolCallToolNames.get(toolCallId) ?? ''
 
-        yield { event: 'response.function_call_arguments.delta', data: {
-          type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
-          item_id: fcId, output_index: outputIndex, delta: argsDelta,
-        } }
+        if (isCustomToolName(toolName)) {
+          yield { event: 'response.custom_tool_call_input.delta', data: {
+            type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
+            item_id: fcId, output_index: outputIndex, delta: argsDelta,
+          } }
+        } else {
+          yield { event: 'response.function_call_arguments.delta', data: {
+            type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
+            item_id: fcId, output_index: outputIndex, delta: argsDelta,
+          } }
+        }
       }
 
       if (part.type === 'tool-call') {
         const toolCallId = part.toolCallId
         const toolName = part.toolName
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const isCustom = isCustomToolName(toolName)
 
         if (contentPartStarted) {
           yield { event: 'response.output_text.done', data: {
@@ -261,35 +307,58 @@ export async function* renderOpenAIResponseSSE(input: {
         }
 
         const rawArgs = part.input ?? {}
-        const args = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs)
+        // custom_tool_call: input 是 JSON.stringify(裸文本)，还原为裸文本；function_call: 保持原样
+        const args = isCustom
+          ? decodeCustomToolInput(rawArgs)
+          : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
 
         if (!toolCallStartEmitted.has(toolCallId)) {
+          const addedItem = isCustom
+            ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
+            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
           yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: fcId, type: 'function_call', status: 'in_progress', call_id: toolCallId, name: toolName, arguments: '' },
+            item: addedItem,
           } }
         }
 
         if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
-          yield { event: 'response.function_call_arguments.delta', data: {
-            type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
-            item_id: fcId, output_index: outputIndex, delta: args,
-          } }
+          if (isCustom) {
+            yield { event: 'response.custom_tool_call_input.delta', data: {
+              type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
+              item_id: fcId, output_index: outputIndex, delta: args,
+            } }
+          } else {
+            yield { event: 'response.function_call_arguments.delta', data: {
+              type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
+              item_id: fcId, output_index: outputIndex, delta: args,
+            } }
+          }
         }
 
-        yield { event: 'response.function_call_arguments.done', data: {
-          type: 'response.function_call_arguments.done', sequence_number: nextSeq(),
-          item_id: fcId, output_index: outputIndex, arguments: args,
-        } }
-        yield { event: 'response.output_item.done', data: {
-          type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-          item: { id: fcId, type: 'function_call', status: 'completed', call_id: toolCallId, name: toolName, arguments: args },
-        } }
-
-        streamedToolCalls.push({
-          id: fcId, type: 'function_call', status: 'completed',
-          call_id: toolCallId, name: toolName, arguments: args,
-        })
+        if (isCustom) {
+          yield { event: 'response.output_item.done', data: {
+            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
+            item: { id: fcId, type: 'custom_tool_call', status: 'completed', call_id: toolCallId, name: toolName, input: args },
+          } }
+          streamedToolCalls.push({
+            id: fcId, type: 'custom_tool_call', status: 'completed',
+            call_id: toolCallId, name: toolName, input: args,
+          })
+        } else {
+          yield { event: 'response.function_call_arguments.done', data: {
+            type: 'response.function_call_arguments.done', sequence_number: nextSeq(),
+            item_id: fcId, output_index: outputIndex, arguments: args,
+          } }
+          yield { event: 'response.output_item.done', data: {
+            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
+            item: { id: fcId, type: 'function_call', status: 'completed', call_id: toolCallId, name: toolName, arguments: args },
+          } }
+          streamedToolCalls.push({
+            id: fcId, type: 'function_call', status: 'completed',
+            call_id: toolCallId, name: toolName, arguments: args,
+          })
+        }
         outputIndex++
       }
 
@@ -306,11 +375,17 @@ export async function* renderOpenAIResponseSSE(input: {
             type: 'response.output_item.done',
             sequence_number: nextSeq(),
             output_index: outputIndex,
-            item: { id: reasoningItemId, type: 'reasoning', summary: [{ type: 'summary_text', text: fullReasoning }] },
+            item: {
+              id: reasoningItemId,
+              type: 'reasoning',
+              summary: [{ type: 'summary_text', text: fullReasoning }],
+              ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+            },
           } }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
+          reasoningEncryptedContent = undefined
         }
         if (contentPartStarted) {
           yield { event: 'response.output_text.done', data: {
@@ -458,15 +533,26 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
 
   if (input.toolCalls?.length) {
     for (const call of input.toolCalls) {
-      const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})
-      output.push({
-        id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-        type: 'function_call',
-        status: 'completed',
-        call_id: call.toolCallId,
-        name: call.toolName,
-        arguments: args,
-      })
+      if (isCustomToolName(call.toolName)) {
+        output.push({
+          id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          type: 'custom_tool_call',
+          status: 'completed',
+          call_id: call.toolCallId,
+          name: call.toolName,
+          input: decodeCustomToolInput(call.input),
+        })
+      } else {
+        const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})
+        output.push({
+          id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          type: 'function_call',
+          status: 'completed',
+          call_id: call.toolCallId,
+          name: call.toolName,
+          arguments: args,
+        })
+      }
     }
   }
 

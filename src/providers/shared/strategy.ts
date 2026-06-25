@@ -1,4 +1,4 @@
-import type { AISDKInput, ProxyStreamPart } from './aisdk-types.js'
+import type { AISDKInput, MappingContext, ProxyStreamPart } from './aisdk-types.js'
 import type { SSEOutput } from './sse-utils.js'
 import type { RenderResultInput } from '../protocol-types.js'
 import type { ProtocolErrorFormatter } from './error-format.js'
@@ -17,7 +17,7 @@ export interface ProtocolStrategy<TRequest = unknown, TSSEData = never, TResult 
   /** 判断请求是否要求流式响应 */
   isStream(request: TRequest): boolean
   /** 将协议特定请求映射到 AI SDK 输入格式 */
-  mapToAISDKInput(request: TRequest): AISDKInput
+  mapToAISDKInput(request: TRequest, ctx?: MappingContext): AISDKInput
   /** 非流式渲染：将 AI SDK 结果渲染为协议特定响应 */
   renderResult(input: RenderResultInput): TResult
   /** 流式渲染：将 AI SDK 流渲染为结构化 SSE 帧异步迭代 */

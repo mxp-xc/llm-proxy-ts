@@ -5,6 +5,7 @@ import type {
   ResponseOutputTextDeltaEvent,
   ResponseCompletedEvent,
   ResponseOutputItemAddedEvent,
+  ResponseOutputItemDoneEvent,
   ResponseFunctionCallArgumentsDeltaEvent,
 } from '../../../src/providers/openai-responses/types.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from '../../../src/providers/openai-responses/renderer.js'
@@ -360,5 +361,51 @@ describe('renderOpenAIResponseSSE', () => {
     // The two message items should have different ids
     const ids = msgItems.map(e => e.item.id)
     expect(ids[0]).not.toBe(ids[1])
+  })
+
+  // reasoning + encrypted_content 透传：@ai-sdk/openai 把 encrypted_content 写入 reasoning part 的 providerMetadata
+  async function* reasoningStream() {
+    yield { type: 'reasoning-start', id: 'rs-0', providerMetadata: { openai: { reasoningEncryptedContent: 'enc-blob' } } }
+    yield { type: 'reasoning-delta', id: 'rs-0', text: 'thinking' }
+    yield { type: 'reasoning-end', id: 'rs-0' }
+    yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_rs' } }
+  }
+
+  it('writes encrypted_content into reasoning output item from providerMetadata', async () => {
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: reasoningStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const reasoningDone = events.find(e => e.event === 'response.output_item.done')
+    const item = (reasoningDone!.data as ResponseOutputItemDoneEvent).item
+    expect(item.type).toBe('reasoning')
+    if (item.type === 'reasoning') {
+      expect(item.encrypted_content).toBe('enc-blob')
+      expect(item.summary).toEqual([{ type: 'summary_text', text: 'thinking' }])
+    }
+  })
+
+  // apply_patch → custom_tool_call 渲染（AI SDK 把上游 custom_tool_call 映射成 tool-call toolName='apply_patch'）
+  // apply_patch 裸 patch 文本（含换行等特殊字符，验证 JSON.stringify → JSON.parse 还原）
+  const applyPatchText = '*** Begin Patch\n*** Add File: foo.txt\n+hello\n*** End Patch'
+  async function* applyPatchCallStream() {
+    yield { type: 'tool-input-start', id: 'call_1', toolName: 'apply_patch' }
+    yield { type: 'tool-input-delta', id: 'call_1', delta: '*** Begin Patch' }
+    yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify(applyPatchText) }
+    yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_ap' } }
+  }
+
+  it('renders apply_patch tool-call as custom_tool_call with decoded input', async () => {
+    const stream = renderOpenAIResponseSSE({ model: 'gpt-5', stream: applyPatchCallStream() as AsyncIterable<ProxyStreamPart> })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const added = events.find(e => e.event === 'response.output_item.added')
+    expect((added!.data as ResponseOutputItemAddedEvent).item.type).toBe('custom_tool_call')
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const doneItem = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(doneItem.type).toBe('custom_tool_call')
+    if (doneItem.type === 'custom_tool_call') {
+      // input 被 AI SDK JSON.stringify 包裹，renderer JSON.parse 还原为裸 patch 文本
+      expect(doneItem.input).toBe(applyPatchText)
+    }
+    expect(events.some(e => e.event === 'response.custom_tool_call_input.delta')).toBe(true)
+    expect(events.some(e => e.event === 'response.function_call_arguments.delta')).toBe(false)
   })
 })

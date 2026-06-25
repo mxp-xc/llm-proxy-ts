@@ -94,7 +94,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   c.set('actualModel', route.upstreamModel)
 
   // 3. Map to AI SDK input
-  const callInput = strategy.mapToAISDKInput(request)
+  const callInput = strategy.mapToAISDKInput(request, { providerType: route.provider.type })
 
   // 4. Get LanguageModel
   const loginUrl = `http://127.0.0.1:${ctx.settings.service.port}/oauth/login/${route.providerName}`

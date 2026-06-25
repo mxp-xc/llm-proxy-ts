@@ -21,7 +21,16 @@ export interface ResponseFunctionToolCall {
   arguments: string
 }
 
-export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall
+export interface ResponseCustomToolCall {
+  id: string
+  type: 'custom_tool_call'
+  status: 'completed' | 'incomplete'
+  call_id: string
+  name: string
+  input: string
+}
+
+export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall
 
 export interface ResponseUsage {
   input_tokens: number
@@ -76,15 +85,26 @@ interface StreamFunctionCallItem {
   arguments: string
 }
 
+/** Custom tool call item (apply_patch 等 freeform tool) as it appears in streaming output_item events */
+interface StreamCustomToolCallItem {
+  id: string
+  type: 'custom_tool_call'
+  status: string
+  call_id: string
+  name: string
+  input: string
+}
+
 /** Reasoning item as it appears in streaming output_item events */
 interface StreamReasoningItem {
   id: string
   type: 'reasoning'
   summary: ReasoningSummaryItem[]
+  encrypted_content?: string
 }
 
 /** Union of all item shapes that can appear in streaming output_item events */
-type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamReasoningItem
+type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamReasoningItem
 
 /** Minimal response object for created/in_progress events */
 interface StreamResponsePartial {
@@ -151,7 +171,7 @@ interface ResponseContentPartDoneEvent {
   part: ResponseOutputText
 }
 
-interface ResponseOutputItemDoneEvent {
+export interface ResponseOutputItemDoneEvent {
   type: 'response.output_item.done'
   sequence_number: number
   output_index: number
@@ -176,6 +196,14 @@ interface ResponseFunctionCallArgumentsDoneEvent {
 
 interface ResponseReasoningSummaryTextDeltaEvent {
   type: 'response.reasoning_summary_text.delta'
+  sequence_number: number
+  item_id: string
+  output_index: number
+  delta: string
+}
+
+interface ResponseCustomToolCallInputDeltaEvent {
+  type: 'response.custom_tool_call_input.delta'
   sequence_number: number
   item_id: string
   output_index: number
@@ -216,5 +244,6 @@ export type OpenAIResponseStreamEvent =
   | ResponseFunctionCallArgumentsDoneEvent
   | ResponseReasoningSummaryTextDeltaEvent
   | ResponseReasoningSummaryTextDoneEvent
+  | ResponseCustomToolCallInputDeltaEvent
   | ResponseCompletedEvent
   | ResponseErrorEvent

@@ -194,6 +194,83 @@ describe('POST /codex/v1/responses', () => {
     expect(await codexRes.json()).toEqual(await v1Res.json())
   })
 
+  it('accepts Codex-style requests mixing function and non-function tools (no 400)', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: 'hello',
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        } as GenerateTextReturn
+      },
+    })
+    const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openrouter/chat',
+      input: 'hi',
+      tools: [
+        { type: 'function', name: 'shell_command', parameters: { type: 'object' } },
+        { type: 'custom', name: 'apply_patch', description: 'apply patch', format: { type: 'grammar' } },
+        { type: 'namespace', name: 'mcp__node_repl', description: 'node repl' },
+        { type: 'tool_search', execution: 'client' },
+        { type: 'web_search', search_content_types: ['text'] },
+      ],
+      tool_choice: 'auto',
+      parallel_tool_calls: true,
+      reasoning: { effort: 'xhigh' },
+      store: false,
+      stream: false,
+      include: ['reasoning.encrypted_content'],
+      prompt_cache_key: '019efcd8',
+      text: { verbosity: 'low' },
+      client_metadata: { session_id: '019efcd8' },
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.output).toBeDefined()
+  })
+
+  it('passes apply_patch through for openai provider and renders custom_tool_call', async () => {
+    const settings = makeSettings({
+      openai: {
+        type: 'openai',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
+      },
+    })
+    const gateway = makeGateway({
+      stream() {
+        return (async function* () {
+          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify('*** Begin Patch\n*** End Patch') }
+          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+        })() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openai/chat',
+      input: 'hi',
+      stream: true,
+      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('custom_tool_call')
+    expect(text).toContain('response.custom_tool_call_input.delta')
+  })
+
   it('injects x-request-id (middleware covers /codex)', async () => {
     const gateway = makeGateway({
       async generate() {

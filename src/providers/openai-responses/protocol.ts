@@ -1,5 +1,6 @@
 import { type ToolSet } from 'ai'
-import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
+import { openai } from '@ai-sdk/openai'
+import type { AISDKInput, MappingContext, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 import { isRecord } from '../protocol-types.js'
 import { z } from 'zod/v3'
@@ -13,6 +14,12 @@ const functionToolSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).optional(),
   strict: z.boolean().optional(),
 })
+
+// Codex 与 OpenAI Responses 会携带非 function 工具（web_search、file_search、
+// apply_patch(custom)、namespace、tool_search 等）。AI SDK 仅支持 function 工具，
+// 这些工具在 mapping 阶段被 filter 掉；这里只做最小形状校验后原样放行，
+// 避免任一非 function 工具导致整包 tools 校验失败（400）。
+const passthroughToolSchema = z.object({ type: z.string() }).passthrough()
 
 const easyInputMessageSchema = z.object({
   type: z.literal('message').optional(),
@@ -34,7 +41,34 @@ const functionCallOutputSchema = z.object({
   output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
 })
 
-const inputItemSchema = z.union([easyInputMessageSchema, functionCallSchema, functionCallOutputSchema])
+// 多轮对话中 Codex 回传的推理项（type: 'reasoning'），含 summary / content /
+// encrypted_content。AI SDK 不支持 OpenAI 加密推理透传，mapping 阶段跳过；
+// 这里先放行，避免 input 校验失败（400）。
+const reasoningItemSchema = z.object({ type: z.literal('reasoning') }).passthrough()
+
+// custom_tool_call / custom_tool_call_output：Codex apply_patch 等 freeform custom tool 的
+// 调用与结果回传（多轮）。input 是裸 patch 文本（非 JSON）。
+const customToolCallSchema = z.object({
+  type: z.literal('custom_tool_call'),
+  call_id: z.string().min(1),
+  name: z.string().min(1),
+  input: z.union([z.string(), z.record(z.string(), z.unknown())]),
+}).passthrough()
+
+const customToolCallOutputSchema = z.object({
+  type: z.literal('custom_tool_call_output'),
+  call_id: z.string().min(1),
+  output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
+}).passthrough()
+
+const inputItemSchema = z.union([
+  easyInputMessageSchema,
+  functionCallSchema,
+  functionCallOutputSchema,
+  customToolCallSchema,
+  customToolCallOutputSchema,
+  reasoningItemSchema,
+])
 
 export const openAIResponsesRequestSchema = z
   .object({
@@ -45,7 +79,7 @@ export const openAIResponsesRequestSchema = z
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
     max_output_tokens: z.number().int().positive().optional(),
-    tools: z.array(functionToolSchema).optional(),
+    tools: z.array(z.union([functionToolSchema, passthroughToolSchema])).optional(),
     tool_choice: z
       .union([
         z.enum(['auto', 'none', 'required']),
@@ -111,6 +145,7 @@ const mappedResponsesRequestKeys = new Set([
 
 export function mapResponsesRequestToAISDKInput(
   request: OpenAIResponsesRequest,
+  ctx?: MappingContext,
 ): AISDKInput {
   const messages: ProtocolMessage[] = []
   const systemParts: string[] = []
@@ -163,6 +198,51 @@ export function mapResponsesRequestToAISDKInput(
             output: { type: 'text', value: output },
           }],
         })
+      } else if ('type' in item && item.type === 'custom_tool_call') {
+        // custom_tool_call（apply_patch 等 freeform tool 的上轮调用）→ assistant tool-call
+        callIdToName.set(item.call_id, item.name)
+        messages.push({
+          role: 'assistant',
+          content: [{
+            type: 'tool-call',
+            toolCallId: item.call_id,
+            toolName: item.name,
+            input: item.input,
+          }],
+        })
+      } else if ('type' in item && item.type === 'custom_tool_call_output') {
+        // custom_tool_call_output → tool-result（复用 function_call_output 逻辑）
+        const output = typeof item.output === 'string'
+          ? item.output
+          : JSON.stringify(item.output)
+        messages.push({
+          role: 'tool',
+          content: [{
+            type: 'tool-result',
+            toolCallId: item.call_id,
+            toolName: callIdToName.get(item.call_id) ?? item.call_id,
+            output: { type: 'text', value: output },
+          }],
+        })
+      } else if ('type' in item && item.type === 'reasoning') {
+        // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content
+        // 透传；@ai-sdk/openai-compatible 把 reasoning part 的 text 转成 Chat Completions 的
+        // reasoning_content 文本（已验证 openai-compatible index.mjs:215-217,245）。
+        //   - openai provider：encrypted_content 透传给上游维持推理上下文；为 null 时 SDK 过滤
+        //   - openai-compatible provider：providerOptions 被忽略，summary 文本降级为 reasoning_content
+        const reasoningItem = item as {
+          type: 'reasoning'
+          encrypted_content?: string | null
+          summary?: Array<{ type: string; text: string }>
+        }
+        const encryptedContent = reasoningItem.encrypted_content ?? undefined
+        const summaryText = Array.isArray(reasoningItem.summary)
+          ? reasoningItem.summary.map((s) => s?.text ?? '').filter(Boolean).join('\n')
+          : ''
+        const reasoningPart: ProtocolMessagePart = encryptedContent !== undefined
+          ? { type: 'reasoning', text: summaryText, providerOptions: { openai: { reasoningEncryptedContent: encryptedContent } } }
+          : { type: 'reasoning', text: summaryText }
+        messages.push({ role: 'assistant', content: [reasoningPart] })
       } else {
         // EasyInputMessage
         const { role, content } = item
@@ -185,14 +265,30 @@ export function mapResponsesRequestToAISDKInput(
   if (request.top_p !== undefined) input.topP = request.top_p
   if (request.max_output_tokens !== undefined) input.maxOutputTokens = request.max_output_tokens
 
-  // tools — flat structure → ToolSet
+  // tools — function tool 直接映射；custom grammar tool（如 apply_patch）仅 openai provider 透传
   if (request.tools) {
-    const functionTools = request.tools.filter((t) => t.type === 'function')
-    if (functionTools.length > 0) {
-      input.tools = Object.fromEntries(
-        functionTools.map((tool) => [tool.name, mapResponsesFunctionTool(tool)]),
-      )
+    const toolSet: ToolSet = {}
+    for (const tool of request.tools) {
+      if (tool.type === 'function') {
+        const fnTool = tool as ResponsesFunctionTool
+        toolSet[fnTool.name] = mapResponsesFunctionTool(fnTool)
+      } else if (ctx?.providerType === 'openai' && tool.type === 'custom') {
+        // apply_patch 等 custom grammar tool：@ai-sdk/openai customTool 透传（仅 openai provider，
+        // openai-compatible 会丢弃 provider tool）。必须保持 type:'custom'，不可降级为 function tool
+        // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
+        const customTool = tool as { name?: string; description?: string; format?: unknown }
+        if (customTool.name) {
+          const args: Parameters<typeof openai.tools.customTool>[0] = { name: customTool.name }
+          if (customTool.description !== undefined) args.description = customTool.description
+          if (customTool.format !== undefined) {
+            args.format = customTool.format as Exclude<Parameters<typeof openai.tools.customTool>[0]['format'], undefined>
+          }
+          toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
+        }
+      }
+      // 其他非 function tool（web_search/namespace/tool_search）：v0 跳过
     }
+    if (Object.keys(toolSet).length > 0) input.tools = toolSet
   }
 
   // tool_choice — validate non-function tool references
@@ -230,9 +326,9 @@ export function mapResponsesRequestToAISDKInput(
   return input
 }
 
-function mapResponsesFunctionTool(
-  tool: Extract<NonNullable<OpenAIResponsesRequest['tools']>[number], { type: 'function' }>,
-): ToolSet[string] {
+type ResponsesFunctionTool = Extract<NonNullable<OpenAIResponsesRequest['tools']>[number], { type: 'function' }>
+
+function mapResponsesFunctionTool(tool: ResponsesFunctionTool): ToolSet[string] {
   return mapToolToAISDK(tool.parameters ?? { type: 'object', properties: {} }, tool.description)
 }
 

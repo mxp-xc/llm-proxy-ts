@@ -3,6 +3,7 @@ import type { ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from
 /** 协议映射器产生的消息内容分片 */
 export type ProtocolMessagePart =
   | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string; providerOptions?: Record<string, Record<string, unknown>> }
   | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> | string }
   | { type: 'tool-result'; toolCallId: string; toolName: string; output:
       | { type: 'text'; value: string }
@@ -16,6 +17,11 @@ export type ProtocolMessage =
   | { role: 'assistant'; content: string | ProtocolMessagePart[] }
   | { role: 'system'; content: string }
   | { role: 'tool'; content: ProtocolMessagePart[] }
+
+export interface MappingContext {
+  /** 上游 provider 类型，决定非 function tool / reasoning 的透传策略 */
+  providerType: 'openai' | 'openai-compatible' | 'anthropic'
+}
 
 export interface AISDKInput {
   system?: string
