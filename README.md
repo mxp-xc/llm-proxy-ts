@@ -22,6 +22,8 @@ pnpm dev serve
 | `POST /v1/responses` | OpenAI Responses（命名事件 SSE） |
 | `POST /v1/messages` | Anthropic Messages（非流式 + SSE） |
 | `GET /v1/models` | 可用模型列表 |
+| `POST /codex/v1/responses` | Codex CLI 兼容端点（复用 OpenAI Responses 协议） |
+| `GET /codex/v1/models` | Codex bundled catalog 格式模型列表 |
 
 请求格式兼容对应上游 API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
 
@@ -38,6 +40,7 @@ pnpm dev serve
 | `pnpm dev models sync --dry-run` | 预览变更，不写入 |
 | `pnpm dev models list` | 列出已配置模型 |
 | `pnpm dev models list --format json` | 列出已配置模型（JSON） |
+| `pnpm dev codex install` | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
 | `pnpm test` | 运行全部测试 |
 | `pnpm test test/xxx.test.ts` | 运行单个测试 |
 | `pnpm typecheck` | 类型检查 |
@@ -57,6 +60,7 @@ pnpm dev serve
 - **proxy** — 可选 HTTP 代理（undici `ProxyAgent`）
 - **plugins** — provider/model 级插件（如 `vendor_sse_error` 检测上游限流）
 - **oauth** — 支持 Authorization Code 和 Client Credentials 两种流程
+- **codex** — 全局 Codex 兼容配置（`templateSlug`、`context_window` 默认 200000 等），可被 `provider.options.codex` 和 `model.codex` 覆盖
 
 ## 安全
 

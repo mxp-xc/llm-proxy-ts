@@ -44,6 +44,7 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+.playwright-cli/
 temp/
 .codegraph
 work-local/

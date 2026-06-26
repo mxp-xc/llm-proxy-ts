@@ -15,6 +15,7 @@
 | `pnpm dev serve --no-watch` | 启动服务器（无热重载） |
 | `pnpm dev models sync` | 交互式同步上游模型到配置文件 |
 | `pnpm dev models list` | 列出已配置模型 |
+| `pnpm dev codex install` | 配置 Codex CLI（写 `~/.codex/config.toml`，多选+搜索模型） |
 | `pnpm test` | 全部测试（Vitest，无网络） |
 | `pnpm test test/xxx.test.ts` | 运行单个测试 |
 | `pnpm typecheck` | `tsc --noEmit` |
@@ -24,32 +25,36 @@
 
 ### 请求流程
 
-三个端点共享 `handleProtocolRequest`，通过 `ProtocolStrategy` 策略接口区分协议特定的验证、映射、渲染和错误格式化：
+三个 `/v1` 端点共享 `handleProtocolRequest`，通过 `ProtocolStrategy` 策略接口区分协议特定的验证、映射、渲染和错误格式化：
 
 ```
 Client → Hono app
   ├─ /v1/chat/completions  → handleProtocolRequest(openaiCompatibleStrategy)
   ├─ /v1/responses         → handleProtocolRequest(openaiResponsesStrategy)
-  └─ /v1/messages          → handleProtocolRequest(anthropicStrategy)
+  ├─ /v1/messages          → handleProtocolRequest(anthropicStrategy)
+  └─ /codex                → createCodexApp 子应用
+       ├─ POST /codex/v1/responses  → handleProtocolRequest(openaiResponsesStrategy)
+       └─ GET  /codex/v1/models     → buildCodexModelsResponse（4 层 catalog 覆盖）
 ```
 
-三个端点共享同一个 `RoutingTable`，任意端点都可路由到任意类型的 provider——协议转换的核心：上游只要一种协议，客户端可任选下游格式访问。
+所有端点共享同一个 `RoutingTable`，任意端点都可路由到任意类型的 provider——协议转换的核心：上游只要一种协议，客户端可任选下游格式访问。`/codex` 子应用为 Codex CLI 提供兼容端点，复用 `openaiResponsesStrategy`，并以 codex bundled catalog 格式暴露模型列表。
 
 ### 核心模块
 
 - **`src/server/`** — Hono HTTP 服务器。`app.ts` 定义路由，`handle-protocol.ts` 通用请求处理，`gateway.ts` / `stream-inspect.ts` / `stream-utils.ts` 处理流和超时。`createApp()` 接受 `ModelGateway`、`ProviderRegistry`、`TokenManager` 覆盖——主要测试接缝，通过 `app.fetch()` 直接测试。
-- **`src/providers/`** — Provider 注册表 + 协议策略。`registry.ts` 按 `provider.type`（discriminated union）分派到对应工厂。每种协议一个子目录（`openai-compatible/`、`openai-responses/`、`anthropic/`），各含 `protocol.ts`（请求 schema + AI SDK 映射）、`renderer.ts`（响应渲染）、`strategy.ts`（策略实例）。`shared/` 放共享工厂、渲染工具和 `ProtocolStrategy` 接口。
+- **`src/providers/`** — Provider 注册表 + 协议策略，二者正交：**provider type**（`openai-compatible`、`anthropic`、`openai`）决定如何用 AI SDK 连上游（工厂），**protocol strategy**（`openaiCompatibleStrategy`、`openaiResponsesStrategy`、`anthropicStrategy`）决定下游请求/响应格式。`registry.ts` 按 `provider.type`（discriminated union）分派到工厂；`openai-compatible/`、`anthropic/`、`openai/` 各含 provider 工厂，`openai-responses/` 只有策略实现（无工厂，复用 openai/openai-compatible 的 LanguageModel）。每个策略目录含 `protocol.ts`（请求 schema + AI SDK 映射）、`renderer.ts`（响应渲染）、`strategy.ts`（策略实例）。`shared/` 放共享工厂、渲染工具和 `ProtocolStrategy` 接口。
 - **`src/routing.ts`** — model → provider 映射。
-- **`src/cli/`** — Commander.js v15 命令。每命令一个 `create*Command()` 函数，业务逻辑保持框架无关。新增命令：写 `createXxxCommand()` → 在 `cli.ts` 或 `models.ts` 中 `addCommand()`。
+- **`src/cli/`** — Commander.js v15 命令。子命令按目录组织（`serve.ts`、`models/`、`codex/`），每个目录 `index.ts` 导出 `createXxxCommand()`，`cli.ts` 仅 `addCommand` 聚合。业务逻辑保持框架无关。
 - **`src/oauth/`** — OAuth Token 管理（Authorization Code + Client Credentials）。
-- **`src/plugins/`** — 插件系统。`loader.ts` 加载外部插件，`registry.ts` 管理生命周期，`vendor-sse-error` 窥视首包检测限流。
+- **`src/plugins/`** — 插件系统。`loader.ts` 加载外部插件，`registry.ts` 管理生命周期，`builtins/vendor-sse-error` 窥视首包检测限流。
+- **`src/codex-catalog.ts` / `src/codex-types.ts` / `src/server/codex.ts`** — Codex CLI 兼容支持。`CodexCatalogCache` 进程级缓存 `codex debug models --bundled` 输出（懒加载 + 并发去重），`buildCodexModelsResponse` 按 4 层覆盖生成 codex ModelInfo（见「关键设计决策」）。
 - **`test/`** — 镜像 `src/` 结构。
 
 ### Provider Options 分层
 
 类型特定/行为控制字段统一放 `provider.options`，每个类型有自己的 options schema：
 
-- 通用字段（`streamOnly`、`enableFlatModelLookup`）所有类型共享
+- 通用字段（`streamOnly`、`enableFlatModelLookup`、`codex`）所有类型共享
 - `openai-compatible`：`modelsEndpoint`、`includeUsage`
 - `anthropic`：`anthropicVersion`
 - `openai`：`organization`、`project`
@@ -58,12 +63,13 @@ Client → Hono app
 
 ## 关键设计决策
 
-- **Provider 类型**：`providerConfigSchema` 用 `z.discriminatedUnion('type', [...])`，`registry.ts` 按 type 分派。
+- **Provider 类型与协议策略正交**：`providerConfigSchema` 用 `z.discriminatedUnion('type', [...])` 分派 3 种 provider type（连上游），protocol strategy 独立选择下游格式，任意端点可路由到任意 provider type。
 - **`${ENV_NAME}` 占位符**：仅匹配完整字符串（`^\$\{...\}$`），部分匹配不替换。
 - **OAuth fetch 组合**：OAuth → proxy → global 链式。OAuth 激活时 `apiKey` 设为 `oauth-placeholder` 绕过 SDK 校验，由 OAuth fetch 负责注入真实 `Authorization` 头并删除 SDK 自动添加的认证头。Token 刷新用 30 秒余量。启动时自动刷新过期 token，未认证 provider 打印登录 URL 不阻塞。
 - **Anthropic tool_choice**：始终对象格式（`{ type: 'auto' }`），不兼容裸字符串。
 - **Provider options 透传**：不在 `mappedRequestKeys` 内的未知字段作为 `providerOptions.{sdkType}` 转发，key 为 SDK 协议标识符（如 `openaiCompatible`、`anthropic`、`openai`），非用户配置的 provider 名称。
 - **Logger DI**：`createProviderRegistry` 依赖注入 `Logger`，不耦合实现。
+- **Codex catalog 4 层覆盖**：`/codex/v1/models` 为每个模型 id 生成一条 ModelInfo——基底取 codex bundled catalog 中 `templateSlug` 对应条目，`slug`/`display_name` 固定为 id，再按 `settings.codex` → `provider.options.codex` → `model.codex` 三层覆盖。`templateSlug` 缺失时逐层 fallback，全缺省则动态取 catalog 首个 `supported_in_api` slug；`context_window` 缺失时按 `model.limit.context` → 各层 `codex.context_window` → `settings.codex.context_window`（默认 200000）fallback。`CodexCatalogCache` 在 `createApp` 作用域单例，禁 per-request new。
 
 ## TypeScript
 
@@ -77,6 +83,6 @@ Client → Hono app
 
 ## 当前范围（v0）
 
-- 仅支持 `openai-compatible` 和 `anthropic` provider 类型
+- 支持 `openai-compatible`、`anthropic`、`openai` 三种 provider 类型
 - 不做下游客户端鉴权、计费、配额、多租户、数据库或 Web UI
 - 响应形状以 OpenAI Chat Completions 兼容为目标，不保证逐字段原样透传上游响应
