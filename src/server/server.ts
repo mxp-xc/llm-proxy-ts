@@ -13,7 +13,7 @@ import {
 } from '../index.js'
 import { createTokenManagerIfNeeded } from '../oauth/index.js'
 import { logger } from './logging.js'
-import { validateOAuthStatus, generateNonce } from './oauth/startup.js'
+import { generateNonce, refreshAuthStatuses } from './oauth/startup.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 
 async function main(): Promise<void> {
@@ -45,7 +45,6 @@ async function main(): Promise<void> {
   const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth)
   const tokenManager = await createTokenManagerIfNeeded(authFilePath, hasOAuthProviders)
   let nonce: string | undefined
-  let authStatuses: ProviderAuthStatus[] | undefined
   if (tokenManager) {
     nonce = generateNonce()
   }
@@ -53,10 +52,9 @@ async function main(): Promise<void> {
   // 插件 beforeServerStart（可阻塞启动，如 OAuth 登录）
   await pluginRegistry.beforeServerStartAll()
 
-  // 状态校验
-  if (tokenManager) {
-    authStatuses = await validateOAuthStatus(settings, tokenManager)
-  }
+  // OAuth 状态容器：后台刷新回填，/health 通过 getter 懒读取。
+  // 正确性不依赖此预刷新：请求路径的 createOAuthFetch 会独立 ensureValidToken。
+  let authStatuses: ProviderAuthStatus[] = []
 
   const app = createApp({
     settings,
@@ -69,9 +67,8 @@ async function main(): Promise<void> {
       pluginRegistry,
       authFilePath,
     ),
-    ...(tokenManager && nonce
-      ? { tokenManager, nonce, ...(authStatuses ? { authStatuses } : {}) }
-      : {}),
+    getAuthStatuses: () => authStatuses,
+    ...(tokenManager && nonce ? { tokenManager, nonce } : {}),
   })
 
   const server = serve(
@@ -96,10 +93,24 @@ async function main(): Promise<void> {
     }
   })
 
-  // 插件 afterServerStart（非阻塞后台任务）
-  pluginRegistry.afterServerStartAll().catch((err) => {
-    logger.error({ err }, 'plugin afterServerStart error')
-  })
+  // OAuth 状态后台刷新（非阻塞，不延迟端口监听）
+  if (tokenManager) {
+    refreshAuthStatuses(settings, tokenManager)
+      .then((s) => {
+        authStatuses = s
+      })
+      .catch((err) => {
+        logger.error({ err }, 'oauth status refresh failed')
+      })
+  }
+
+  // 插件 afterServerStart（非阻塞后台任务）。afterServerStartAll 内部用
+  // Promise.allSettled 逐个记录插件失败，不会因此 reject；这里的 .catch 只兜底
+  // filter/map 脚手架本身的意外同步抛错（如畸形插件对象），避免落到 unhandledRejection
+  // 只走 console.error 而绕过 pino。
+  pluginRegistry
+    .afterServerStartAll(logger)
+    .catch((err) => logger.error({ err }, 'plugin afterServerStart crashed'))
 }
 
 /**
@@ -115,22 +126,23 @@ function fatalAndExit(err: unknown, message: string): never {
 }
 
 async function start(): Promise<void> {
+  // Global uncaught error handlers — ensure anything that escapes per-request
+  // error handling still reaches pino instead of silently disappearing to stderr.
+  // Installed inside start() so importing this module has no side effects.
+  process.on('uncaughtException', (error) => {
+    fatalAndExit(error, 'uncaught exception')
+  })
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('unhandled rejection', reason)
+  })
+
   try {
     await main()
   } catch (err) {
     fatalAndExit(err, 'startup failed')
   }
 }
-
-// Global uncaught error handlers — ensure anything that escapes per-request
-// error handling still reaches pino instead of silently disappearing to stderr.
-process.on('uncaughtException', (error) => {
-  fatalAndExit(error, 'uncaught exception')
-})
-
-process.on('unhandledRejection', (reason) => {
-  console.error('unhandled rejection', reason)
-})
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   await start()

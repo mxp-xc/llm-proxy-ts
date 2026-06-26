@@ -1,5 +1,4 @@
 import type { ProxyPlugin, PluginContext, PluginResponse } from '../types.js'
-import { registerBuiltInPlugin } from '../loader.js'
 
 export interface VendorSseErrorConfig {
   maxPreviewEvents?: number
@@ -80,7 +79,7 @@ function isVendorSseErrorConfig(value: unknown): value is VendorSseErrorConfig {
   return true
 }
 
-const vendorSseErrorPlugin: ProxyPlugin = {
+export const vendorSseErrorPlugin: ProxyPlugin = {
   name: 'vendor_sse_error',
 
   inspectStreamChunk(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse> {
@@ -92,8 +91,6 @@ const vendorSseErrorPlugin: ProxyPlugin = {
     return Promise.resolve()
   },
 }
-
-registerBuiltInPlugin(vendorSseErrorPlugin)
 
 // ─── Internal helpers ────────────────────────────────────────────
 

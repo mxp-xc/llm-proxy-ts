@@ -179,7 +179,15 @@ export function cleanOldLogs(
 
 // --- Logger factory ---
 
+let logsCleaned = false
+
 export function createLogger(options?: pino.LoggerOptions): pino.Logger {
+  // Clean old log files once on first logger creation (not at import time).
+  if (!logsCleaned) {
+    logsCleaned = true
+    cleanOldLogs()
+  }
+
   const pinoOptions: pino.LoggerOptions = {
     level: LOG_LEVEL,
     name: 'llm-proxy',
@@ -223,9 +231,6 @@ export function createLogger(options?: pino.LoggerOptions): pino.Logger {
 }
 
 export const logger = createLogger()
-
-// Clean old log files on startup
-cleanOldLogs()
 
 // --- Utility exports (unchanged) ---
 

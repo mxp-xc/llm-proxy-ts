@@ -1,6 +1,5 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { ProxyAgent, request } from 'undici'
-import type { Settings } from '../../config.js'
 import type { OpenAICompatibleProviderConfig } from '../../config.js'
 
 export function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
@@ -20,10 +19,10 @@ export function sanitizeHeaders(headers: Record<string, string>): Record<string,
 export function createOpenAICompatibleProvider(
   providerName: string,
   provider: OpenAICompatibleProviderConfig,
-  settings: Settings,
   modelHeaders: Record<string, string>,
   selectedApiKey: string | undefined,
-  customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+  proxyFetch: typeof fetch | undefined,
 ) {
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
   const options: Parameters<typeof createOpenAICompatible>[0] = {
@@ -35,7 +34,7 @@ export function createOpenAICompatibleProvider(
     includeUsage: provider.options?.includeUsage ?? true,
   }
 
-  applyProviderAuth(options, selectedApiKey, customFetch, settings.proxy)
+  applyProviderAuth(options, selectedApiKey, customFetch, proxyFetch)
 
   return createOpenAICompatible(options)
 }
@@ -46,12 +45,15 @@ export function createOpenAICompatibleProvider(
  * 1. Set apiKey if provided
  * 2. Set oauth-placeholder if customFetch is present but no apiKey (bypasses loadApiKey)
  * 3. Compose customFetch with proxy fetch if applicable
+ *
+ * `proxyFetch` 是 registry 作用域预构建的共享 ProxyAgent fetch（per-request 不再 new）;
+ * 由调用方经 createProxyFetch 一次性构建后透传。无代理时传 undefined。
  */
 export function applyProviderAuth(
   options: { apiKey?: string; fetch?: typeof fetch },
   selectedApiKey: string | undefined,
   customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-  proxySettings: { url: string; verify: boolean } | null,
+  proxyFetch: typeof fetch | undefined,
 ): void {
   if (selectedApiKey !== undefined) {
     options.apiKey = selectedApiKey
@@ -63,11 +65,9 @@ export function applyProviderAuth(
   }
 
   if (customFetch) {
-    options.fetch = proxySettings
-      ? customFetch(createProxyFetch(proxySettings.url, proxySettings.verify))
-      : customFetch()
-  } else if (proxySettings) {
-    options.fetch = createProxyFetch(proxySettings.url, proxySettings.verify)
+    options.fetch = proxyFetch ? customFetch(proxyFetch) : customFetch()
+  } else if (proxyFetch) {
+    options.fetch = proxyFetch
   }
 }
 

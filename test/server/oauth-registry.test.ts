@@ -29,7 +29,7 @@ const capturedOptions: Array<{
  * replacing the previous vi.mock of provider-factory.js.
  */
 const stubFactory = {
-  createOpenAICompatible(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAICompatible(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     capturedOptions.push({
       providerName,
       selectedApiKey,
@@ -37,7 +37,7 @@ const stubFactory = {
     })
     return (upstreamModel: string) => ({ upstreamModel, providerName })
   },
-  createAnthropic(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createAnthropic(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     capturedOptions.push({
       providerName,
       selectedApiKey,
@@ -45,7 +45,7 @@ const stubFactory = {
     })
     return (upstreamModel: string) => ({ upstreamModel, providerName })
   },
-  createOpenAI(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAI(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     capturedOptions.push({
       providerName,
       selectedApiKey,

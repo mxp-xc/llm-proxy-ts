@@ -83,13 +83,17 @@ export function validatePluginConstraints(
 // ─── PluginRegistry ──────────────────────────────────────────────
 
 export class PluginRegistry {
+  private readonly allResolvedCache: ResolvedPlugin[]
+
   private constructor(
     private readonly globalPlugins: ResolvedPlugin[],
     private readonly providerPlugins: Map<string, ResolvedPlugin[]>,
     private readonly modelPlugins: Map<string, Map<string, ResolvedPlugin[]>>,
     private readonly settings: Settings,
     private readonly settingsDir: string,
-  ) {}
+  ) {
+    this.allResolvedCache = this.computeAllResolved()
+  }
 
   /**
    * 从 Settings 加载所有插件。
@@ -104,74 +108,95 @@ export class PluginRegistry {
     logger?: Logger,
   ): Promise<PluginRegistry> {
     const log = logger ?? noopLogger
-    const globalPlugins: ResolvedPlugin[] = []
-    const providerPlugins = new Map<string, ResolvedPlugin[]>()
 
-    // 1. 加载全局插件
-    for (const entry of settings.plugins) {
-      const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-      const rp: ResolvedPlugin = {
-        plugin,
-        config: entry.config,
-        providers: entry.providers,
-        ...(modulePath !== undefined ? { modulePath } : {}),
-      }
-
-      log.info(
-        { plugin: plugin.name, module: modulePath, providers: rp.providers },
-        'global plugin loaded',
-      )
-      globalPlugins.push(rp)
-    }
-
-    // 2. 加载 provider 级插件
-    for (const [providerId, provider] of Object.entries(settings.providers)) {
-      const resolved: ResolvedPlugin[] = []
-      for (const entry of provider.plugins) {
+    // 1. 加载全局插件（并行）
+    const globalPlugins = await Promise.all(
+      settings.plugins.map(async (entry) => {
         const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-
-        resolved.push({
+        const rp: ResolvedPlugin = {
           plugin,
           config: entry.config,
-          providers: [providerId],
+          providers: entry.providers,
           ...(modulePath !== undefined ? { modulePath } : {}),
-        })
+        }
         log.info(
-          { plugin: plugin.name, module: modulePath, provider: providerId },
-          'provider plugin loaded',
+          { plugin: plugin.name, module: modulePath, providers: rp.providers },
+          'global plugin loaded',
         )
-      }
+        return rp
+      }),
+    )
+
+    // 2. 加载 provider 级插件（provider 间并行，provider 内并行）
+    const providerPlugins = new Map<string, ResolvedPlugin[]>()
+    const providerResults = await Promise.all(
+      Object.entries(settings.providers).map(async ([providerId, provider]) => {
+        const resolved = await Promise.all(
+          provider.plugins.map(async (entry) => {
+            const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
+            const rp: ResolvedPlugin = {
+              plugin,
+              config: entry.config,
+              providers: [providerId],
+              ...(modulePath !== undefined ? { modulePath } : {}),
+            }
+            log.info(
+              { plugin: plugin.name, module: modulePath, provider: providerId },
+              'provider plugin loaded',
+            )
+            return rp
+          }),
+        )
+        return [providerId, resolved] as const
+      }),
+    )
+    for (const [providerId, resolved] of providerResults) {
       if (resolved.length > 0) {
         providerPlugins.set(providerId, resolved)
       }
     }
 
-    // 3. 加载 model 级插件
+    // 3. 加载 model 级插件（provider/model/entry 三层并行）
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
-    for (const [providerId, provider] of Object.entries(settings.providers)) {
-      for (const [modelKey, modelConfig] of Object.entries(provider.models)) {
-        if (!modelConfig.plugins || modelConfig.plugins.length === 0) continue
-        const resolved: ResolvedPlugin[] = []
-        for (const entry of modelConfig.plugins) {
-          const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-
-          resolved.push({
-            plugin,
-            config: entry.config,
-            providers: [providerId],
-            ...(modulePath !== undefined ? { modulePath } : {}),
-          })
-          log.info(
-            { plugin: plugin.name, module: modulePath, provider: providerId, model: modelKey },
-            'model plugin loaded',
-          )
-        }
+    const modelResults = await Promise.all(
+      Object.entries(settings.providers).map(async ([providerId, provider]) => {
+        const modelEntries = await Promise.all(
+          Object.entries(provider.models).map(async ([modelKey, modelConfig]) => {
+            const resolved: ResolvedPlugin[] = []
+            if (modelConfig.plugins && modelConfig.plugins.length > 0) {
+              const loaded = await Promise.all(
+                modelConfig.plugins.map(async (entry) => {
+                  const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
+                  const rp: ResolvedPlugin = {
+                    plugin,
+                    config: entry.config,
+                    providers: [providerId],
+                    ...(modulePath !== undefined ? { modulePath } : {}),
+                  }
+                  log.info(
+                    { plugin: plugin.name, module: modulePath, provider: providerId, model: modelKey },
+                    'model plugin loaded',
+                  )
+                  return rp
+                }),
+              )
+              resolved.push(...loaded)
+            }
+            return [modelKey, resolved] as const
+          }),
+        )
+        return [providerId, modelEntries] as const
+      }),
+    )
+    for (const [providerId, modelEntries] of modelResults) {
+      const inner = new Map<string, ResolvedPlugin[]>()
+      for (const [modelKey, resolved] of modelEntries) {
         if (resolved.length > 0) {
-          if (!modelPlugins.has(providerId)) {
-            modelPlugins.set(providerId, new Map())
-          }
-          modelPlugins.get(providerId)!.set(modelKey, resolved)
+          inner.set(modelKey, resolved)
         }
+      }
+      if (inner.size > 0) {
+        modelPlugins.set(providerId, inner)
       }
     }
 
@@ -183,12 +208,13 @@ export class PluginRegistry {
 
   // ─── Lifecycle ────────────────────────────────────────────────
 
-  /** 初始化所有插件。每个插件调用一次 init()。 */
+  /** 初始化所有插件。每个插件调用一次 init()（并行，单个失败不阻塞其它）。 */
   async initAll(logger?: Logger, authFilePath?: string): Promise<void> {
     const log = logger ?? noopLogger
 
-    for (const rp of this.allResolved()) {
-      if (rp.plugin.init) {
+    const initables = filterInitable(this.allResolved())
+    const results = await Promise.allSettled(
+      initables.map(async (rp) => {
         const store = this.#resolveStore(authFilePath, rp)
         const ctx: PluginInitContext = {
           providers: new Map(Object.entries(this.settings.providers)),
@@ -197,7 +223,14 @@ export class PluginRegistry {
           log: log.child({ component: 'plugin', plugin: rp.plugin.name }),
         }
         await rp.plugin.init(ctx)
-        log.info({ plugin: rp.plugin.name }, 'plugin initialized')
+        return rp.plugin.name
+      }),
+    )
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        log.info({ plugin: r.value }, 'plugin initialized')
+      } else {
+        log.error({ err: r.reason }, 'plugin init failed')
       }
     }
   }
@@ -211,11 +244,19 @@ export class PluginRegistry {
     }
   }
 
-  /** 服务监听后调用所有插件的 afterServerStart()。 */
-  async afterServerStartAll(): Promise<void> {
-    for (const rp of this.allResolved()) {
-      if (rp.plugin.afterServerStart) {
+  /** 服务监听后调用所有插件的 afterServerStart()（并行，单个失败不阻塞其它）。 */
+  async afterServerStartAll(logger?: Logger): Promise<void> {
+    const log = logger ?? noopLogger
+    const callables = filterAfterStart(this.allResolved())
+    const results = await Promise.allSettled(
+      callables.map(async (rp) => {
         await rp.plugin.afterServerStart()
+        return rp.plugin.name
+      }),
+    )
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        log.error({ err: r.reason }, 'plugin afterServerStart failed')
       }
     }
   }
@@ -312,6 +353,10 @@ export class PluginRegistry {
   }
 
   private allResolved(): ResolvedPlugin[] {
+    return this.allResolvedCache
+  }
+
+  private computeAllResolved(): ResolvedPlugin[] {
     const seen = new Set<Plugin>()
     const result: ResolvedPlugin[] = []
 
@@ -347,6 +392,27 @@ export class PluginRegistry {
 
 function isAuthPlugin(plugin: Plugin): plugin is AuthPlugin {
   return typeof (plugin as AuthPlugin).createFetch === 'function'
+}
+
+/** 筛选带 `init` 的插件，将元素类型收窄为带 `NonNullable<init>` 的 ResolvedPlugin。 */
+function filterInitable(
+  rps: ResolvedPlugin[],
+): Array<ResolvedPlugin & { plugin: { init: NonNullable<Plugin['init']> } }> {
+  return rps.filter(
+    (rp): rp is ResolvedPlugin & { plugin: { init: NonNullable<Plugin['init']> } } =>
+      rp.plugin.init !== undefined,
+  )
+}
+
+/** 筛选带 `afterServerStart` 的插件，将元素类型收窄为带 `NonNullable<afterServerStart>` 的 ResolvedPlugin。 */
+function filterAfterStart(
+  rps: ResolvedPlugin[],
+): Array<ResolvedPlugin & { plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> } }> {
+  return rps.filter(
+    (rp): rp is ResolvedPlugin & {
+      plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> }
+    } => rp.plugin.afterServerStart !== undefined,
+  )
 }
 
 function isProxyPlugin(plugin: Plugin): plugin is ProxyPlugin {

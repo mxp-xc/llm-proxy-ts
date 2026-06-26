@@ -2,8 +2,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadPlugin, registerBuiltInPlugin } from '../../src/plugins/loader.js'
-import type { Plugin } from '../../src/plugins/types.js'
+import { loadPlugin } from '../../src/plugins/loader.js'
 
 describe('loadPlugin', () => {
   let tempDir: string
@@ -177,14 +176,14 @@ describe('loadPlugin', () => {
   })
 
   it('should load built-in plugin by name', async () => {
-    const builtIn: Plugin = {
-      name: 'test-built-in',
-      async init() {},
-    }
-    registerBuiltInPlugin(builtIn)
-
-    const result = await loadPlugin({ name: 'test-built-in', config: {}, providers: [] }, tempDir)
-    expect(result.plugin.name).toBe('test-built-in')
+    // The static built-in registry ships vendor_sse_error; loading it by name
+    // exercises the same built-in lookup path that previously relied on
+    // runtime registerBuiltInPlugin.
+    const result = await loadPlugin(
+      { name: 'vendor_sse_error', config: {}, providers: [] },
+      tempDir,
+    )
+    expect(result.plugin.name).toBe('vendor_sse_error')
     expect(result.modulePath).toBeUndefined()
   })
 

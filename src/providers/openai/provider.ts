@@ -1,14 +1,14 @@
 import { createOpenAI } from '@ai-sdk/openai'
 import { sanitizeHeaders, applyProviderAuth } from '../shared/provider-factory.js'
-import type { OpenAIProviderConfig, Settings } from '../../config.js'
+import type { OpenAIProviderConfig } from '../../config.js'
 
 export function createOpenAIProvider(
   providerName: string,
   provider: OpenAIProviderConfig,
-  settings: Settings,
   modelHeaders: Record<string, string>,
   selectedApiKey: string | undefined,
-  customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+  proxyFetch: typeof fetch | undefined,
 ) {
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
 
@@ -21,7 +21,7 @@ export function createOpenAIProvider(
     options.baseURL = provider.baseURL
   }
 
-  applyProviderAuth(options, selectedApiKey, customFetch, settings.proxy)
+  applyProviderAuth(options, selectedApiKey, customFetch, proxyFetch)
 
   if (provider.options?.organization !== undefined) {
     options.organization = provider.options.organization

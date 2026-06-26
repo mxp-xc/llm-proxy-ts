@@ -174,3 +174,41 @@ describe('RoutingTable flat/alias resolution', () => {
     expect(() => RoutingTable.fromSettings(s)).toThrow(/duplicate model selector 'fast' in provider 'p'/)
   })
 })
+
+describe('RoutingTable prefixed route cache', () => {
+  it('caches prefixed routes — resolve returns same RouteMatch instance for repeated selectors', () => {
+    const s = makeSettings({
+      prov: P({ model: M('up', [{ name: 'aliasName', flat: false }]) }),
+    })
+    const table = RoutingTable.fromSettings(s)
+    const a = table.resolve('prov/model')
+    const b = table.resolve('prov/model')
+    expect(a).toBe(b) // 同一缓存实例,无 per-request buildRoute
+
+    const aliasHit = table.resolve('prov/aliasName')
+    expect(aliasHit.modelKey).toBe('model')
+    expect(aliasHit.modelSelector).toBe('prov/aliasName')
+  })
+
+  it('returns unknown_provider for prefixed selector with unconfigured provider (not in cache)', () => {
+    const s = makeSettings({ prov: P({ model: M('up', []) }) })
+    const table = RoutingTable.fromSettings(s)
+    try {
+      table.resolve('other/model')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      expect((error as RoutingError).code).toBe('unknown_provider')
+    }
+  })
+
+  it('returns unknown_model for prefixed selector with configured provider but unknown model', () => {
+    const s = makeSettings({ prov: P({ model: M('up', []) }) })
+    const table = RoutingTable.fromSettings(s)
+    try {
+      table.resolve('prov/nonexistent')
+      expect.unreachable('should have thrown')
+    } catch (error) {
+      expect((error as RoutingError).code).toBe('unknown_model')
+    }
+  })
+})

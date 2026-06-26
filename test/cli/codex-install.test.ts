@@ -3,8 +3,8 @@ import { createTempDir, writeTempSettings } from '../helpers/temp-file.js'
 import { makeSettings } from '../helpers/settings.js'
 import { writeFile, readFile, mkdir, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildCodexBaseUrl, runCodexInstall } from '../../src/cli/codex/install.js'
-import type { CodexInstallFs } from '../../src/cli/codex/install.js'
+import { buildCodexBaseUrl, runCodexInstall } from '../../src/cli/codex/install-run.js'
+import type { CodexInstallFs } from '../../src/cli/codex/install-run.js'
 
 /** Wrap raw node:fs/promises fns to match the narrower CodexInstallFs interface. */
 function wrapFs(over: { writeFile?: CodexInstallFs['writeFile']; access?: CodexInstallFs['access'] }): CodexInstallFs {

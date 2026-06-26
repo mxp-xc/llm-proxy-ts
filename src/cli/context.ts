@@ -1,7 +1,8 @@
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
-import { resolveSettingsPath, loadEnvironmentFiles } from '../index.js'
+import { resolveSettingsPath } from '../resolve-settings-path.js'
+import { loadEnvironmentFiles } from '../env.js'
 
 export interface CliContext {
   rootDir: string

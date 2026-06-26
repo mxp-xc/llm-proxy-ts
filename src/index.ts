@@ -70,7 +70,7 @@ export type {
   PluginInitContext,
 } from './plugins/types.js'
 export { PluginRegistry, validatePluginConstraints } from './plugins/registry.js'
-export { registerBuiltInPlugin, loadPlugin } from './plugins/loader.js'
+export { loadPlugin } from './plugins/loader.js'
 export { inspectVendorSseError } from './plugins/builtins/vendor-sse-error.js'
 export { createSimpleAuthFetch } from './plugins/helpers.js'
 export type { SimpleAuthCredentials } from './plugins/helpers.js'

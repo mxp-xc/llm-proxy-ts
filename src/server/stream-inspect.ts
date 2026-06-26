@@ -1,5 +1,5 @@
-import type { Settings, ProviderConfig } from '../index.js'
-import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../index.js'
+import type { Settings, ProviderConfig } from '../config.js'
+import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../plugins/types.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
 /** inspectFirstStreamChunk 需要的插件上下文切片 */

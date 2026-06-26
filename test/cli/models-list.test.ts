@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatLimitNum, renderRows } from '../../src/cli/models/list.js'
-import type { ModelRow } from '../../src/cli/models/list.js'
+import { formatLimitNum, renderRows } from '../../src/cli/models/list-run.js'
+import type { ModelRow } from '../../src/cli/models/list-run.js'
 
 describe('formatLimitNum', () => {
   it('returns "-" for undefined', () => {

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import type { Settings, OAuthConfig } from '../../index.js'
-import type { TokenManager } from '../../index.js'
+import type { Settings, OAuthConfig } from '../../config.js'
+import type { TokenManager } from '../../oauth/token-manager.js'
 import { isRecord } from '../../providers/protocol-types.js'
 
 /**

@@ -2,7 +2,6 @@ import { Hono } from 'hono'
 import type { Settings, TokenManager, AuthStatus } from '../index.js'
 import {
   OAuthError,
-  getModel,
   listModels,
   RoutingError,
   RoutingTable,
@@ -41,7 +40,7 @@ export function createApp({
   providerRegistry,
   gateway = defaultGateway,
   nonce,
-  authStatuses,
+  getAuthStatuses,
   pluginRegistry,
   authFilePath,
   codexCatalogCache,
@@ -74,6 +73,12 @@ export function createApp({
     gateway,
     resolveModel,
   }
+
+  // settings 不可变(无 hot-reload),listModels 结果仅依赖 settings。
+  // createApp 作用域一次性预构建,后续 /v1/models + /v1/models/* 请求直接查缓存。
+  // modelsById 直接复用 modelsList 已产出的同一批 OpenAIModel 对象,避免重复枚举。
+  const modelsList = listModels(settings)
+  const modelsById = new Map(modelsList.data.map((m) => [m.id, m]))
 
   // 挂载 OAuth 回调路由
   if (tokenManager && nonce) {
@@ -116,7 +121,8 @@ export function createApp({
       providersConfigured: Object.keys(settings.providers).length,
     }
 
-    if (authStatuses && authStatuses.length > 0) {
+    const authStatuses = getAuthStatuses?.() ?? []
+    if (authStatuses.length > 0) {
       base.auth = Object.fromEntries(
         authStatuses.map((s) => [
           s.provider,
@@ -128,7 +134,7 @@ export function createApp({
     return c.json(base)
   })
 
-  app.get('/v1/models', (c) => c.json(listModels(settings)))
+  app.get('/v1/models', (c) => c.json(modelsList))
 
   app.get('/v1/models/*', (c) => {
     const modelId = c.req.path.replace('/v1/models/', '')
@@ -138,7 +144,8 @@ export function createApp({
         400,
       )
     }
-    const model = getModel(settings, modelId)
+    // modelsById 已覆盖 enumerateModelEntries 产出的全部 id,与 getModel 等价,无需 fallback。
+    const model = modelsById.get(modelId)
     if (!model) {
       return c.json(
         { error: { type: 'invalid_request_error', message: `Model '${modelId}' not found` } },

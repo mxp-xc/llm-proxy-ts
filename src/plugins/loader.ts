@@ -2,15 +2,15 @@ import type { Plugin } from './types.js'
 import type { PluginEntry } from '../config.js'
 import { isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { vendorSseErrorPlugin } from './builtins/vendor-sse-error.js'
 
 // ─── Built-in registry ───────────────────────────────────────────
 
-const builtInPlugins = new Map<string, Plugin>()
-
-/** 注册内置插件。模块加载时调用。 */
-export function registerBuiltInPlugin(plugin: Plugin): void {
-  builtInPlugins.set(plugin.name, plugin)
-}
+// Static registry: built-in plugins are wired here at module load via direct
+// imports. No runtime registration side effects, no mutable public API.
+const builtInPlugins: ReadonlyMap<string, Plugin> = new Map<string, Plugin>([
+  ['vendor_sse_error', vendorSseErrorPlugin],
+])
 
 /** 按 name 查找内置插件（用于无 PluginRegistry 的向后兼容场景） */
 export function getBuiltInPlugin(name: string): Plugin | undefined {

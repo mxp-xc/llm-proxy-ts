@@ -39,11 +39,15 @@ export class RoutingTable {
   private constructor(
     private readonly settings: Settings,
     private readonly flatRoutes: Map<string, RouteMatch>,
+    private readonly prefixedRoutes: Map<string, RouteMatch>,
     private readonly pluginRegistry?: PluginRegistry,
   ) {}
 
   static fromSettings(settings: Settings, pluginRegistry?: PluginRegistry): RoutingTable {
     const flatRoutes = new Map<string, RouteMatch>()
+    // 带前缀入口缓存:settings 不可变,fromSettings 时一次性构建所有 provider/model + 别名路由,
+    // resolve() 带前缀分支直接 Map 查找,消除 per-request buildRoute + 线性别名扫描。
+    const prefixedRoutes = new Map<string, RouteMatch>()
     // 带前缀入口唯一性检测:同 provider 内 {modelKey} ∪ {alias name} 全局唯一,跨 provider 不误报
     const prefixed = new Set<string>()
 
@@ -53,6 +57,7 @@ export class RoutingTable {
     for (const entry of enumerateModelEntries(settings)) {
       const provider = settings.providers[entry.providerName]
       if (!provider) continue
+      // modelKey 对应的带前缀路由(同时被裸名入口复用)
       const route = buildRoute(
         entry.providerName,
         provider,
@@ -69,9 +74,23 @@ export class RoutingTable {
         }
         prefixed.add(key)
       }
+
+      // 注册带前缀路由:modelKey 入口
       assertPrefixedUnique(entry.modelKey)
+      prefixedRoutes.set(`${entry.providerName}/${entry.modelKey}`, route)
+      // 每个别名一条独立路由(modelSelector 不同),复用同一 resolvedPlugins/headers
       for (const alias of entry.aliases) {
         assertPrefixedUnique(alias.name)
+        prefixedRoutes.set(
+          `${entry.providerName}/${alias.name}`,
+          buildRoute(
+            entry.providerName,
+            provider,
+            entry.modelKey,
+            `${entry.providerName}/${alias.name}`,
+            pluginRegistry,
+          ),
+        )
       }
 
       // 裸名入口注册 + ambiguous 检测(flatRoutes 跨 provider 全局)
@@ -91,7 +110,7 @@ export class RoutingTable {
       }
     }
 
-    return new RoutingTable(settings, flatRoutes, pluginRegistry)
+    return new RoutingTable(settings, flatRoutes, prefixedRoutes, pluginRegistry)
   }
 
   resolve(selector: string): RouteMatch {
@@ -126,25 +145,21 @@ export class RoutingTable {
       )
     }
 
-    const [providerName, requestedModel] = selector.split('/') as [string, string]
-    const provider = this.settings.providers[providerName]
-    if (!provider) {
+    // 带前缀路由:fromSettings 时已预构建缓存,直接 Map 查找(命中即返回同一 RouteMatch 实例)。
+    const cached = this.prefixedRoutes.get(selector)
+    if (cached) {
+      return cached
+    }
+
+    // 未命中缓存:区分 unknown_provider / unknown_model 以保持错误语义。
+    const [providerName] = selector.split('/') as [string, string]
+    if (!this.settings.providers[providerName]) {
       throw new RoutingError(
         404,
         'unknown_provider',
         selector,
         'No provider matched requested model selector',
       )
-    }
-
-    if (provider.models[requestedModel]) {
-      return buildRoute(providerName, provider, requestedModel, selector, this.pluginRegistry)
-    }
-
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      if (model.aliases.some((a) => a.name === requestedModel)) {
-        return buildRoute(providerName, provider, modelKey, selector, this.pluginRegistry)
-      }
     }
 
     throw new RoutingError(

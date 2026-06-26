@@ -38,7 +38,7 @@ function createMockAuthPlugin() {
  * model objects for auth plugin integration testing.
  */
 const stubFactory = {
-  createOpenAICompatible(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAICompatible(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,
@@ -46,7 +46,7 @@ const stubFactory = {
       customFetch: customFetch ? 'present' : 'absent',
     })
   },
-  createAnthropic(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createAnthropic(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,
@@ -54,7 +54,7 @@ const stubFactory = {
       customFetch: customFetch ? 'present' : 'absent',
     })
   },
-  createOpenAI(providerName: string, _provider: unknown, _settings: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAI(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,

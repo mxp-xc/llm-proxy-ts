@@ -9,6 +9,7 @@ import type { Logger } from '../types.js'
 import type { PluginRegistry } from '../plugins/registry.js'
 import {
   createOpenAICompatibleProvider,
+  createProxyFetch,
   sanitizeHeaders,
 } from './shared/provider-factory.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
@@ -20,33 +21,36 @@ import { createOpenAIProvider } from './openai/provider.js'
  * Injectable factory that creates provider-specific AI SDK model factories.
  * Used to decouple `createProviderRegistry` from concrete provider implementations,
  * enabling dependency injection in tests without module-level mocking.
+ *
+ * `proxyFetch` 由 registry 作用域预构建(共享 ProxyAgent),per-request 不再 new;
+ * 由 createProviderModelFactory 透传到各工厂。无代理时为 undefined。
  */
 export interface ProviderFactory {
   createOpenAICompatible(
     providerName: string,
     provider: OpenAICompatibleProviderConfig,
-    settings: Settings,
     modelHeaders: Record<string, string>,
     selectedApiKey: string | undefined,
-    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+    proxyFetch: typeof fetch | undefined,
   ): (upstreamModel: string) => LanguageModel
 
   createAnthropic(
     providerName: string,
     provider: AnthropicProviderConfig,
-    settings: Settings,
     modelHeaders: Record<string, string>,
     selectedApiKey: string | undefined,
-    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+    proxyFetch: typeof fetch | undefined,
   ): (upstreamModel: string) => LanguageModel
 
   createOpenAI(
     providerName: string,
     provider: OpenAIProviderConfig,
-    settings: Settings,
     modelHeaders: Record<string, string>,
     selectedApiKey: string | undefined,
-    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+    proxyFetch: typeof fetch | undefined,
   ): (upstreamModel: string) => LanguageModel
 }
 
@@ -54,14 +58,14 @@ export interface ProviderFactory {
 const defaultFactory: ProviderFactory = {
   createOpenAICompatible: createOpenAICompatibleProvider,
   createAnthropic: createAnthropicProvider,
-  createOpenAI(providerName, provider, settings, modelHeaders, selectedApiKey, customFetch) {
+  createOpenAI(providerName, provider, modelHeaders, selectedApiKey, customFetch, proxyFetch) {
     const openaiProvider = createOpenAIProvider(
       providerName,
       provider,
-      settings,
       modelHeaders,
       selectedApiKey,
       customFetch,
+      proxyFetch,
     )
     return (upstreamModel) => openaiProvider.responses(upstreamModel)
   },
@@ -102,13 +106,25 @@ export async function createProviderRegistry(
   const providerFactory = factory ?? defaultFactory
   const apiKeyIndexes = new Map<string, number>()
 
-  // 预构建 auth fetch wrappers（per-provider）
+  // 共享 ProxyAgent fetch:settings 不可变,registry 作用域一次性构建,
+  // 所有 languageModel() 调用复用同一 ProxyAgent(原 per-request new ProxyAgent 消除)。
+  const sharedProxyFetch = settings.proxy
+    ? createProxyFetch(settings.proxy.url, settings.proxy.verify)
+    : undefined
+
+  // 预构建 auth fetch wrappers（per-provider，并行加载）
   const authFetchMap = new Map<string, (baseFetch?: typeof fetch) => typeof fetch>()
   if (pluginRegistry) {
-    for (const providerId of Object.keys(settings.providers)) {
-      const authFetch = await pluginRegistry.createAuthFetch(providerId, log, authFilePath)
-      if (authFetch) {
-        authFetchMap.set(providerId, authFetch)
+    const entries = Object.keys(settings.providers)
+    const results = await Promise.all(
+      entries.map(async (id) => {
+        const af = await pluginRegistry.createAuthFetch(id, log, authFilePath)
+        return [id, af] as const
+      }),
+    )
+    for (const [id, af] of results) {
+      if (af) {
+        authFetchMap.set(id, af)
       }
     }
   }
@@ -120,7 +136,13 @@ export async function createProviderRegistry(
         throw new Error(`Unknown provider '${providerName}'`)
       }
 
-      const modelFactory = createProviderModelFactory(providerName, provider, settings, modelHeaders, providerFactory)
+      const modelFactory = createProviderModelFactory(
+        providerName,
+        provider,
+        modelHeaders,
+        providerFactory,
+        sharedProxyFetch,
+      )
 
       // Auth 插件路径：使用预构建的 fetch wrapper，但保留内置 API Key 注入
       const authFetch = authFetchMap.get(providerName)
@@ -200,13 +222,14 @@ export function createOAuthFetch(
 /**
  * 根据 provider.type 返回对应的 AI SDK provider 工厂函数。
  * 消除 auth plugin / OAuth / static API key 三条路径的重复分派逻辑。
+ * `proxyFetch` 由 registry 作用域共享,透传到具体 provider 工厂。
  */
 function createProviderModelFactory(
   providerName: string,
   provider: ProviderConfig,
-  settings: Settings,
   modelHeaders: Record<string, string>,
   providerFactory: ProviderFactory,
+  proxyFetch: typeof fetch | undefined,
 ): (
   selectedApiKey?: string,
   customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
@@ -216,10 +239,10 @@ function createProviderModelFactory(
       providerFactory.createAnthropic(
         providerName,
         provider,
-        settings,
         modelHeaders,
         selectedApiKey,
         customFetch,
+        proxyFetch,
       )
   }
   if (provider.type === 'openai') {
@@ -227,20 +250,20 @@ function createProviderModelFactory(
       providerFactory.createOpenAI(
         providerName,
         provider,
-        settings,
         modelHeaders,
         selectedApiKey,
         customFetch,
+        proxyFetch,
       )
   }
   return (selectedApiKey, customFetch) =>
     providerFactory.createOpenAICompatible(
       providerName,
       provider,
-      settings,
       modelHeaders,
       selectedApiKey,
       customFetch,
+      proxyFetch,
     )
 }
 
