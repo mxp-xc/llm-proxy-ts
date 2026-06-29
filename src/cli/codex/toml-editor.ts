@@ -234,3 +234,22 @@ export function readProviderTableField(
   }
   return undefined
 }
+
+/** Remove a root-level key line (and its trailing blank line if any). No-op if not found. */
+export function removeTopLevelKey(content: string, key: string): string {
+  const eol = detectEol(content)
+  const lines = splitLines(content, eol)
+  const firstTable = findFirstTableLine(lines)
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  for (let i = 0; i < firstTable; i++) {
+    if (matchesRootKey(lines[i]!, key)) {
+      lines.splice(i, 1)
+      // Remove a single trailing blank line left behind (avoid double-blank gaps).
+      if (i < lines.length && lines[i]!.trim() === '') {
+        lines.splice(i, 1)
+      }
+      return joinLines(lines, eol)
+    }
+  }
+  return content
+}

@@ -22,10 +22,10 @@ const FULL_MODEL = {
 describe('makeSettings codex isolation', () => {
   it('does not share codex reference across makeSettings calls', () => {
     const a = makeSettings()
-    a.codex.default_reasoning_level = 'medium'
+    a.codex.models_catalog.default_reasoning_level = 'medium'
     const b = makeSettings()
     expect(a.codex).not.toBe(b.codex)
-    expect(b.codex.default_reasoning_level).toBeUndefined()
+    expect(b.codex.models_catalog.default_reasoning_level).toBeUndefined()
   })
 })
 
@@ -107,7 +107,18 @@ const CATALOG = new Map<string, CodexModelInfo>([
   ],
   [
     'gpt-5.5',
-    { ...FULL_MODEL, slug: 'gpt-5.5', display_name: 'GPT-5.5', base_instructions: 'codex-5.5' },
+    {
+      ...FULL_MODEL,
+      slug: 'gpt-5.5',
+      display_name: 'GPT-5.5',
+      base_instructions: 'codex-5.5',
+      default_reasoning_level: 'low',
+      supported_reasoning_levels: [
+        { effort: 'low', description: 'Fast' },
+        { effort: 'medium', description: 'Balanced' },
+        { effort: 'high' },
+      ],
+    },
   ],
 ])
 
@@ -210,7 +221,7 @@ describe('buildCodexModelsResponse', () => {
         },
       },
     })
-    settings.codex.default_reasoning_level = 'medium'
+    settings.codex.models_catalog.default_reasoning_level = 'medium'
     const { models } = buildCodexModelsResponse(settings, CATALOG)
     const m = models[0]!
     expect(m.base_instructions).toBe('codex-5.5') // provider templateSlug=gpt-5.5 生效
@@ -304,5 +315,136 @@ describe('buildCodexModelsResponse', () => {
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)
     expect(models[0]!.base_instructions).toBe('codex-5.5') // 动态默认选 gpt-5.5
+  })
+
+  it('reasoning_effort.default maps to default_reasoning_level', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { default: 'high' },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    expect(models[0]!.default_reasoning_level).toBe('high')
+  })
+
+  it('reasoning_effort.supported maps to supported_reasoning_levels preserving template descriptions', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { supported: ['low', 'xhigh'] },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    const m = models[0]!
+    // 'low' exists in template → keeps description; 'xhigh' is new → { effort } only
+    expect(m.supported_reasoning_levels).toEqual([
+      { effort: 'low', description: 'Fast' },
+      { effort: 'xhigh' },
+    ])
+  })
+
+  it('reasoning_effort 2-layer merge: model overrides provider', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        options: {
+          reasoning_effort: { default: 'low', supported: ['low', 'medium'] },
+        },
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { default: 'high' },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    const m = models[0]!
+    // model.default wins; supported inherits from provider
+    expect(m.default_reasoning_level).toBe('high')
+    expect(m.supported_reasoning_levels).toEqual([
+      { effort: 'low', description: 'Fast' },
+      { effort: 'medium', description: 'Balanced' },
+    ])
+  })
+
+  it('raw codex default_reasoning_level override beats reasoning_effort.default (escape hatch)', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { default: 'high' },
+            codex: { default_reasoning_level: 'xhigh' },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    expect(models[0]!.default_reasoning_level).toBe('xhigh')
+  })
+
+  it('only default configured: supported_reasoning_levels keeps template value', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { default: 'high' },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    // supported_reasoning_levels unchanged from template (gpt-5.5 has 3 levels)
+    expect(models[0]!.supported_reasoning_levels).toHaveLength(3)
   })
 })

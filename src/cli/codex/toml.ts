@@ -4,6 +4,8 @@ import {
   readTopLevelKey,
   readProviderTableField,
   formatTomlString,
+  formatTomlBool,
+  removeTopLevelKey,
 } from './toml-editor.js'
 
 export interface CodexConfigEdits {
@@ -13,6 +15,8 @@ export interface CodexConfigEdits {
   baseUrl: string
   wireApi: 'responses'
   modelSlug: string
+  requiresOpenaiAuth: boolean
+  modelReasoningEffort?: string
 }
 
 export interface TomlOverwriteReport {
@@ -35,7 +39,6 @@ export function applyCodexConfigEdits(
     { key: 'model_provider', newValue: formatTomlString(params.providerId) },
     { key: 'model', newValue: formatTomlString(params.modelSlug) },
   ]
-
   for (const { key, newValue } of topKeys) {
     const oldRaw = readTopLevelKey(cur, key)
     if (oldRaw !== undefined && oldRaw !== normalizeTomlString(newValue)) {
@@ -44,25 +47,46 @@ export function applyCodexConfigEdits(
     cur = setTopLevelKey(cur, key, newValue)
   }
 
+  // model_reasoning_effort: set when provided, remove when not (avoid stale value from prior install).
+  if (params.modelReasoningEffort !== undefined) {
+    const formatted = formatTomlString(params.modelReasoningEffort)
+    const oldRaw = readTopLevelKey(cur, 'model_reasoning_effort')
+    if (oldRaw !== undefined && oldRaw !== normalizeTomlString(formatted)) {
+      overwritten.push({ kind: 'top-level-key', key: 'model_reasoning_effort', oldValue: oldRaw, newValue: normalizeTomlString(formatted) })
+    }
+    cur = setTopLevelKey(cur, 'model_reasoning_effort', formatted)
+  } else {
+    const oldRaw = readTopLevelKey(cur, 'model_reasoning_effort')
+    if (oldRaw !== undefined) {
+      overwritten.push({ kind: 'top-level-key', key: 'model_reasoning_effort', oldValue: oldRaw, newValue: '<removed>' })
+      cur = removeTopLevelKey(cur, 'model_reasoning_effort')
+    }
+  }
+
   // Provider table.
   const fields: Record<string, string | boolean> = {
     name: params.providerName,
     base_url: params.baseUrl,
     wire_api: params.wireApi,
+    requires_openai_auth: params.requiresOpenaiAuth,
   }
   const oldName = readProviderTableField(cur, params.providerId, 'name')
   const oldBaseUrl = readProviderTableField(cur, params.providerId, 'base_url')
   const oldWireApi = readProviderTableField(cur, params.providerId, 'wire_api')
+  const oldRequiresAuth = readProviderTableField(cur, params.providerId, 'requires_openai_auth')
+  const requiresAuthStr = formatTomlBool(params.requiresOpenaiAuth)
   if (
     oldName !== undefined ||
     oldBaseUrl !== undefined ||
-    oldWireApi !== undefined
+    oldWireApi !== undefined ||
+    oldRequiresAuth !== undefined
   ) {
     const changed =
       (oldName !== undefined && oldName !== params.providerName) ||
       (oldBaseUrl !== undefined && oldBaseUrl !== params.baseUrl) ||
-      (oldWireApi !== undefined && oldWireApi !== params.wireApi)
-    if (changed || oldName === undefined || oldBaseUrl === undefined || oldWireApi === undefined) {
+      (oldWireApi !== undefined && oldWireApi !== params.wireApi) ||
+      (oldRequiresAuth !== undefined && oldRequiresAuth !== requiresAuthStr)
+    if (changed || oldName === undefined || oldBaseUrl === undefined || oldWireApi === undefined || oldRequiresAuth === undefined) {
       overwritten.push({
         kind: 'provider-table',
         key: params.providerId,

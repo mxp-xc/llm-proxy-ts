@@ -88,12 +88,35 @@ export const codexModelOverrideSchema = codexModelInfoSchema
 
 export type CodexModelOverride = z.infer<typeof codexModelOverrideSchema>
 
-/** settings.codex 专属：在 codexModelOverrideSchema 基础上给 templateSlug / context_window 加默认值 */
-export const codexSettingsSchema = codexModelOverrideSchema
+/** codex install 配置（仅全局 settings.codex.install） */
+export const codexInstallSchema = z
+  .object({
+    providerId: z.string().min(1).default('llm-proxy'),
+    providerName: z.string().min(1).default('LLM Proxy'),
+    requiresOpenaiAuth: z.boolean().default(false),
+  })
+  .strict()
+  .default({})
+
+export type CodexInstallConfig = z.infer<typeof codexInstallSchema>
+
+/** settings.codex.models_catalog：catalog passthrough 覆盖 + context_window 默认值 */
+const codexCatalogDefaultsSchema = codexModelOverrideSchema
   .extend({
-    templateSlug: z.string().min(1).optional(),
     context_window: z.number().int().positive().default(200000),
   })
   .strip()
+
+/**
+ * settings.codex 从扁平结构重构为 { models_catalog, install }：
+ * - models_catalog：原 codex catalog passthrough 覆盖字段（templateSlug、context_window、default_reasoning_level 等）
+ * - install：codex install 写入 config.toml 的 provider 配置
+ */
+export const codexSettingsSchema = z
+  .object({
+    models_catalog: codexCatalogDefaultsSchema.default({}),
+    install: codexInstallSchema,
+  })
+  .strict()
 
 export type CodexSettings = z.infer<typeof codexSettingsSchema>

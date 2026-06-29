@@ -196,13 +196,19 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     clack.outro('Aborted')
     return
   }
+  const { providerId, providerName, requiresOpenaiAuth } = settings.codex.install
+  // 从已构建 catalog 中取默认模型的 default_reasoning_level（非空字符串时写入 config.toml）
+  const defaultModel = modelsRes.models.find((m) => m.slug === defaultSlug)
+  const reasoningLevel = defaultModel?.default_reasoning_level
   const { content: newConfig, overwritten } = applyCodexConfigEdits(rawConfig, {
     catalogFilename: DEFAULT_CATALOG_FILENAME,
-    providerId: 'llm-proxy',
-    providerName: 'LLM Proxy',
+    providerId,
+    providerName,
     baseUrl,
     wireApi: 'responses',
     modelSlug: defaultSlug,
+    requiresOpenaiAuth,
+    ...(reasoningLevel ? { modelReasoningEffort: reasoningLevel } : {}),
   })
   for (const report of overwritten) {
     clack.log.warn(`Overwrote ${report.key}: ${report.oldValue} → ${report.newValue}`)
@@ -227,7 +233,7 @@ function mapCatalogError(err: unknown): string {
   }
   // buildCodexModelsResponse：settings 配的 templateSlug 不在 catalog
   if (message.includes('template slug not in catalog')) {
-    return `${message} — check the 'codex.templateSlug' setting (global/provider/model layers).`
+    return `${message} — check the 'codex.models_catalog.templateSlug' setting (global/provider/model layers).`
   }
   // CodexCatalogCache：stdout 畸形 / schema 校验失败 / 其他
   return `Failed to build codex catalog: ${message}`

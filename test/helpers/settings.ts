@@ -6,7 +6,10 @@ export const baseSettings: Settings = {
   proxy: null,
   routing: { enableFlatModelLookup: false },
   plugins: [],
-  codex: { context_window: 200000 },
+  codex: {
+    models_catalog: { context_window: 200000 },
+    install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false },
+  },
   providers: {},
 }
 
@@ -18,7 +21,10 @@ export function makeSettings(
     ...baseSettings,
     service: { ...baseSettings.service },
     routing: { ...baseSettings.routing },
-    codex: { ...baseSettings.codex },
+    codex: {
+      models_catalog: { ...baseSettings.codex.models_catalog },
+      install: { ...baseSettings.codex.install },
+    },
     providers,
     ...overrides,
   }

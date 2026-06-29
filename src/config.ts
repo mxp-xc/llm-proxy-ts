@@ -49,6 +49,29 @@ export const modelLimitSchema = z.object({
   output: z.number().int().positive().optional(),
 })
 
+/** 内置 effort 级别 */
+const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** effort 值：内置 enum 提示 + 任意自定义字符串 */
+const effortValueSchema = z.union([
+  z.enum(effortLevels),
+  z.string().min(1),
+])
+
+/** reasoning effort 配置（模型属性，2 层：model + provider.options） */
+export const reasoningEffortConfigSchema = z
+  .object({
+    default: effortValueSchema.optional(),
+    supported: z.array(effortValueSchema).optional(),
+  })
+  .strict()
+  .refine(
+    (data) => data.default === undefined || data.supported === undefined || data.supported.includes(data.default),
+    { message: 'default must be one of the supported values' },
+  )
+
+export type ReasoningEffortConfig = z.infer<typeof reasoningEffortConfigSchema>
+
 // ─── Alias entry schema ─────────────────────────────────────────
 const aliasEntryObjectSchema = z.object({
   name: z.string().min(1),
@@ -70,6 +93,7 @@ export const modelRouteConfigSchema = z.object({
   headers: z.record(z.string(), z.string()).optional().default({}),
   plugins: z.array(pluginEntrySchema).optional().default([]),
   limit: modelLimitSchema.optional(),
+  reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
 })
 
@@ -88,6 +112,7 @@ export const oauthConfigSchema = z.object({
 const commonProviderOptionsSchema = z.object({
   streamOnly: z.boolean().optional(),
   enableFlatModelLookup: z.boolean().optional(),
+  reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
 })
 

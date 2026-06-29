@@ -54,7 +54,7 @@ function modelDef(upstreamModel: string) {
   return { upstreamModel, aliases: [], headers: {}, plugins: [] }
 }
 
-function settingsJson(providers: unknown, codex: unknown = { context_window: 204800 }): string {
+function settingsJson(providers: unknown, codex: unknown = { models_catalog: { context_window: 204800 } }): string {
   return JSON.stringify({
     service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
     providers,
@@ -170,7 +170,7 @@ describe('runCodexInstall', () => {
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
     const badSettingsPath = await writeSettings(
       { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
-      { templateSlug: 'nonexistent', context_window: 204800 },
+      { models_catalog: { templateSlug: 'nonexistent', context_window: 204800 } },
     )
     const writeFileSpy = vi.fn()
     await runCodexInstall({
@@ -332,5 +332,58 @@ describe('runCodexInstall', () => {
       prompts: { selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'], selectDefaultModel: async () => 'nonexistent' },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
+  })
+
+  it('writes custom providerId and requires_openai_auth from settings', async () => {
+    const customSettingsPath = await writeSettings(
+      { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
+      { models_catalog: { context_window: 204800 }, install: { providerId: 'my-proxy', requiresOpenaiAuth: true } },
+    )
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const { fs, writtenConfig } = capturingFs()
+    await runCodexInstall({
+      settingsPath: customSettingsPath,
+      catalogFetcher,
+      fs,
+      codexHome: tmp.dir,
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+    })
+    expect(writtenConfig()).toContain('model_provider = "my-proxy"')
+    expect(writtenConfig()).toContain('[model_providers.my-proxy]')
+    expect(writtenConfig()).toContain('requires_openai_auth = true')
+  })
+
+  it('writes model_reasoning_effort from default model default_reasoning_level', async () => {
+    const settingsPath = await writeSettings({
+      zhipu: {
+        ...zhipuProvider({ 'glm-5.2': { upstreamModel: 'glm-5.2', aliases: [], headers: {}, plugins: [], reasoning_effort: { default: 'xhigh' } } }),
+      },
+    })
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const { fs, writtenConfig } = capturingFs()
+    await runCodexInstall({
+      settingsPath,
+      catalogFetcher,
+      fs,
+      codexHome: tmp.dir,
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+    })
+    expect(writtenConfig()).toContain('model_reasoning_effort = "xhigh"')
+  })
+
+  it('omits model_reasoning_effort when default model has no default_reasoning_level', async () => {
+    const settingsPath = await writeSettings({
+      zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }),
+    })
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const { fs, writtenConfig } = capturingFs()
+    await runCodexInstall({
+      settingsPath,
+      catalogFetcher,
+      fs,
+      codexHome: tmp.dir,
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+    })
+    expect(writtenConfig()).not.toContain('model_reasoning_effort')
   })
 })

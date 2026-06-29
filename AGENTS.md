@@ -54,7 +54,7 @@ Client → Hono app
 
 类型特定/行为控制字段统一放 `provider.options`，每个类型有自己的 options schema：
 
-- 通用字段（`streamOnly`、`enableFlatModelLookup`、`codex`）所有类型共享
+- 通用字段（`streamOnly`、`enableFlatModelLookup`、`reasoning_effort`、`codex`）所有类型共享
 - `openai-compatible`：`modelsEndpoint`、`includeUsage`
 - `anthropic`：`anthropicVersion`
 - `openai`：`organization`、`project`
@@ -69,7 +69,8 @@ Client → Hono app
 - **Anthropic tool_choice**：始终对象格式（`{ type: 'auto' }`），不兼容裸字符串。
 - **Provider options 透传**：不在 `mappedRequestKeys` 内的未知字段作为 `providerOptions.{sdkType}` 转发，key 为 SDK 协议标识符（如 `openaiCompatible`、`anthropic`、`openai`），非用户配置的 provider 名称。
 - **Logger DI**：`createProviderRegistry` 依赖注入 `Logger`，不耦合实现。
-- **Codex catalog 4 层覆盖**：`/codex/v1/models` 为每个模型 id 生成一条 ModelInfo——基底取 codex bundled catalog 中 `templateSlug` 对应条目，`slug`/`display_name` 固定为 id，再按 `settings.codex` → `provider.options.codex` → `model.codex` 三层覆盖。`templateSlug` 缺失时逐层 fallback，全缺省则动态取 catalog 首个 `supported_in_api` slug；`context_window` 缺失时按 `model.limit.context` → 各层 `codex.context_window` → `settings.codex.context_window`（默认 200000）fallback。`CodexCatalogCache` 在 `createApp` 作用域单例，禁 per-request new。
+- **Codex catalog 4 层覆盖**：`/codex/v1/models` 为每个模型 id 生成一条 ModelInfo——基底取 codex bundled catalog 中 `templateSlug` 对应条目，`slug`/`display_name` 固定为 id，再按 `settings.codex.models_catalog` → `provider.options.codex` → `model.codex` 三层 catalog override 覆盖。`templateSlug` 缺失时逐层 fallback，全缺省则动态取 catalog 首个 `supported_in_api` slug；`context_window` 缺失时按 `model.limit.context` → 各层 `codex.context_window` → `settings.codex.models_catalog.context_window`（默认 200000）fallback。`reasoning_effort`（模型属性，2 层 model + provider）在 catalog override 之前应用，映射到 `default_reasoning_level` / `supported_reasoning_levels`；raw catalog override 作为 escape hatch 可覆盖。`CodexCatalogCache` 在 `createApp` 作用域单例，禁 per-request new。
+- **Codex install 配置**：`settings.codex.install`（providerId 默认 `llm-proxy`、providerName 默认 `LLM Proxy`、requiresOpenaiAuth 默认 `false`）控制 `pnpm dev codex install` 写入 `~/.codex/config.toml` 的 provider table；默认模型的 `default_reasoning_level` 非空时写入 `model_reasoning_effort` 顶层 key。
 
 ## TypeScript
 

@@ -10,6 +10,7 @@ export type {
   PluginEntry,
   AliasEntry,
   ModelRouteConfig,
+  ReasoningEffortConfig,
   OAuthConfig,
   OpenAICompatibleProviderConfig,
   AnthropicProviderConfig,

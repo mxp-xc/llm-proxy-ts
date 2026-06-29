@@ -22,6 +22,24 @@
     //   }
     // }
   ],
+  "codex": {
+    // Codex CLI catalog overrides (passthrough to codex bundled catalog):
+    "models_catalog": {
+      // Default context window when model.limit.context is not set.
+      "context_window": 200000,
+      // Template slug from codex bundled catalog (fallback: first supported_in_api entry).
+      // "templateSlug": "gpt-5.4",
+    },
+    // Codex install config (pnpm dev codex install → ~/.codex/config.toml):
+    "install": {
+      // Provider id in [model_providers.<id>] table; also written as model_provider.
+      // "providerId": "llm-proxy",
+      // Display name in the provider table.
+      // "providerName": "LLM Proxy",
+      // Whether codex sends OpenAI auth headers to the proxy.
+      "requiresOpenaiAuth": true,
+    },
+  },
   "providers": {
     "local-openai": {
       "type": "openai-compatible",
@@ -40,11 +58,18 @@
       //   // "includeUsage": false,
       //   // Force all requests through streaming path (for providers that only support streaming).
       //   // "streamOnly": true,
+      //   // Reasoning effort default for all models under this provider:
+      //   // "reasoning_effort": { "default": "medium", "supported": ["low", "medium", "high"] },
       // },
       "plugins": ["vendor_sse_error"],
       "models": {
         "gpt-5.5": {
           "upstreamModel": "gpt-5.5",
+          // Reasoning effort (model property, used by codex catalog + config.toml):
+          // "reasoning_effort": {
+          //   "default": "high",
+          //   "supported": ["low", "medium", "high", "xhigh"],
+          // },
         },
       },
     },

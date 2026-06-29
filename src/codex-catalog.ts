@@ -73,7 +73,7 @@ function resolveTemplateSlug(settings: Settings, entry: ModelEntry): string | un
   return (
     model?.codex?.templateSlug ??
     provider?.options?.codex?.templateSlug ??
-    settings.codex.templateSlug
+    settings.codex.models_catalog.templateSlug
   )
 }
 
@@ -84,8 +84,39 @@ function resolveContextWindow(settings: Settings, entry: ModelEntry): number {
   return (
     model?.codex?.context_window ??
     provider?.options?.codex?.context_window ??
-    settings.codex.context_window
+    settings.codex.models_catalog.context_window
   )
+}
+
+/** reasoning_effort 2 层逐字段合并（provider → model，各取最具体非 undefined 值） */
+function resolveReasoningEffort(
+  settings: Settings,
+  entry: ModelEntry,
+): { default: string; supported: string[] } | undefined {
+  const provider = settings.providers[entry.providerName]
+  const model = provider?.models[entry.modelKey]
+  const providerEffort = provider?.options?.reasoning_effort
+  const modelEffort = model?.reasoning_effort
+  const defaultEffort = modelEffort?.default ?? providerEffort?.default
+  const supportedEfforts = modelEffort?.supported ?? providerEffort?.supported
+  if (defaultEffort === undefined && supportedEfforts === undefined) return undefined
+  // At least one is defined; fill the other with a sentinel that callers skip
+  return {
+    default: defaultEffort ?? '',
+    supported: supportedEfforts ?? [],
+  }
+}
+
+/**
+ * 将用户配置的 effort 字符串数组映射为 codex catalog 的 supported_reasoning_levels。
+ * 优先复用 template 中同 effort 条目（保留 description），无则新建 { effort }。
+ */
+function mergeSupportedLevels(
+  template: CodexModelInfo['supported_reasoning_levels'],
+  efforts: string[],
+): CodexModelInfo['supported_reasoning_levels'] {
+  const byEffort = new Map(template.map((l) => [l.effort, l]))
+  return efforts.map((effort) => byEffort.get(effort) ?? { effort })
 }
 
 const FALLBACK_DEFAULT_SLUG = 'gpt-5.4'
@@ -128,8 +159,17 @@ export function buildCodexModelsResponse(
       info.supported_in_api = true
       info.priority = 0
       info.experimental_supported_tools = []
-      // 3. 三层覆盖 global → provider → model
-      info = applyOverride(info, settings.codex)
+      // 3. reasoning_effort（模型属性，2 层）→ catalog 的 default_reasoning_level / supported_reasoning_levels
+      const effort = resolveReasoningEffort(settings, entry)
+      if (effort && effort.default !== '') info.default_reasoning_level = effort.default
+      if (effort && effort.supported.length > 0) {
+        info.supported_reasoning_levels = mergeSupportedLevels(
+          template.supported_reasoning_levels,
+          effort.supported,
+        )
+      }
+      // 4. 三层 catalog override（escape hatch，应用顺序在后，覆盖 reasoning_effort）
+      info = applyOverride(info, settings.codex.models_catalog)
       if (provider?.options?.codex) info = applyOverride(info, provider.options.codex)
       if (model?.codex) info = applyOverride(info, model.codex)
 
