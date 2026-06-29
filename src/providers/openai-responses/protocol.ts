@@ -95,6 +95,14 @@ export type OpenAIResponsesRequest = z.infer<typeof openAIResponsesRequestSchema
 // ─── Validation ──────────────────────────────────────────────
 
 export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesRequest {
+  // Codex CLI 发送显式 null 表示"未设置"（与 OpenAI API 语义一致）。
+  // zod 的 .optional() 不接受 null，mapping 层的 !== undefined 也不防 null。
+  // 在此统一剔除顶层 null 值，使其与 undefined 等价，避免 schema 400 或 mapping 500。
+  if (isRecord(value)) {
+    for (const key of Object.keys(value)) {
+      if (value[key] === null) delete value[key]
+    }
+  }
   return openAIResponsesRequestSchema.parse(value)
 }
 

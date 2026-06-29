@@ -538,6 +538,35 @@ describe('mapResponsesRequestToAISDKInput', () => {
     const result = mapResponsesRequestToAISDKInput({ model: 'gpt-4o', input: 'hi' })
     expect(result.providerOptions).toBeUndefined()
   })
+
+  // Codex CLI sends explicit null for optional fields it wants to "unset".
+  // validateOpenAIResponsesRequest strips top-level nulls so schema + mapping see undefined.
+  it('strips top-level null fields in validate (Codex CLI compatibility)', () => {
+    const validated = validateOpenAIResponsesRequest({
+      model: 'gpt-5', input: 'hi',
+      reasoning: null,
+      text: null,
+      store: null,
+      prompt_cache_key: null,
+      client_metadata: null,
+      parallel_tool_calls: null,
+      instructions: null,
+      temperature: null,
+      top_p: null,
+      max_output_tokens: null,
+    })
+    // All null fields removed, schema-defined fields are undefined
+    expect(validated.reasoning).toBeUndefined()
+    expect(validated.store).toBeUndefined()
+    expect(validated.temperature).toBeUndefined()
+    expect(validated.parallel_tool_calls).toBeUndefined()
+
+    // Mapping then works without crash
+    const result = mapResponsesRequestToAISDKInput(validated)
+    expect(result.providerOptions).toBeUndefined()
+    expect(result.system).toBeUndefined()
+    expect(result.temperature).toBeUndefined()
+  })
 })
 
 describe('getResponsesCustomToolNames', () => {

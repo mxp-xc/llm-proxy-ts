@@ -72,7 +72,14 @@ export function applyProviderAuth(
 }
 
 export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {
-  const dispatcher = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: verify } })
+  // undici 8 默认 allowH2: true（lib/core/connect.js），经 CONNECT 隧道连 HTTPS 上游会 ALPN 协商 h2。
+  // 实测经 HTTP 代理连上游时，大流式响应偶发 NGHTTP2_FLOW_CONTROL_ERROR（ERR_HTTP2_STREAM_ERROR；
+  // undici h2 client 走 node:http2 的 ClientHttp2Stream）。强制 HTTP/1.1 规避 HTTP/2 流控问题。
+  const dispatcher = new ProxyAgent({
+    uri: proxyUrl,
+    requestTls: { rejectUnauthorized: verify },
+    allowH2: false,
+  })
 
   return async (input, init) => {
     const url =
