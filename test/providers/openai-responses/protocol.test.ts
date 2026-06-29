@@ -219,7 +219,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.messages).toEqual([
       {
         role: 'assistant',
-        content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: '*** Begin Patch\n...' }],
+        content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: { input: '*** Begin Patch\n...' } }],
       },
       {
         role: 'tool',
@@ -308,7 +308,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.tools!['get_weather']!.description).toBe('Get weather')
   })
 
-  it('ignores non-function tools when building ToolSet', () => {
+  it('ignores non-function hosted tools but shims custom/tool_search for non-openai providers', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o', input: 'hi',
       tools: [
@@ -316,10 +316,10 @@ describe('mapResponsesRequestToAISDKInput', () => {
         { type: 'web_search' },
         { type: 'custom', name: 'apply_patch' },
         { type: 'namespace', name: 'mcp__node_repl' },
-        { type: 'tool_search' },
+        { type: 'tool_search', execution: 'server' },
       ],
     })
-    expect(Object.keys(result.tools!)).toEqual(['get_weather'])
+    expect(Object.keys(result.tools!).sort()).toEqual(['apply_patch', 'get_weather'])
   })
 
   it('flattens namespace tools into top-level function tools with mcp__ prefix', () => {
@@ -390,12 +390,73 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(Object.keys(result.tools!).sort()).toEqual(['apply_patch', 'shell_command'])
   })
 
-  it('skips apply_patch custom tool for openai-compatible provider', () => {
+  it('shims apply_patch custom tool as function for openai-compatible provider', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-5', input: 'hi',
-      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+      tools: [{ type: 'custom', name: 'apply_patch', description: 'apply patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
     }, { providerType: 'openai-compatible' })
-    expect(result.tools).toBeUndefined()
+    expect(result.tools).toBeDefined()
+    expect(Object.keys(result.tools!)).toEqual(['apply_patch'])
+    const tool = result.tools!['apply_patch']!
+    expect(tool.inputSchema).toBeDefined()
+    expect(tool.description).toContain('apply patch')
+    expect(tool.description).toContain('lark grammar')
+    expect(tool.description).toContain('start:')
+  })
+
+  it('shims non-apply_patch custom tool as function for openai-compatible provider', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5', input: 'hi',
+      tools: [{ type: 'custom', name: 'my_grammar_tool', description: 'my tool', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+    }, { providerType: 'openai-compatible' })
+    expect(Object.keys(result.tools!)).toEqual(['my_grammar_tool'])
+    expect(result.tools!['my_grammar_tool']!.description).toContain('my tool')
+    expect(result.tools!['my_grammar_tool']!.description).toContain('lark grammar')
+  })
+
+  it('wraps custom_tool_call input as {input: text} for shimmed (non-openai) provider', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [
+        { type: 'custom_tool_call', call_id: 'call_1', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch' },
+        { type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' },
+      ],
+    }, { providerType: 'openai-compatible' })
+    expect(result.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: { input: '*** Begin Patch\n*** End Patch' } }],
+    })
+  })
+
+  it('preserves custom_tool_call input as-is for openai provider', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [
+        { type: 'custom_tool_call', call_id: 'call_1', name: 'apply_patch', input: '*** Begin Patch\n*** End Patch' },
+      ],
+    }, { providerType: 'openai' })
+    expect(result.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: '*** Begin Patch\n*** End Patch' }],
+    })
+  })
+
+  it('maps tool_search_call input item for shimmed provider', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [
+        { type: 'tool_search_call', call_id: 'ts_1', arguments: { query: 'browser', limit: 5 } },
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [{ name: 'open_page' }] },
+      ],
+    }, { providerType: 'openai-compatible' })
+    expect(result.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'tool-call', toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'browser', limit: 5 } }],
+    })
+    expect(result.messages[1]).toEqual({
+      role: 'tool',
+      content: [{ type: 'tool-result', toolCallId: 'ts_1', toolName: 'tool_search', output: { type: 'text', value: JSON.stringify([{ name: 'open_page' }]) } }],
+    })
   })
 
   it('passes web_search tool through for openai provider', () => {
@@ -428,10 +489,20 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(Object.keys(result.tools!)).toEqual(['tool_search'])
   })
 
-  it('skips tool_search tool for openai-compatible provider', () => {
+  it('shims client-executed tool_search as function for openai-compatible provider', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-5', input: 'hi',
-      tools: [{ type: 'tool_search', execution: 'client' }],
+      tools: [{ type: 'tool_search', execution: 'client', description: 'Tool discovery', parameters: { type: 'object', properties: { query: { type: 'string' } } } }],
+    }, { providerType: 'openai-compatible' })
+    expect(result.tools).toBeDefined()
+    expect(Object.keys(result.tools!)).toEqual(['tool_search'])
+    expect(result.tools!['tool_search']!.description).toBe('Tool discovery')
+  })
+
+  it('skips server-executed tool_search for openai-compatible provider', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5', input: 'hi',
+      tools: [{ type: 'tool_search', execution: 'server' }],
     }, { providerType: 'openai-compatible' })
     expect(result.tools).toBeUndefined()
   })

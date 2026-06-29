@@ -552,4 +552,105 @@ describe('renderOpenAIResponseSSE', () => {
     expect(item).toBeDefined()
     expect(result.output.some(o => o.type === 'function_call')).toBe(false)
   })
+
+  // shimmed custom tool: function tool returns {"input":"patch"}, renderer extracts input field
+  it('decodes shimmed custom tool input as bare patch text in streaming', async () => {
+    async function* shimmedStream() {
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify({ input: applyPatchText }) }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_s' } }
+    }
+    const stream = renderOpenAIResponseSSE({
+      model: 'gpt-5',
+      stream: shimmedStream() as AsyncIterable<ProxyStreamPart>,
+      customToolNames: new Set(['apply_patch']),
+      customToolShimmed: true,
+    })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const doneItem = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(doneItem.type).toBe('custom_tool_call')
+    if (doneItem.type === 'custom_tool_call') {
+      expect(doneItem.input).toBe(applyPatchText)
+    }
+  })
+
+  it('decodes shimmed custom tool input as bare patch text in non-streaming', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify({ input: applyPatchText }) }],
+      customToolNames: new Set(['apply_patch']),
+      customToolShimmed: true,
+    })
+    const item = result.output.find(o => o.type === 'custom_tool_call')
+    expect(item).toBeDefined()
+    if (item && item.type === 'custom_tool_call') {
+      expect(item.input).toBe(applyPatchText)
+    }
+  })
+
+  it('skips tool-input-delta for shimmed custom tool and emits complete input at tool-call', async () => {
+    async function* shimmedDeltaStream() {
+      yield { type: 'tool-input-start', id: 'call_1', toolName: 'apply_patch' }
+      yield { type: 'tool-input-delta', id: 'call_1', delta: '{"inp' }
+      yield { type: 'tool-input-delta', id: 'call_1', delta: 'ut":"*** Begin Patch"}' }
+      yield { type: 'tool-input-end', id: 'call_1' }
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify({ input: applyPatchText }) }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_sd' } }
+    }
+    const stream = renderOpenAIResponseSSE({
+      model: 'gpt-5',
+      stream: shimmedDeltaStream() as AsyncIterable<ProxyStreamPart>,
+      customToolNames: new Set(['apply_patch']),
+      customToolShimmed: true,
+    })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const deltaEvents = events.filter(e => e.event === 'response.custom_tool_call_input.delta')
+    expect(deltaEvents.length).toBe(1)
+    expect((deltaEvents[0]!.data as { delta: string }).delta).toBe(applyPatchText)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const doneItem = (done!.data as ResponseOutputItemDoneEvent).item
+    if (doneItem.type === 'custom_tool_call') {
+      expect(doneItem.input).toBe(applyPatchText)
+    }
+  })
+
+  it('renders shimmed tool_search as tool_search_call in streaming', async () => {
+    async function* tsStream() {
+      yield { type: 'tool-call', toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'browser', limit: 5 } }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_ts' } }
+    }
+    const stream = renderOpenAIResponseSSE({
+      model: 'gpt-5',
+      stream: tsStream() as AsyncIterable<ProxyStreamPart>,
+      toolSearchShimmed: true,
+    })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    const done = events.find(e => e.event === 'response.output_item.done')
+    const doneItem = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(doneItem.type).toBe('tool_search_call')
+    if (doneItem.type === 'tool_search_call') {
+      expect(doneItem.call_id).toBe('ts_1')
+      expect(doneItem.execution).toBe('client')
+      expect(JSON.parse(doneItem.arguments)).toEqual({ query: 'browser', limit: 5 })
+    }
+  })
+
+  it('renders shimmed tool_search as tool_search_call in non-streaming', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'test', limit: 3 } }],
+      toolSearchShimmed: true,
+    })
+    const item = result.output.find(o => o.type === 'tool_search_call')
+    expect(item).toBeDefined()
+    if (item && item.type === 'tool_search_call') {
+      expect(item.call_id).toBe('ts_1')
+      expect(item.execution).toBe('client')
+      expect(JSON.parse(item.arguments)).toEqual({ query: 'test', limit: 3 })
+    }
+  })
 })

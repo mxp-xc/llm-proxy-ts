@@ -27,6 +27,10 @@ export interface RenderResultInput {
   /** 请求侧声明的 custom grammar tool（type:'custom'）名称集合。
    *  供 openai-responses renderer 判别 custom_tool_call；其他 renderer 忽略。 */
   customToolNames?: Set<string>
+  /** custom tool 是否被 shimmed 为 function tool（openai-compatible provider）。 */
+  customToolShimmed?: boolean
+  /** tool_search(client) 是否被 shimmed 为 function tool（openai-compatible provider）。 */
+  toolSearchShimmed?: boolean
 }
 
 /**

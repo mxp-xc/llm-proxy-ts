@@ -358,4 +358,61 @@ describe('POST /codex/v1/responses', () => {
     })
     expect(res.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
   })
+
+  // openai-compatible provider end-to-end: shimmed apply_patch
+  it('shims apply_patch for openai-compatible provider and renders custom_tool_call', async () => {
+    const gateway = makeGateway({
+      stream() {
+        return (async function* () {
+          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify({ input: '*** Begin Patch\n*** End Patch' }) }
+          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+        })() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openrouter/chat',
+      input: 'hi',
+      stream: true,
+      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('custom_tool_call')
+    expect(text).toContain('*** Begin Patch')
+  })
+
+  // openai-compatible provider end-to-end: shimmed tool_search
+  it('shims tool_search for openai-compatible provider and renders tool_search_call', async () => {
+    const gateway = makeGateway({
+      stream() {
+        return (async function* () {
+          yield { type: 'tool-call', toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'browser', limit: 5 } }
+          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+        })() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openrouter/chat',
+      input: 'hi',
+      stream: true,
+      tools: [{ type: 'tool_search', execution: 'client', description: 'Tool discovery', parameters: { type: 'object', properties: { query: { type: 'string' } } } }],
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('tool_search_call')
+    expect(text).toContain('browser')
+  })
+
 })

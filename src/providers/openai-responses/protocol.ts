@@ -1,4 +1,4 @@
-import { type ToolSet } from 'ai'
+import { type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import type { AISDKInput, MappingContext, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
@@ -61,12 +61,29 @@ const customToolCallOutputSchema = z.object({
   output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
 }).passthrough()
 
+const toolSearchCallSchema = z.object({
+  type: z.literal('tool_search_call'),
+  call_id: z.string().min(1).optional(),
+  id: z.string().min(1).optional(),
+  execution: z.string().optional(),
+  arguments: z.unknown().optional(),
+}).passthrough()
+
+const toolSearchOutputSchema = z.object({
+  type: z.literal('tool_search_output'),
+  call_id: z.string().min(1).optional(),
+  id: z.string().min(1).optional(),
+  tools: z.array(z.record(z.string(), z.unknown())).optional(),
+}).passthrough()
+
 const inputItemSchema = z.union([
   easyInputMessageSchema,
   functionCallSchema,
   functionCallOutputSchema,
   customToolCallSchema,
   customToolCallOutputSchema,
+  toolSearchCallSchema,
+  toolSearchOutputSchema,
   reasoningItemSchema,
 ])
 
@@ -121,6 +138,13 @@ export function getResponsesCustomToolNames(request: OpenAIResponsesRequest): Se
   return names.size > 0 ? names : undefined
 }
 
+export function hasClientToolSearch(request: OpenAIResponsesRequest): boolean {
+  if (!request.tools) return false
+  return request.tools.some(
+    (t) => t.type === 'tool_search' && (t as { execution?: string }).execution === 'client',
+  )
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
 type EasyInputContent = z.infer<typeof easyInputMessageSchema>['content']
@@ -157,6 +181,41 @@ function mapEasyInputContent(
     // Fallback for unrecognized content parts: map to text
     return { type: 'text', text: String(item.text ?? '') }
   })
+}
+
+// ─── Shim Helpers ────────────────────────────────────────────
+
+function buildShimmedCustomToolDescription(
+  description: string | undefined,
+  format: unknown,
+): string | undefined {
+  const parts: string[] = []
+  if (description) parts.push(description)
+  if (isRecord(format) && format.type === 'grammar') {
+    const syntax = typeof format.syntax === 'string' ? format.syntax : 'grammar'
+    const definition = typeof format.definition === 'string' ? format.definition : ''
+    if (definition) {
+      parts.push(`Output must follow this ${syntax} grammar:\n${definition}`)
+    }
+  }
+  return parts.length > 0 ? parts.join('\n\n') : undefined
+}
+
+function shimCustomToolAsFunction(
+  tool: { name?: string; description?: string; format?: unknown },
+): ToolSet[string] {
+  const desc = buildShimmedCustomToolDescription(tool.description, tool.format)
+  const def: ToolSet[string] = {
+    inputSchema: jsonSchema({
+      type: 'object',
+      properties: {
+        input: { type: 'string', description: 'Raw tool input content (not JSON-wrapped)' },
+      },
+      required: ['input'],
+    }),
+  }
+  if (desc !== undefined) def.description = desc
+  return def
 }
 
 // ─── Mapping ────────────────────────────────────────────────
@@ -226,13 +285,18 @@ export function mapResponsesRequestToAISDKInput(
       } else if ('type' in item && item.type === 'custom_tool_call') {
         // custom_tool_call（apply_patch 等 freeform tool 的上轮调用）→ assistant tool-call
         callIdToName.set(item.call_id, item.name)
+        const isShimmed = ctx?.providerType !== 'openai'
+        const rawInput = item.input
+        const mappedInput = isShimmed && typeof rawInput === 'string'
+          ? { input: rawInput }
+          : rawInput
         messages.push({
           role: 'assistant',
           content: [{
             type: 'tool-call',
             toolCallId: item.call_id,
             toolName: item.name,
-            input: item.input,
+            input: mappedInput,
           }],
         })
       } else if ('type' in item && item.type === 'custom_tool_call_output') {
@@ -248,6 +312,24 @@ export function mapResponsesRequestToAISDKInput(
             toolName: callIdToName.get(item.call_id) ?? item.call_id,
             output: { type: 'text', value: output },
           }],
+        })
+      } else if ('type' in item && item.type === 'tool_search_call') {
+        const tsCall = item as { call_id?: string; id?: string; arguments?: unknown }
+        const callId = tsCall.call_id ?? tsCall.id ?? ''
+        callIdToName.set(callId, 'tool_search')
+        const tsInput = (tsCall.arguments ?? {}) as Record<string, unknown>
+        messages.push({
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: callId, toolName: 'tool_search', input: tsInput }],
+        })
+      } else if ('type' in item && item.type === 'tool_search_output') {
+        const tsOut = item as { call_id?: string; id?: string; tools?: unknown[] }
+        const callId = tsOut.call_id ?? tsOut.id ?? ''
+        const toolName = callIdToName.get(callId) ?? 'tool_search'
+        const output = JSON.stringify(tsOut.tools ?? [])
+        messages.push({
+          role: 'tool',
+          content: [{ type: 'tool-result', toolCallId: callId, toolName, output: { type: 'text', value: output } }],
         })
       } else if ('type' in item && item.type === 'reasoning') {
         // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content
@@ -316,6 +398,12 @@ export function mapResponsesRequestToAISDKInput(
           toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
           selectableToolNames.add(customTool.name)
         }
+      } else if (ctx?.providerType !== 'openai' && tool.type === 'custom') {
+        const customTool = tool as { name?: string; description?: string; format?: unknown }
+        if (customTool.name) {
+          toolSet[customTool.name] = shimCustomToolAsFunction(customTool)
+          selectableToolNames.add(customTool.name)
+        }
       } else if (tool.type === 'namespace') {
         // namespace tool：Codex 把 MCP server 的工具包成 {type:'namespace', name, tools:[function...]}。
         // AI SDK 不认 namespace tool（prepareResponsesTools 无此 case），原样透传会被丢弃 → MCP 工具不可用。
@@ -380,6 +468,15 @@ export function mapResponsesRequestToAISDKInput(
         if (tsTool.description !== undefined) args.description = tsTool.description
         if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
         toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
+      } else if (ctx?.providerType !== 'openai' && tool.type === 'tool_search') {
+        const tsTool = tool as { execution?: string; description?: string; parameters?: Record<string, unknown> }
+        if (tsTool.execution === 'client') {
+          toolSet['tool_search'] = mapToolToAISDK(
+            tsTool.parameters ?? { type: 'object', properties: {} },
+            tsTool.description,
+          )
+          selectableToolNames.add('tool_search')
+        }
       }
     }
     if (Object.keys(toolSet).length > 0) input.tools = toolSet

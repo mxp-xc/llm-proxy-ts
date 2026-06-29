@@ -23,10 +23,11 @@ export interface ProtocolStrategy<TRequest = unknown, TSSEData = never, TResult 
   /** 流式渲染：将 AI SDK 流渲染为结构化 SSE 帧异步迭代。
    *  customToolNames 由 handle-protocol 从请求侧声明的 type:'custom' 工具名收集后传入，
    *  供 openai-responses renderer 判别 custom_tool_call（其他策略忽略此字段）。 */
-  renderStreamSSE(input: { model: string; stream: AsyncIterable<ProxyStreamPart>; customToolNames?: Set<string> }): AsyncIterable<SSEOutput<TSSEData>>
+  renderStreamSSE(input: { model: string; stream: AsyncIterable<ProxyStreamPart>; customToolNames?: Set<string>; customToolShimmed?: boolean; toolSearchShimmed?: boolean }): AsyncIterable<SSEOutput<TSSEData>>
   /** 错误格式化器：按协议风格格式化各类错误 */
   formatErrors: ProtocolErrorFormatter
   /** 收集请求中声明的 custom grammar tool（type:'custom'）名称集合。
    *  仅 openai-responses 实现；其他策略不实现（返回 undefined）。 */
   getCustomToolNames?(request: TRequest): Set<string> | undefined
+  getHasClientToolSearch?(request: TRequest): boolean
 }

@@ -11,6 +11,7 @@ import type {
   ResponseCustomToolCall,
   ResponseWebSearchCall,
   ResponseWebSearchAction,
+  ResponseToolSearchCall,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -23,6 +24,7 @@ export type {
   ResponseFunctionToolCall,
   ResponseCustomToolCall,
   ResponseWebSearchCall,
+  ResponseToolSearchCall,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -60,6 +62,10 @@ function isHostedToolCall(part: { providerExecuted?: boolean }): boolean {
   return part.providerExecuted === true
 }
 
+function isToolSearchShimmed(toolName: string, shimmed: boolean | undefined): boolean {
+  return shimmed === true && toolName === 'tool_search'
+}
+
 /** 把 AI SDK tool-result.output 还原成 Codex 期望的 web_search_call.action。
  *  AI SDK mapWebSearchOutput 把上游 snake_case action.type 转成 camelCase
  *  （open_page→openPage、find_in_page→findInPage；search 不变），Codex 期望 snake_case，这里转回。 */
@@ -87,10 +93,20 @@ function decodeCustomToolInput(raw: unknown): string {
   if (typeof raw !== 'string') return JSON.stringify(raw ?? '')
   try {
     const parsed = JSON.parse(raw)
-    return typeof parsed === 'string' ? parsed : raw
+    if (typeof parsed === 'string') return parsed
+    if (parsed != null && typeof parsed === 'object' && 'input' in parsed) {
+      const inputVal = (parsed as { input: unknown }).input
+      return typeof inputVal === 'string' ? inputVal : JSON.stringify(inputVal ?? '')
+    }
+    return raw
   } catch {
     return raw
   }
+}
+
+function decodeToolSearchInput(raw: unknown): string {
+  if (typeof raw === 'string') return raw
+  return JSON.stringify(raw ?? {})
 }
 
 // ─── Streaming SSE Renderer ───────────────────────────────────
@@ -99,6 +115,8 @@ export async function* renderOpenAIResponseSSE(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
   customToolNames?: Set<string>
+  customToolShimmed?: boolean
+  toolSearchShimmed?: boolean
 }): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -118,7 +136,7 @@ export async function* renderOpenAIResponseSSE(input: {
   let fullReasoning = ''
   let reasoningItemId = ''
   let reasoningEncryptedContent: string | undefined
-  const streamedToolCalls: Array<ResponseFunctionToolCall | ResponseCustomToolCall> = []
+  const streamedToolCalls: Array<ResponseFunctionToolCall | ResponseCustomToolCall | ResponseToolSearchCall> = []
   // hosted web_search_call items: tracked separately so they appear in the final
   // output array but do NOT trigger 'incomplete' status (Fix 1). Hosted tools are
   // executed inline by the upstream and do not pause the Codex agent loop.
@@ -130,6 +148,8 @@ export async function* renderOpenAIResponseSSE(input: {
   const toolCallStartEmitted = new Set<string>()
   const hostedToolCallIds = new Set<string>()
   const customToolNames = input.customToolNames
+  const customToolShimmed = input.customToolShimmed
+  const toolSearchShimmed = input.toolSearchShimmed
 
   function nextSeq(): number {
     return ++sequenceNumber
@@ -296,9 +316,12 @@ export async function* renderOpenAIResponseSSE(input: {
         yield* closeCurrentTextMessage()
 
         const isCustom = isCustomToolName(toolName, customToolNames)
+        const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
         const addedItem = isCustom
           ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
-          : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
+          : isTsShimmed
+            ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: '' }
+            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
         yield { event: 'response.output_item.added', data: {
           type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
           item: addedItem,
@@ -312,9 +335,12 @@ export async function* renderOpenAIResponseSSE(input: {
         if (toolCallId != null && hostedToolCallIds.has(toolCallId)) continue
         if (toolCallId == null || argsDelta == null) continue
 
+        const toolName = toolCallToolNames.get(toolCallId) ?? ''
+        if (customToolShimmed && isCustomToolName(toolName, customToolNames)) continue
+        if (toolSearchShimmed && isToolSearchShimmed(toolName, toolSearchShimmed)) continue
+
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-        const toolName = toolCallToolNames.get(toolCallId) ?? ''
 
         if (isCustomToolName(toolName, customToolNames)) {
           yield { event: 'response.custom_tool_call_input.delta', data: {
@@ -344,19 +370,23 @@ export async function* renderOpenAIResponseSSE(input: {
 
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         const isCustom = isCustomToolName(toolName, customToolNames)
+        const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
 
         yield* closeCurrentTextMessage()
 
         const rawArgs = part.input ?? {}
-        // custom_tool_call: input 是 JSON.stringify(裸文本)，还原为裸文本；function_call: 保持原样
         const args = isCustom
           ? decodeCustomToolInput(rawArgs)
-          : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
+          : isTsShimmed
+            ? decodeToolSearchInput(rawArgs)
+            : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
 
         if (!toolCallStartEmitted.has(toolCallId)) {
           const addedItem = isCustom
             ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
-            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
+            : isTsShimmed
+              ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: '' }
+              : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
           yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
             item: addedItem,
@@ -369,7 +399,7 @@ export async function* renderOpenAIResponseSSE(input: {
               type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
               item_id: fcId, output_index: outputIndex, delta: args,
             } }
-          } else {
+          } else if (!isTsShimmed) {
             yield { event: 'response.function_call_arguments.delta', data: {
               type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
               item_id: fcId, output_index: outputIndex, delta: args,
@@ -385,6 +415,15 @@ export async function* renderOpenAIResponseSSE(input: {
           streamedToolCalls.push({
             id: fcId, type: 'custom_tool_call', status: 'completed',
             call_id: toolCallId, name: toolName, input: args,
+          })
+        } else if (isTsShimmed) {
+          yield { event: 'response.output_item.done', data: {
+            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
+            item: { id: fcId, type: 'tool_search_call', status: 'completed', call_id: toolCallId, execution: 'client', arguments: args },
+          } }
+          streamedToolCalls.push({
+            id: fcId, type: 'tool_search_call', status: 'completed',
+            call_id: toolCallId, execution: 'client', arguments: args,
           })
         } else {
           yield { event: 'response.function_call_arguments.done', data: {
@@ -562,6 +601,8 @@ export async function* renderOpenAIResponseSSE(input: {
 export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
   const output: ResponseOutputItem[] = []
   const customToolNames = input.customToolNames
+  const customToolShimmed = input.customToolShimmed
+  const toolSearchShimmed = input.toolSearchShimmed
 
   if (input.text != null) {
     output.push({
@@ -590,6 +631,15 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
           call_id: call.toolCallId,
           name: call.toolName,
           input: decodeCustomToolInput(call.input),
+        })
+      } else if (isToolSearchShimmed(call.toolName, toolSearchShimmed)) {
+        output.push({
+          id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+          type: 'tool_search_call',
+          status: 'completed',
+          call_id: call.toolCallId,
+          execution: 'client',
+          arguments: decodeToolSearchInput(call.input),
         })
       } else {
         const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})

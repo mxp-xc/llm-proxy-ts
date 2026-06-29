@@ -45,7 +45,16 @@ export interface ResponseWebSearchCall {
   action: ResponseWebSearchAction | null
 }
 
-export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall | ResponseWebSearchCall
+export interface ResponseToolSearchCall {
+  id: string
+  type: 'tool_search_call'
+  call_id: string
+  status: 'completed' | 'incomplete'
+  execution: 'client'
+  arguments: string
+}
+
+export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall | ResponseWebSearchCall | ResponseToolSearchCall
 
 export interface ResponseUsage {
   input_tokens: number
@@ -127,7 +136,16 @@ interface StreamReasoningItem {
 }
 
 /** Union of all item shapes that can appear in streaming output_item events */
-type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamWebSearchCallItem | StreamReasoningItem
+interface StreamToolSearchCallItem {
+  id: string
+  type: 'tool_search_call'
+  call_id: string
+  status: string
+  execution: 'client'
+  arguments: string
+}
+
+type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamWebSearchCallItem | StreamToolSearchCallItem | StreamReasoningItem
 
 /** Minimal response object for created/in_progress events */
 interface StreamResponsePartial {
