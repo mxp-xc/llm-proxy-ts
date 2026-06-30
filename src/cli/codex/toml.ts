@@ -17,6 +17,7 @@ export interface CodexConfigEdits {
   modelSlug: string
   requiresOpenaiAuth: boolean
   modelReasoningEffort?: string
+  checkForUpdateOnStartup: boolean
 }
 
 export interface TomlOverwriteReport {
@@ -45,6 +46,16 @@ export function applyCodexConfigEdits(
       overwritten.push({ kind: 'top-level-key', key, oldValue: oldRaw, newValue: normalizeTomlString(newValue) })
     }
     cur = setTopLevelKey(cur, key, newValue)
+  }
+
+  // check_for_update_on_startup: top-level bool.
+  {
+    const formatted = formatTomlBool(params.checkForUpdateOnStartup)
+    const oldRaw = readTopLevelKey(cur, 'check_for_update_on_startup')
+    if (oldRaw !== undefined && oldRaw !== formatted) {
+      overwritten.push({ kind: 'top-level-key', key: 'check_for_update_on_startup', oldValue: oldRaw, newValue: formatted })
+    }
+    cur = setTopLevelKey(cur, 'check_for_update_on_startup', formatted)
   }
 
   // model_reasoning_effort: set when provided, remove when not (avoid stale value from prior install).

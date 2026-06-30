@@ -9,7 +9,7 @@ function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLook
     proxy: null,
     routing: { enableFlatModelLookup },
     plugins: [],
-    codex: { models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 }, install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false } },
+    codex: { models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 }, install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false, checkForUpdateOnStartup: false } },
     providers,
   }
 }

@@ -9,14 +9,16 @@ const edits = {
   wireApi: 'responses' as const,
   modelSlug: 'zhipu/glm-5.2',
   requiresOpenaiAuth: false,
+  checkForUpdateOnStartup: false,
 }
 
 describe('applyCodexConfigEdits', () => {
-  it('applies all 4 edits to an empty config with no overwrite reports', () => {
+  it('applies all 5 edits to an empty config with no overwrite reports', () => {
     const { content, overwritten } = applyCodexConfigEdits('', edits)
     expect(content).toContain('model_catalog_json = "llm-proxy-model-catalog.json"')
     expect(content).toContain('model_provider = "llm-proxy"')
     expect(content).toContain('model = "zhipu/glm-5.2"')
+    expect(content).toContain('check_for_update_on_startup = false')
     expect(content).toContain('[model_providers.llm-proxy]')
     expect(content).toContain('base_url = "http://127.0.0.1:8056/codex/v1"')
     expect(content).toContain('wire_api = "responses"')
@@ -126,3 +128,29 @@ describe('applyCodexConfigEdits: model_reasoning_effort', () => {
     expect(second.content).toBe(first.content)
     expect(second.overwritten).toEqual([])
   })
+
+describe('applyCodexConfigEdits: check_for_update_on_startup', () => {
+  it('writes check_for_update_on_startup = false by default', () => {
+    const { content, overwritten } = applyCodexConfigEdits('', edits)
+    expect(content).toContain('check_for_update_on_startup = false')
+    expect(overwritten).toEqual([])
+  })
+
+  it('writes check_for_update_on_startup = true when configured', () => {
+    const { content } = applyCodexConfigEdits('', { ...edits, checkForUpdateOnStartup: true })
+    expect(content).toContain('check_for_update_on_startup = true')
+  })
+
+  it('reports overwrite when check_for_update_on_startup changes', () => {
+    const content = 'check_for_update_on_startup = true\n'
+    const { overwritten } = applyCodexConfigEdits(content, edits)
+    expect(overwritten.some((r) => r.key === 'check_for_update_on_startup' && r.oldValue === 'true' && r.newValue === 'false')).toBe(true)
+  })
+
+  it('is idempotent with check_for_update_on_startup = false', () => {
+    const first = applyCodexConfigEdits('', edits)
+    const second = applyCodexConfigEdits(first.content, edits)
+    expect(second.content).toBe(first.content)
+    expect(second.overwritten).toEqual([])
+  })
+})

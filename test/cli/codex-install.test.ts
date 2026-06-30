@@ -201,6 +201,7 @@ describe('runCodexInstall', () => {
     expect(writtenConfig()).toContain('model_catalog_json = "llm-proxy-model-catalog.json"')
     expect(writtenConfig()).toContain('model_provider = "llm-proxy"')
     expect(writtenConfig()).toContain('model = "zhipu/glm-5.2"')
+    expect(writtenConfig()).toContain('check_for_update_on_startup = false')
     expect(writtenConfig()).toContain('[model_providers.llm-proxy]')
     expect(writtenConfig()).toContain('# codex') // comment preserved
   })
@@ -351,6 +352,23 @@ describe('runCodexInstall', () => {
     expect(writtenConfig()).toContain('model_provider = "my-proxy"')
     expect(writtenConfig()).toContain('[model_providers.my-proxy]')
     expect(writtenConfig()).toContain('requires_openai_auth = true')
+  })
+
+  it('writes check_for_update_on_startup = true from install config', async () => {
+    const customSettingsPath = await writeSettings(
+      { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
+      { models_catalog: { context_window: 204800 }, install: { checkForUpdateOnStartup: true } },
+    )
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const { fs, writtenConfig } = capturingFs()
+    await runCodexInstall({
+      settingsPath: customSettingsPath,
+      catalogFetcher,
+      fs,
+      codexHome: tmp.dir,
+      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+    })
+    expect(writtenConfig()).toContain('check_for_update_on_startup = true')
   })
 
   it('writes model_reasoning_effort from default model default_reasoning_level', async () => {

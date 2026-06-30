@@ -196,7 +196,7 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     clack.outro('Aborted')
     return
   }
-  const { providerId, providerName, requiresOpenaiAuth } = settings.codex.install
+  const { providerId, providerName, requiresOpenaiAuth, checkForUpdateOnStartup } = settings.codex.install
   // 从已构建 catalog 中取默认模型的 default_reasoning_level（非空字符串时写入 config.toml）
   const defaultModel = modelsRes.models.find((m) => m.slug === defaultSlug)
   const reasoningLevel = defaultModel?.default_reasoning_level
@@ -208,6 +208,7 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     wireApi: 'responses',
     modelSlug: defaultSlug,
     requiresOpenaiAuth,
+    checkForUpdateOnStartup,
     ...(reasoningLevel ? { modelReasoningEffort: reasoningLevel } : {}),
   })
   for (const report of overwritten) {

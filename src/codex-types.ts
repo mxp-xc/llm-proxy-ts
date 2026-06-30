@@ -94,6 +94,7 @@ export const codexInstallSchema = z
     providerId: z.string().min(1).default('llm-proxy'),
     providerName: z.string().min(1).default('LLM Proxy'),
     requiresOpenaiAuth: z.boolean().default(false),
+    checkForUpdateOnStartup: z.boolean().default(false),
   })
   .strict()
   .default({})

@@ -381,6 +381,10 @@
             "requiresOpenaiAuth": {
               "type": "boolean",
               "default": false
+            },
+            "checkForUpdateOnStartup": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,
