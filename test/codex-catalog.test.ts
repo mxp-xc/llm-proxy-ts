@@ -361,10 +361,11 @@ describe('buildCodexModelsResponse', () => {
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)
     const m = models[0]!
-    // 'low' exists in template → keeps description; 'xhigh' is new → { effort } only
+    // 'low' exists in template → keeps description; 'xhigh' is new →
+    // catalog 全局无 xhigh 描述，兜底默认 description（codex 要求该字段必填）
     expect(m.supported_reasoning_levels).toEqual([
       { effort: 'low', description: 'Fast' },
-      { effort: 'xhigh' },
+      { effort: 'xhigh', description: 'Reasoning effort: xhigh' },
     ])
   })
 
@@ -446,5 +447,35 @@ describe('buildCodexModelsResponse', () => {
     const { models } = buildCodexModelsResponse(settings, CATALOG)
     // supported_reasoning_levels unchanged from template (gpt-5.5 has 3 levels)
     expect(models[0]!.supported_reasoning_levels).toHaveLength(3)
+  })
+
+  it('reasoning_effort.supported reuses catalog-wide description for efforts absent from template', () => {
+    const settings = makeSettings({
+      zhipu: {
+        type: 'openai-compatible',
+        baseURL: 'https://x',
+        apiKey: 'k',
+        headers: {},
+        plugins: [],
+        options: { codex: { templateSlug: 'gpt-5.4' } }, // gpt-5.4 supported_reasoning_levels = []
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { supported: ['low', 'xhigh'] },
+          },
+        },
+      },
+    })
+    const { models } = buildCodexModelsResponse(settings, CATALOG)
+    const m = models[0]!
+    // 'low' 不在 template(gpt-5.4) 但在 catalog(gpt-5.5) → 复用 'Fast';
+    // 'xhigh' catalog 全局也无 → 兜底默认描述
+    expect(m.supported_reasoning_levels).toEqual([
+      { effort: 'low', description: 'Fast' },
+      { effort: 'xhigh', description: 'Reasoning effort: xhigh' },
+    ])
   })
 })

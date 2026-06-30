@@ -108,15 +108,35 @@ function resolveReasoningEffort(
 }
 
 /**
+ * 收集 catalog 全局 effort → description 映射，用于补全新建 reasoning level 的描述。
+ * codex 解析 model_catalog_json 时要求 supported_reasoning_levels 每个条目都带 description。
+ */
+function collectEffortDescriptions(catalog: Map<string, CodexModelInfo>): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const m of catalog.values()) {
+    for (const l of m.supported_reasoning_levels) {
+      if (l.description && !map.has(l.effort)) map.set(l.effort, l.description)
+    }
+  }
+  return map
+}
+
+/**
  * 将用户配置的 effort 字符串数组映射为 codex catalog 的 supported_reasoning_levels。
- * 优先复用 template 中同 effort 条目（保留 description），无则新建 { effort }。
+ * 优先复用 template 中同 effort 条目（保留 description）；次复用 catalog 全局
+ * effort→description 映射；无则兜底默认描述（codex 要求 description 必填）。
  */
 function mergeSupportedLevels(
   template: CodexModelInfo['supported_reasoning_levels'],
   efforts: string[],
+  descriptions: Map<string, string>,
 ): CodexModelInfo['supported_reasoning_levels'] {
   const byEffort = new Map(template.map((l) => [l.effort, l]))
-  return efforts.map((effort) => byEffort.get(effort) ?? { effort })
+  return efforts.map((effort) => {
+    const existing = byEffort.get(effort)
+    if (existing) return existing
+    return { effort, description: descriptions.get(effort) ?? `Reasoning effort: ${effort}` }
+  })
 }
 
 const FALLBACK_DEFAULT_SLUG = 'gpt-5.4'
@@ -136,6 +156,7 @@ export function buildCodexModelsResponse(
 ): { models: CodexModelInfo[] } {
   const models: CodexModelInfo[] = []
   const defaultSlug = pickDefaultTemplateSlug(catalog)
+  const effortDescriptions = collectEffortDescriptions(catalog)
   for (const entry of enumerateModelEntries(settings)) {
     const provider = settings.providers[entry.providerName]
     const model = provider?.models[entry.modelKey]
@@ -166,6 +187,7 @@ export function buildCodexModelsResponse(
         info.supported_reasoning_levels = mergeSupportedLevels(
           template.supported_reasoning_levels,
           effort.supported,
+          effortDescriptions,
         )
       }
       // 4. 三层 catalog override（escape hatch，应用顺序在后，覆盖 reasoning_effort）
