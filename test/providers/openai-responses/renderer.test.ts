@@ -590,6 +590,22 @@ describe('renderOpenAIResponseSSE', () => {
     }
   })
 
+  it('decodes shimmed custom tool input from object args (AI SDK passes parsed object)', () => {
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'call_1', toolName: 'apply_patch', input: { input: applyPatchText } }],
+      customToolNames: new Set(['apply_patch']),
+      customToolShimmed: true,
+    })
+    const item = result.output.find(o => o.type === 'custom_tool_call')
+    expect(item).toBeDefined()
+    if (item && item.type === 'custom_tool_call') {
+      expect(item.input).toBe(applyPatchText)
+    }
+  })
+
   it('skips tool-input-delta for shimmed custom tool and emits complete input at tool-call', async () => {
     async function* shimmedDeltaStream() {
       yield { type: 'tool-input-start', id: 'call_1', toolName: 'apply_patch' }
@@ -633,7 +649,7 @@ describe('renderOpenAIResponseSSE', () => {
     if (doneItem.type === 'tool_search_call') {
       expect(doneItem.call_id).toBe('ts_1')
       expect(doneItem.execution).toBe('client')
-      expect(JSON.parse(doneItem.arguments)).toEqual({ query: 'browser', limit: 5 })
+      expect(doneItem.arguments).toEqual({ query: 'browser', limit: 5 })
     }
   })
 
@@ -650,7 +666,7 @@ describe('renderOpenAIResponseSSE', () => {
     if (item && item.type === 'tool_search_call') {
       expect(item.call_id).toBe('ts_1')
       expect(item.execution).toBe('client')
-      expect(JSON.parse(item.arguments)).toEqual({ query: 'test', limit: 3 })
+      expect(item.arguments).toEqual({ query: 'test', limit: 3 })
     }
   })
 })

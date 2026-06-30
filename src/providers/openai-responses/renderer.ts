@@ -87,26 +87,35 @@ function mapWebSearchAction(output: unknown): ResponseWebSearchAction | null {
   return action
 }
 
-/** 还原 custom_tool_call 的 input：AI SDK 对 custom_tool_call.input 做 JSON.stringify
- * (裸 patch 文本 → JSON 字符串)，这里 JSON.parse 还原为裸文本。 */
-function decodeCustomToolInput(raw: unknown): string {
-  if (typeof raw !== 'string') return JSON.stringify(raw ?? '')
+/** JSON.parse 包装：解析失败时原样返回字符串。用于还原 shimmed function 的 arguments。 */
+function tryParseJson(raw: string): unknown {
   try {
-    const parsed = JSON.parse(raw)
-    if (typeof parsed === 'string') return parsed
-    if (parsed != null && typeof parsed === 'object' && 'input' in parsed) {
-      const inputVal = (parsed as { input: unknown }).input
-      return typeof inputVal === 'string' ? inputVal : JSON.stringify(inputVal ?? '')
-    }
-    return raw
+    return JSON.parse(raw)
   } catch {
     return raw
   }
 }
 
-function decodeToolSearchInput(raw: unknown): string {
-  if (typeof raw === 'string') return raw
-  return JSON.stringify(raw ?? {})
+/** 还原 custom_tool_call 的 input：shimmed apply_patch 的 arguments 被 AI SDK 解析成
+ * 对象 {input: patchText}（也可能传 JSON 字符串）。统一提取 .input 还原为裸 patch 文本。 */
+function decodeCustomToolInput(raw: unknown): string {
+  const obj: unknown = typeof raw === 'string' ? tryParseJson(raw) : raw
+  if (typeof obj === 'string') return obj
+  if (obj != null && typeof obj === 'object' && 'input' in obj) {
+    const inputVal = (obj as { input: unknown }).input
+    return typeof inputVal === 'string' ? inputVal : JSON.stringify(inputVal ?? '')
+  }
+  return typeof raw === 'string' ? raw : JSON.stringify(raw ?? '')
+}
+
+/** 还原 tool_search_call 的 arguments：shimmed tool_search 的 arguments 被 AI SDK 解析成
+ * 对象 {query, limit}（也可能传 JSON 字符串）。Codex 期望 arguments 是对象，非 JSON 字符串。 */
+function decodeToolSearchInput(raw: unknown): Record<string, unknown> {
+  const obj: unknown = typeof raw === 'string' ? tryParseJson(raw) : raw
+  if (obj != null && typeof obj === 'object' && !Array.isArray(obj)) {
+    return obj as Record<string, unknown>
+  }
+  return {}
 }
 
 // ─── Streaming SSE Renderer ───────────────────────────────────
@@ -320,7 +329,7 @@ export async function* renderOpenAIResponseSSE(input: {
         const addedItem = isCustom
           ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
           : isTsShimmed
-            ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: '' }
+            ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
             : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
         yield { event: 'response.output_item.added', data: {
           type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
@@ -375,17 +384,17 @@ export async function* renderOpenAIResponseSSE(input: {
         yield* closeCurrentTextMessage()
 
         const rawArgs = part.input ?? {}
+        // tool_search 的 arguments 是对象（codex 期望），在下方 isTsShimmed 分支用
+        // decodeToolSearchInput 单独计算；custom/function 用字符串 args。
         const args = isCustom
           ? decodeCustomToolInput(rawArgs)
-          : isTsShimmed
-            ? decodeToolSearchInput(rawArgs)
-            : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
+          : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
 
         if (!toolCallStartEmitted.has(toolCallId)) {
           const addedItem = isCustom
             ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
             : isTsShimmed
-              ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: '' }
+              ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
               : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
           yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
@@ -417,13 +426,14 @@ export async function* renderOpenAIResponseSSE(input: {
             call_id: toolCallId, name: toolName, input: args,
           })
         } else if (isTsShimmed) {
+          const tsArgs = decodeToolSearchInput(rawArgs)
           yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: fcId, type: 'tool_search_call', status: 'completed', call_id: toolCallId, execution: 'client', arguments: args },
+            item: { id: fcId, type: 'tool_search_call', status: 'completed', call_id: toolCallId, execution: 'client', arguments: tsArgs },
           } }
           streamedToolCalls.push({
             id: fcId, type: 'tool_search_call', status: 'completed',
-            call_id: toolCallId, execution: 'client', arguments: args,
+            call_id: toolCallId, execution: 'client', arguments: tsArgs,
           })
         } else {
           yield { event: 'response.function_call_arguments.done', data: {

@@ -51,7 +51,7 @@ export interface ResponseToolSearchCall {
   call_id: string
   status: 'completed' | 'incomplete'
   execution: 'client'
-  arguments: string
+  arguments: Record<string, unknown>
 }
 
 export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall | ResponseWebSearchCall | ResponseToolSearchCall
@@ -142,7 +142,7 @@ interface StreamToolSearchCallItem {
   call_id: string
   status: string
   execution: 'client'
-  arguments: string
+  arguments: Record<string, unknown>
 }
 
 type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamWebSearchCallItem | StreamToolSearchCallItem | StreamReasoningItem
