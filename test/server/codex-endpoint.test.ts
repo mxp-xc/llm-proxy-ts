@@ -415,4 +415,46 @@ describe('POST /codex/v1/responses', () => {
     expect(text).toContain('browser')
   })
 
+  // 端到端：handle-protocol 接线（Task 4）—— 请求侧 tool_search_output 拍平 → 上游返回扁平名 tool-call
+  // → renderer 拆回 {name, namespace}。覆盖 strategy.getNamespaceFlatMap → 三处传递 → resolveNamespacedToolName。
+  it('resolves namespaced toolName back to {name, namespace} end-to-end via handle-protocol wiring', async () => {
+    let capturedInput: { tools?: Record<string, unknown> } | undefined
+    const gateway = makeGateway({
+      async generate({ callInput }) {
+        capturedInput = callInput
+        return {
+          text: '',
+          finishReason: 'tool-calls',
+          toolCalls: [{ toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', input: { message: 'hi' } }],
+          usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
+        } as GenerateTextReturn
+      },
+    })
+    const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
+    const body = JSON.stringify({
+      model: 'openrouter/chat',
+      input: [
+        { type: 'tool_search_call', call_id: 'ts_1', arguments: { query: 'agent' } },
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [
+          { type: 'namespace', name: 'multi_agent_v1', description: 'sub-agents',
+            tools: [{ type: 'function', name: 'spawn_agent', description: 'spawn', parameters: { type: 'object', properties: { message: { type: 'string' } } } }] },
+        ] },
+      ],
+      stream: false,
+    })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+    expect(res.status).toBe(200)
+    // 请求侧：tool_search_output 里的 namespace 工具被拍平成 'multi_agent_v1__spawn_agent' 加入 tools[]
+    expect(capturedInput?.tools).toBeDefined()
+    expect(Object.keys(capturedInput!.tools!)).toContain('multi_agent_v1__spawn_agent')
+    const json = await res.json()
+    const fc = json.output.find((o: { type: string }) => o.type === 'function_call')
+    expect(fc).toBeDefined()
+    expect(fc).toMatchObject({ type: 'function_call', name: 'spawn_agent', namespace: 'multi_agent_v1', call_id: 'call_1' })
+  })
+
 })

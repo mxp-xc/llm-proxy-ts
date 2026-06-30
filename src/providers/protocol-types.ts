@@ -11,6 +11,18 @@ export type FinishReason =
   | 'other'
   | undefined
 
+/** namespace 工具拍平名 → 原始 {namespace, name} 映射条目。
+ *  namespace 为 undefined 表示顶层 function（无 namespace 包裹）。 */
+export interface NamespaceFlatEntry {
+  namespace: string | undefined
+  name: string
+}
+
+/** namespace 拍平映射：flatName(`${namespace}__${name}` 或 name) → {namespace, name}。
+ *  请求侧构建（request.tools namespace + input tool_search_output），响应侧用于把
+ *  GLM 返回的拍平 toolName 拆回 codex 期望的 {name, namespace} 分离字段。 */
+export type NamespaceFlatMap = Map<string, NamespaceFlatEntry>
+
 export interface RenderResultInput {
   model: string
   text: string
@@ -31,6 +43,9 @@ export interface RenderResultInput {
   customToolShimmed?: boolean
   /** tool_search(client) 是否被 shimmed 为 function tool（openai-compatible provider）。 */
   toolSearchShimmed?: boolean
+  /** namespace 拍平映射：把 GLM 返回的拍平 toolName 拆回 {name, namespace}。
+   *  仅 openai-responses renderer 使用；其他 renderer 忽略。 */
+  namespaceFlatMap?: NamespaceFlatMap
 }
 
 /**

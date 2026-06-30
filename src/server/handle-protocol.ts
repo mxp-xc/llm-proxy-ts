@@ -106,6 +106,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   const customToolNames = strategy.getCustomToolNames?.(request)
   const customToolShimmed = customToolNames !== undefined && route.provider.type !== 'openai'
   const toolSearchShimmed = route.provider.type !== 'openai' && (strategy.getHasClientToolSearch?.(request) ?? false)
+  const namespaceFlatMap = strategy.getNamespaceFlatMap?.(request)
 
   // 4. Get LanguageModel
   const loginUrl = `http://127.0.0.1:${ctx.settings.service.port}/oauth/login/${route.providerName}`
@@ -147,6 +148,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
             ...(customToolNames && { customToolNames }),
             ...(customToolShimmed && { customToolShimmed }),
             ...(toolSearchShimmed && { toolSearchShimmed }),
+            ...(namespaceFlatMap && { namespaceFlatMap }),
           }),
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
@@ -189,6 +191,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
       if (customToolNames) renderInput.customToolNames = customToolNames
       if (customToolShimmed) renderInput.customToolShimmed = customToolShimmed
       if (toolSearchShimmed) renderInput.toolSearchShimmed = toolSearchShimmed
+      if (namespaceFlatMap) renderInput.namespaceFlatMap = namespaceFlatMap
       return c.json(strategy.renderResult(renderInput))
     } catch (error) {
       return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only')
@@ -218,6 +221,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     if (customToolNames) renderInput.customToolNames = customToolNames
     if (customToolShimmed) renderInput.customToolShimmed = customToolShimmed
     if (toolSearchShimmed) renderInput.toolSearchShimmed = toolSearchShimmed
+    if (namespaceFlatMap) renderInput.namespaceFlatMap = namespaceFlatMap
     return c.json(strategy.renderResult(renderInput))
   } catch (error) {
     return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate')

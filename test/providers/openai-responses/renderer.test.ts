@@ -669,4 +669,101 @@ describe('renderOpenAIResponseSSE', () => {
       expect(item.arguments).toEqual({ query: 'test', limit: 3 })
     }
   })
+
+  it('renders flattened toolName back to {name, namespace} in non-streaming', () => {
+    const namespaceFlatMap = new Map([
+      ['multi_agent_v1__spawn_agent', { namespace: 'multi_agent_v1', name: 'spawn_agent' }],
+      ['mcp__codegraph__codegraph_search', { namespace: 'mcp__codegraph', name: 'codegraph_search' }],
+    ])
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [
+        { toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', input: { message: 'hi' } },
+        { toolCallId: 'call_2', toolName: 'mcp__codegraph__codegraph_search', input: { query: 'x' } },
+        { toolCallId: 'call_3', toolName: 'exec_command', input: { cmd: 'ls' } },
+      ],
+      namespaceFlatMap,
+    })
+    const fc1 = result.output.find((o) => o.type === 'function_call' && (o as { call_id?: string }).call_id === 'call_1')
+    const fc2 = result.output.find((o) => o.type === 'function_call' && (o as { call_id?: string }).call_id === 'call_2')
+    const fc3 = result.output.find((o) => o.type === 'function_call' && (o as { call_id?: string }).call_id === 'call_3')
+    expect(fc1).toMatchObject({ type: 'function_call', name: 'spawn_agent', namespace: 'multi_agent_v1' })
+    expect(fc2).toMatchObject({ type: 'function_call', name: 'codegraph_search', namespace: 'mcp__codegraph' })
+    // 普通工具不带 namespace 字段（codex master 不支持扁平名，namespace 字段必须省略，而非 undefined）
+    expect(fc3).toMatchObject({ type: 'function_call', name: 'exec_command' })
+    expect('namespace' in (fc3 as object)).toBe(false)
+  })
+
+  it('renders flattened toolName back to {name, namespace} in streaming', async () => {
+    const namespaceFlatMap = new Map([
+      ['multi_agent_v1__spawn_agent', { namespace: 'multi_agent_v1', name: 'spawn_agent' }],
+    ])
+    async function* gen() {
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', input: { message: 'hi' } }
+      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 }, response: { id: 'resp_x' } }
+    }
+    const stream = renderOpenAIResponseSSE({
+      model: 'gpt-5',
+      stream: gen() as AsyncIterable<ProxyStreamPart>,
+      namespaceFlatMap,
+    })
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
+    // added item 也带拆回的 name/namespace
+    const added = events.find((e) => e.event === 'response.output_item.added')
+    const addedItem = (added!.data as ResponseOutputItemAddedEvent).item
+    expect(addedItem.type).toBe('function_call')
+    if (addedItem.type === 'function_call') {
+      expect(addedItem.name).toBe('spawn_agent')
+      expect((addedItem as { namespace?: string }).namespace).toBe('multi_agent_v1')
+    }
+    // done item
+    const done = events.find((e) => e.event === 'response.output_item.done')
+    const doneItem = (done!.data as ResponseOutputItemDoneEvent).item
+    expect(doneItem.type).toBe('function_call')
+    if (doneItem.type === 'function_call') {
+      expect(doneItem.name).toBe('spawn_agent')
+      expect((doneItem as { namespace?: string }).namespace).toBe('multi_agent_v1')
+    }
+    // response.completed 的 output 也含拆回字段（codex 实际消费）
+    const completed = events.find((e) => e.event === 'response.completed')
+    const completedOutput = (completed!.data as { response: { output: Array<{ type: string; name?: string; namespace?: string }> } }).response.output
+    const fc = completedOutput.find((o) => o.type === 'function_call')
+    expect(fc?.name).toBe('spawn_agent')
+    expect(fc?.namespace).toBe('multi_agent_v1')
+  })
+
+  it('renders codex_app namespace tool back to {name, namespace}', () => {
+    const namespaceFlatMap = new Map([
+      ['codex_app__load_workspace_dependencies', { namespace: 'codex_app', name: 'load_workspace_dependencies' }],
+    ])
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'call_1', toolName: 'codex_app__load_workspace_dependencies', input: {} }],
+      namespaceFlatMap,
+    })
+    const fc = result.output.find((o) => o.type === 'function_call')
+    expect(fc).toMatchObject({ type: 'function_call', name: 'load_workspace_dependencies', namespace: 'codex_app' })
+  })
+
+  it('does not resolve namespace for tool_search shimmed call (isTsShimmed takes priority)', () => {
+    // namespaceFlatMap 误含 'tool_search' 时，tool_search 仍渲染为 tool_search_call（不被拆回为 function_call）
+    const namespaceFlatMap = new Map([
+      ['tool_search', { namespace: 'wrong', name: 'tool_search' }],
+    ])
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [{ toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'x' } }],
+      toolSearchShimmed: true,
+      namespaceFlatMap,
+    })
+    expect(result.output.find((o) => o.type === 'tool_search_call')).toBeDefined()
+    // 不应出现 function_call（被误拆回）
+    expect(result.output.find((o) => o.type === 'function_call')).toBeUndefined()
+  })
 })

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { toErrorMessage } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
 import type { SSEOutput } from '../shared/sse-utils.js'
-import type { FinishReason, RenderResultInput } from '../protocol-types.js'
+import type { FinishReason, RenderResultInput, NamespaceFlatMap } from '../protocol-types.js'
 import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
   ResponseOutputText,
@@ -66,6 +66,21 @@ function isToolSearchShimmed(toolName: string, shimmed: boolean | undefined): bo
   return shimmed === true && toolName === 'tool_search'
 }
 
+/** 把 GLM 返回的拍平 toolName 拆回 codex 期望的 {name, namespace}。
+ *  命中 namespaceFlatMap 且 entry.namespace 非 undefined → 拆回；否则原样（普通工具）。
+ *  注意：custom_tool_call（apply_patch）与 tool_search_call 走各自的 isCustom/isTsShimmed 分支，
+ *  不进此函数——apply_patch namespace=None 无需拆回，tool_search 是 hosted 不在 flatMap。 */
+function resolveNamespacedToolName(
+  toolName: string,
+  namespaceFlatMap?: NamespaceFlatMap,
+): { name: string; namespace?: string } {
+  const entry = namespaceFlatMap?.get(toolName)
+  if (entry && entry.namespace !== undefined) {
+    return { name: entry.name, namespace: entry.namespace }
+  }
+  return { name: toolName }
+}
+
 /** 把 AI SDK tool-result.output 还原成 Codex 期望的 web_search_call.action。
  *  AI SDK mapWebSearchOutput 把上游 snake_case action.type 转成 camelCase
  *  （open_page→openPage、find_in_page→findInPage；search 不变），Codex 期望 snake_case，这里转回。 */
@@ -126,6 +141,7 @@ export async function* renderOpenAIResponseSSE(input: {
   customToolNames?: Set<string>
   customToolShimmed?: boolean
   toolSearchShimmed?: boolean
+  namespaceFlatMap?: NamespaceFlatMap
 }): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
@@ -159,6 +175,7 @@ export async function* renderOpenAIResponseSSE(input: {
   const customToolNames = input.customToolNames
   const customToolShimmed = input.customToolShimmed
   const toolSearchShimmed = input.toolSearchShimmed
+  const namespaceFlatMap = input.namespaceFlatMap
 
   function nextSeq(): number {
     return ++sequenceNumber
@@ -326,11 +343,12 @@ export async function* renderOpenAIResponseSSE(input: {
 
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
+        const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
         const addedItem = isCustom
           ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
           : isTsShimmed
             ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
-            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
+            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, ...nsResolved, arguments: '' }
         yield { event: 'response.output_item.added', data: {
           type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
           item: addedItem,
@@ -380,6 +398,7 @@ export async function* renderOpenAIResponseSSE(input: {
         const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
+        const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
 
         yield* closeCurrentTextMessage()
 
@@ -395,7 +414,7 @@ export async function* renderOpenAIResponseSSE(input: {
             ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
             : isTsShimmed
               ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
-              : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, arguments: '' }
+              : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, ...nsResolved, arguments: '' }
           yield { event: 'response.output_item.added', data: {
             type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
             item: addedItem,
@@ -440,14 +459,15 @@ export async function* renderOpenAIResponseSSE(input: {
             type: 'response.function_call_arguments.done', sequence_number: nextSeq(),
             item_id: fcId, output_index: outputIndex, arguments: args,
           } }
+          const doneFunctionCall = {
+            id: fcId, type: 'function_call' as const, status: 'completed' as const,
+            call_id: toolCallId, ...nsResolved, arguments: args,
+          }
           yield { event: 'response.output_item.done', data: {
             type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: fcId, type: 'function_call', status: 'completed', call_id: toolCallId, name: toolName, arguments: args },
+            item: doneFunctionCall,
           } }
-          streamedToolCalls.push({
-            id: fcId, type: 'function_call', status: 'completed',
-            call_id: toolCallId, name: toolName, arguments: args,
-          })
+          streamedToolCalls.push(doneFunctionCall)
         }
         outputIndex++
       }
@@ -613,6 +633,7 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
   const customToolNames = input.customToolNames
   const customToolShimmed = input.customToolShimmed
   const toolSearchShimmed = input.toolSearchShimmed
+  const namespaceFlatMap = input.namespaceFlatMap
 
   if (input.text != null) {
     output.push({
@@ -653,12 +674,13 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
         })
       } else {
         const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})
+        const nsResolved = resolveNamespacedToolName(call.toolName, namespaceFlatMap)
         output.push({
           id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
           type: 'function_call',
           status: 'completed',
           call_id: call.toolCallId,
-          name: call.toolName,
+          ...nsResolved,
           arguments: args,
         })
       }

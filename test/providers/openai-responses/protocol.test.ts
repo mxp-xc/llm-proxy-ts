@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getResponsesCustomToolNames, mapResponsesRequestToAISDKInput, validateOpenAIResponsesRequest } from '../../../src/providers/openai-responses/protocol.js'
+import { getResponsesCustomToolNames, getResponsesNamespaceFlatMap, mapResponsesRequestToAISDKInput, validateOpenAIResponsesRequest } from '../../../src/providers/openai-responses/protocol.js'
 
 describe('validateOpenAIResponsesRequest', () => {
   it('rejects request without model', () => {
@@ -638,6 +638,60 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.system).toBeUndefined()
     expect(result.temperature).toBeUndefined()
   })
+
+  describe('historical function_call namespace → flattened toolName', () => {
+    it('maps function_call with namespace to flattened toolName', () => {
+      const result = mapResponsesRequestToAISDKInput({
+        model: 'gpt-5',
+        input: [
+          { type: 'function_call', call_id: 'call_1', name: 'spawn_agent', namespace: 'multi_agent_v1', arguments: '{"message":"hi"}' },
+          { type: 'function_call_output', call_id: 'call_1', output: '{"agent_id":"a1"}' },
+        ],
+      }, { providerType: 'openai-compatible' })
+      expect(result.messages[0]).toEqual({
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', input: { message: 'hi' } }],
+      })
+      expect(result.messages[1]).toEqual({
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', output: { type: 'text', value: '{"agent_id":"a1"}' } }],
+      })
+    })
+
+    it('maps function_call without namespace as plain toolName', () => {
+      const result = mapResponsesRequestToAISDKInput({
+        model: 'gpt-5',
+        input: [
+          { type: 'function_call', call_id: 'call_1', name: 'exec_command', arguments: '{}' },
+          { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+        ],
+      }, { providerType: 'openai-compatible' })
+      expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe('exec_command')
+    })
+
+    it('maps custom_tool_call with namespace to flattened toolName', () => {
+      // custom_tool_call 也读 namespace（customToolCallSchema 是 passthrough，namespace 已保留）
+      const result = mapResponsesRequestToAISDKInput({
+        model: 'gpt-5',
+        input: [
+          { type: 'custom_tool_call', call_id: 'call_1', name: 'my_patch', namespace: 'custom_ns', input: '*** Begin Patch\n*** End Patch' },
+          { type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' },
+        ],
+      }, { providerType: 'openai-compatible' })
+      expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe('custom_ns__my_patch')
+    })
+
+    it('maps mcp__ namespace function_call to flattened toolName', () => {
+      const result = mapResponsesRequestToAISDKInput({
+        model: 'gpt-5',
+        input: [
+          { type: 'function_call', call_id: 'call_1', name: 'codegraph_search', namespace: 'mcp__codegraph', arguments: '{"query":"x"}' },
+          { type: 'function_call_output', call_id: 'call_1', output: '{}' },
+        ],
+      }, { providerType: 'openai-compatible' })
+      expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe('mcp__codegraph__codegraph_search')
+    })
+  })
 })
 
 describe('getResponsesCustomToolNames', () => {
@@ -662,5 +716,133 @@ describe('getResponsesCustomToolNames', () => {
   it('returns undefined when no tools', () => {
     const names = getResponsesCustomToolNames({ model: 'gpt-5', input: 'hi' })
     expect(names).toBeUndefined()
+  })
+})
+
+describe('getResponsesNamespaceFlatMap', () => {
+  it('collects namespace tools from request.tools', () => {
+    const map = getResponsesNamespaceFlatMap({
+      model: 'gpt-5',
+      input: 'hi',
+      tools: [
+        { type: 'namespace', name: 'codex_app', tools: [{ type: 'function', name: 'load_ws' }] },
+      ],
+    })
+    expect(map).toBeDefined()
+    expect(map!.get('codex_app__load_ws')).toEqual({ namespace: 'codex_app', name: 'load_ws' })
+  })
+
+  it('collects namespace tools discovered via tool_search_output in input history', () => {
+    const map = getResponsesNamespaceFlatMap({
+      model: 'gpt-5',
+      input: [
+        { type: 'tool_search_call', call_id: 'ts_1', arguments: { query: 'agent' } },
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [
+          { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'spawn_agent' }] },
+        ] },
+      ],
+    })
+    expect(map).toBeDefined()
+    expect(map!.get('multi_agent_v1__spawn_agent')).toEqual({ namespace: 'multi_agent_v1', name: 'spawn_agent' })
+  })
+
+  it('collects top-level function (no namespace) from tool_search_output', () => {
+    const map = getResponsesNamespaceFlatMap({
+      model: 'gpt-5',
+      input: [
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [{ type: 'function', name: 'standalone_tool' }] },
+      ],
+    })
+    expect(map).toBeDefined()
+    expect(map!.get('standalone_tool')).toEqual({ namespace: undefined, name: 'standalone_tool' })
+  })
+
+  it('returns undefined when no namespace tools present', () => {
+    const map = getResponsesNamespaceFlatMap({ model: 'gpt-5', input: 'hi' })
+    expect(map).toBeUndefined()
+  })
+
+  it('skips non-function sub-tools in namespace', () => {
+    const map = getResponsesNamespaceFlatMap({
+      model: 'gpt-5',
+      input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [
+        { type: 'namespace', name: 'ns', tools: [
+          { type: 'function', name: 'fn' },
+          { type: 'custom', name: 'patch' },
+        ] },
+      ] }],
+    })
+    expect(map!.get('ns__fn')).toEqual({ namespace: 'ns', name: 'fn' })
+    expect(map!.has('ns__patch')).toBe(false)
+  })
+})
+
+describe('tool_search_output discovered tools → tools[]', () => {
+  it('flattens namespace tools from tool_search_output into toolSet (openai-compatible)', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [
+        { type: 'tool_search_call', call_id: 'ts_1', arguments: { query: 'agent' } },
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [
+          { type: 'namespace', name: 'multi_agent_v1', description: 'sub-agents',
+            tools: [{ type: 'function', name: 'spawn_agent', description: 'spawn', parameters: { type: 'object', properties: { message: { type: 'string' } } } }] },
+        ] },
+      ],
+    }, { providerType: 'openai-compatible' })
+    expect(result.tools).toBeDefined()
+    expect(Object.keys(result.tools!)).toContain('multi_agent_v1__spawn_agent')
+    expect(result.tools!['multi_agent_v1__spawn_agent']!.description).toBe('spawn')
+  })
+
+  it('is idempotent: duplicate tool_search_output does not duplicate toolSet entries', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [
+        { type: 'tool_search_output', call_id: 'ts_1', tools: [
+          { type: 'namespace', name: 'ns', tools: [{ type: 'function', name: 'fn', parameters: { type: 'object' } }] }] },
+        { type: 'tool_search_output', call_id: 'ts_2', tools: [
+          { type: 'namespace', name: 'ns', tools: [{ type: 'function', name: 'fn', parameters: { type: 'object' } }] }] },
+      ],
+    }, { providerType: 'openai-compatible' })
+    expect(Object.keys(result.tools!).filter((k) => k === 'ns__fn').length).toBe(1)
+  })
+
+  it('appends discovered tools after initial request.tools (stable order)', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [
+        { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'spawn_agent', parameters: { type: 'object' } }] }] }],
+      tools: [{ type: 'function', name: 'shell', parameters: { type: 'object' } }],
+    }, { providerType: 'openai-compatible' })
+    // 初始 request.tools 在前，发现的 namespace 工具追加末尾（保缓存前缀稳定）
+    expect(Object.keys(result.tools!)).toEqual(['shell', 'multi_agent_v1__spawn_agent'])
+  })
+
+  it('scans tool_search_output even when request.tools is undefined', () => {
+    // 关键：request.tools 为 undefined 时仍扫描 tool_search_output（代码在 if(request.tools) 块外）
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [
+        { type: 'namespace', name: 'multi_agent_v1', tools: [{ type: 'function', name: 'spawn_agent', parameters: { type: 'object' } }] }] }],
+    }, { providerType: 'openai-compatible' })
+    expect(Object.keys(result.tools!)).toEqual(['multi_agent_v1__spawn_agent'])
+  })
+
+  it('does not add tools when tool_search_output empty', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [] }],
+    }, { providerType: 'openai-compatible' })
+    expect(result.tools).toBeUndefined()
+  })
+
+  it('skips top-level tool without type field (only type:function added)', () => {
+    // 钉住现有 protocol.test.ts:449 行为：tool_search_output 顶层元素不带 type（如 open_page）
+    // 时，Task 2 用 t.type === 'function' 判断会跳过，不误加入 toolSet
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5',
+      input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [{ name: 'open_page' }] }],
+    }, { providerType: 'openai-compatible' })
+    expect(result.tools).toBeUndefined()
   })
 })

@@ -2,7 +2,7 @@ import { type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import type { AISDKInput, MappingContext, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
-import { isRecord } from '../protocol-types.js'
+import { isRecord, type NamespaceFlatMap } from '../protocol-types.js'
 import { z } from 'zod/v3'
 
 // ─── Schemas ──────────────────────────────────────────────────
@@ -32,6 +32,7 @@ const functionCallSchema = z.object({
   id: z.string().optional(),
   call_id: z.string().min(1),
   name: z.string().min(1),
+  namespace: z.string().optional(),
   arguments: z.string(),
 })
 
@@ -145,6 +146,74 @@ export function hasClientToolSearch(request: OpenAIResponsesRequest): boolean {
   )
 }
 
+/** tool_search_output / request.tools 中 namespace 元素的工具形状（passthrough record 的窄化目标）。 */
+type ToolSearchOutputTool = {
+  type?: string
+  name?: string
+  description?: string
+  parameters?: Record<string, unknown>
+  tools?: ToolSearchOutputTool[]
+}
+
+/** 把 codex 的 {name, namespace} 还原成 GLM 期望的拍平 toolName。
+ *  namespace 存在时 `${namespace}__${name}`，否则原 name。请求侧历史 function_call 映射、
+ *  collectNamespaceFlatMap 拍平、Task 2 toolSet 加入均复用此函数，保证拼接规则一致。 */
+function flattenToolName(name: string, namespace: string | undefined): string {
+  return namespace ? `${namespace}__${name}` : name
+}
+
+/** 收集 namespace 拍平映射：flatName → {namespace, name}。
+ *  来源：(1) request.tools 的 namespace 工具；(2) input 历史的 tool_search_output 里的 namespace/顶层 function。
+ *  用于响应侧把 GLM 返回的拍平 toolName 拆回 codex 期望的 {name, namespace} 分离字段。 */
+export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap {
+  const map: NamespaceFlatMap = new Map()
+  const add = (namespace: string | undefined, name: string) => {
+    const flatName = flattenToolName(name, namespace)
+    if (!map.has(flatName)) map.set(flatName, { namespace, name })
+  }
+
+  // (1) request.tools 的 namespace
+  if (request.tools) {
+    for (const tool of request.tools) {
+      if (tool.type !== 'namespace') continue
+      const nsTool = tool as ToolSearchOutputTool
+      if (!nsTool.name || !Array.isArray(nsTool.tools)) continue
+      for (const sub of nsTool.tools) {
+        if (!sub.name || sub.type !== 'function') continue
+        add(nsTool.name, sub.name)
+      }
+    }
+  }
+
+  // (2) input 历史的 tool_search_output
+  if (Array.isArray(request.input)) {
+    for (const item of request.input) {
+      if (!('type' in item) || item.type !== 'tool_search_output') continue
+      const tsOut = item as { tools?: ToolSearchOutputTool[] }
+      if (!Array.isArray(tsOut.tools)) continue
+      for (const t of tsOut.tools) {
+        if (t.type === 'namespace') {
+          if (!t.name || !Array.isArray(t.tools)) continue
+          for (const sub of t.tools) {
+            if (!sub.name || sub.type !== 'function') continue
+            add(t.name, sub.name)
+          }
+        } else if (t.type === 'function') {
+          if (t.name) add(undefined, t.name)
+        }
+      }
+    }
+  }
+
+  return map
+}
+
+/** collectNamespaceFlatMap 的可选包装：无 namespace 工具时返回 undefined（复用 getCustomToolNames 模式）。 */
+export function getResponsesNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap | undefined {
+  const map = collectNamespaceFlatMap(request)
+  return map.size > 0 ? map : undefined
+}
+
 // ─── Helpers ────────────────────────────────────────────────
 
 type EasyInputContent = z.infer<typeof easyInputMessageSchema>['content']
@@ -247,25 +316,27 @@ export function mapResponsesRequestToAISDKInput(
     const callIdToName = new Map<string, string>()
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
-        callIdToName.set(item.call_id, item.name)
+        const fc = item as { call_id: string; name: string; namespace?: string }
+        callIdToName.set(fc.call_id, flattenToolName(fc.name, fc.namespace))
       }
     }
 
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
         // function_call → assistant message with tool-call content part
+        const fc = item as { call_id: string; name: string; namespace?: string; arguments: string }
         let args: Record<string, unknown> | string = {}
         try {
-          args = JSON.parse(item.arguments)
+          args = JSON.parse(fc.arguments)
         } catch {
-          args = item.arguments
+          args = fc.arguments
         }
         messages.push({
           role: 'assistant',
           content: [{
             type: 'tool-call',
-            toolCallId: item.call_id,
-            toolName: item.name,
+            toolCallId: fc.call_id,
+            toolName: flattenToolName(fc.name, fc.namespace),
             input: args,
           }],
         })
@@ -284,9 +355,10 @@ export function mapResponsesRequestToAISDKInput(
         })
       } else if ('type' in item && item.type === 'custom_tool_call') {
         // custom_tool_call（apply_patch 等 freeform tool 的上轮调用）→ assistant tool-call
-        callIdToName.set(item.call_id, item.name)
+        const ctc = item as { call_id: string; name: string; namespace?: string; input: string | Record<string, unknown> }
+        callIdToName.set(ctc.call_id, flattenToolName(ctc.name, ctc.namespace))
         const isShimmed = ctx?.providerType !== 'openai'
-        const rawInput = item.input
+        const rawInput = ctc.input
         const mappedInput = isShimmed && typeof rawInput === 'string'
           ? { input: rawInput }
           : rawInput
@@ -294,8 +366,8 @@ export function mapResponsesRequestToAISDKInput(
           role: 'assistant',
           content: [{
             type: 'tool-call',
-            toolCallId: item.call_id,
-            toolName: item.name,
+            toolCallId: ctc.call_id,
+            toolName: flattenToolName(ctc.name, ctc.namespace),
             input: mappedInput,
           }],
         })
@@ -416,7 +488,7 @@ export function mapResponsesRequestToAISDKInput(
             if (!subTool.name) continue
             // 只展开 function 子工具；非 function（如 custom）子工具跳过，避免被当 function 注册
             if ((subTool as { type?: string }).type !== 'function') continue
-            const flatName = `${nsTool.name}__${subTool.name}`
+            const flatName = flattenToolName(subTool.name, nsTool.name)
             toolSet[flatName] = mapResponsesFunctionTool({ ...subTool, name: flatName })
             selectableToolNames.add(flatName)
           }
@@ -479,8 +551,49 @@ export function mapResponsesRequestToAISDKInput(
         }
       }
     }
-    if (Object.keys(toolSet).length > 0) input.tools = toolSet
   }
+
+  // tool_search_output 历史发现的 namespace/顶层 function 工具，拍平加入 toolSet（幂等、追加末尾）。
+  // codex 不把 tool_search 动态发现的工具放进顶层 tools[]（依赖 OpenAI 服务端从历史注册），
+  // GLM 无此 hosted 机制 → 必须由代理把发现的工具加入 tools[] 才能被调用。幂等保缓存前缀稳定。
+  // 注意：此段在 if (request.tools) 块外，确保 request.tools 为 undefined 时仍扫描。
+  if (Array.isArray(request.input)) {
+    for (const item of request.input) {
+      if (!('type' in item) || item.type !== 'tool_search_output') continue
+      const tsOut = item as { tools?: ToolSearchOutputTool[] }
+      if (!Array.isArray(tsOut.tools)) continue
+      for (const t of tsOut.tools) {
+        if (t.type === 'namespace') {
+          if (!t.name || !Array.isArray(t.tools)) continue
+          for (const sub of t.tools) {
+            if (!sub.name || sub.type !== 'function') continue
+            const flatName = flattenToolName(sub.name, t.name)
+            if (flatName in toolSet) continue  // 幂等
+            // 显式构型 type:'function'（sub 来自 passthrough record，type 非 'function' 字面量，
+            // spread 不保留字面量 → 需显式声明以满足 mapResponsesFunctionTool 的 ResponsesFunctionTool 类型）
+            toolSet[flatName] = mapResponsesFunctionTool({
+              type: 'function', name: flatName,
+              ...(sub.description !== undefined && { description: sub.description }),
+              ...(sub.parameters !== undefined && { parameters: sub.parameters }),
+            })
+            selectableToolNames.add(flatName)
+          }
+        } else if (t.type === 'function') {
+          if (!t.name) continue
+          if (t.name in toolSet) continue  // 幂等
+          toolSet[t.name] = mapResponsesFunctionTool({
+            type: 'function', name: t.name,
+            ...(t.description !== undefined && { description: t.description }),
+            ...(t.parameters !== undefined && { parameters: t.parameters }),
+          })
+          selectableToolNames.add(t.name)
+        }
+      }
+    }
+  }
+
+  // toolSet 赋值（从 if(request.tools) 块内移出，使 tool_search_output 发现的工具能赋给 input.tools）
+  if (Object.keys(toolSet).length > 0) input.tools = toolSet
 
   // tool_choice — validate against built toolSet (includes flattened MCP names like
   // mcp__server__tool). Fix 5: 之前只查 request.tools（不含 namespace 内嵌的 flattened 名），

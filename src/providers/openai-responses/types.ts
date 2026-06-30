@@ -18,6 +18,7 @@ export interface ResponseFunctionToolCall {
   status: 'completed' | 'incomplete'
   call_id: string
   name: string
+  namespace?: string
   arguments: string
 }
 
@@ -106,6 +107,7 @@ interface StreamFunctionCallItem {
   status: string
   call_id: string
   name: string
+  namespace?: string
   arguments: string
 }
 
