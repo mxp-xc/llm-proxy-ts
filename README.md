@@ -22,8 +22,11 @@ pnpm dev serve
 | `POST /v1/responses` | OpenAI Responses（命名事件 SSE） |
 | `POST /v1/messages` | Anthropic Messages（非流式 + SSE） |
 | `GET /v1/models` | 可用模型列表 |
+| `GET /v1/models/*` | 单模型详情 |
 | `POST /codex/v1/responses` | Codex CLI 兼容端点（复用 OpenAI Responses 协议） |
 | `GET /codex/v1/models` | Codex bundled catalog 格式模型列表 |
+| `GET /oauth/login/:provider` | OAuth 登录入口（仅配置 oauth 时挂载） |
+| `GET /oauth/callback` | OAuth 授权码回调（仅配置 oauth 时挂载） |
 
 请求格式兼容对应上游 API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
 
@@ -39,7 +42,6 @@ pnpm dev serve
 | `pnpm dev models sync -p <name>` | 同步指定 provider |
 | `pnpm dev models sync --dry-run` | 预览变更，不写入 |
 | `pnpm dev models list` | 列出已配置模型 |
-| `pnpm dev models list --format json` | 列出已配置模型（JSON） |
 | `pnpm dev codex install` | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
 | `pnpm test` | 运行全部测试 |
 | `pnpm test test/xxx.test.ts` | 运行单个测试 |
@@ -52,15 +54,17 @@ pnpm dev serve
 
 核心字段：
 
-- **service** — 监听地址和端口
-- **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`models`
+- **service** — 服务名（默认 `llm-proxy`）、监听地址和端口
+- **requestTimeoutMs** — 请求超时毫秒（默认 30000）
+- **routing** — 路由选项（`enableFlatModelLookup` 全局裸名查找）
+- **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`、`options`（类型特定，详见 AGENTS「Provider Options 分层」）
 - **apiKey 轮询** — `apiKey` 支持字符串数组，按请求 round-robin 选择
 - **模型别名** — `models` 中可定义 `aliases` 和自定义 `upstreamModel`
 - **`${ENV_NAME}`** — 占位符，加载时从环境变量解析（仅匹配完整字符串）
 - **proxy** — 可选 HTTP 代理（undici `ProxyAgent`）
-- **plugins** — provider/model 级插件（如 `vendor_sse_error` 检测上游限流）
+- **plugins** — 全局/provider/model 三级插件（如 `vendor_sse_error` 检测上游限流）
 - **oauth** — 支持 Authorization Code 和 Client Credentials 两种流程
-- **codex** — 全局 Codex 兼容配置（`templateSlug`、`context_window` 默认 200000 等），可被 `provider.options.codex` 和 `model.codex` 覆盖
+- **codex** — 全局 Codex 兼容配置，含 `models_catalog`（catalog override，如 `templateSlug`、`context_window` 默认 200000，可被 `provider.options.codex`、`model.codex` 覆盖）和 `install`（codex install 写入 `~/.codex/config.toml` 的 provider 配置）
 
 ## 安全
 
