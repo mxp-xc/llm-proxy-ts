@@ -3,11 +3,18 @@ import { createTempDir, writeTempSettings } from '../helpers/temp-file.js'
 import { makeSettings } from '../helpers/settings.js'
 import { writeFile, readFile, mkdir, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildCodexBaseUrl, runCodexInstall } from '../../src/cli/codex/install-run.js'
+import {
+  buildCodexBaseUrl,
+  runCodexInstall,
+  resolveSelectedModels,
+} from '../../src/cli/codex/install-run.js'
 import type { CodexInstallFs } from '../../src/cli/codex/install-run.js'
 
 /** Wrap raw node:fs/promises fns to match the narrower CodexInstallFs interface. */
-function wrapFs(over: { writeFile?: CodexInstallFs['writeFile']; access?: CodexInstallFs['access'] }): CodexInstallFs {
+function wrapFs(over: {
+  writeFile?: CodexInstallFs['writeFile']
+  access?: CodexInstallFs['access']
+}): CodexInstallFs {
   return {
     readFile: (p) => readFile(p, 'utf8'),
     writeFile: over.writeFile ?? ((p, d) => writeFile(p, d, 'utf8')),
@@ -54,7 +61,10 @@ function modelDef(upstreamModel: string) {
   return { upstreamModel, aliases: [], headers: {}, plugins: [] }
 }
 
-function settingsJson(providers: unknown, codex: unknown = { models_catalog: { context_window: 204800 } }): string {
+function settingsJson(
+  providers: unknown,
+  codex: unknown = { models_catalog: { context_window: 204800 } },
+): string {
   return JSON.stringify({
     service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
     providers,
@@ -65,7 +75,10 @@ function settingsJson(providers: unknown, codex: unknown = { models_catalog: { c
 
 describe('buildCodexBaseUrl', () => {
   it('builds http url without trailing slash', () => {
-    const settings = makeSettings({}, { service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 } })
+    const settings = makeSettings(
+      {},
+      { service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 } },
+    )
     expect(buildCodexBaseUrl(settings)).toBe('http://127.0.0.1:8056/codex/v1')
   })
   it('brackets IPv6 host', () => {
@@ -106,7 +119,11 @@ describe('runCodexInstall', () => {
   }
 
   /** fs that captures written config.toml + catalog file content. */
-  function capturingFs(): { fs: CodexInstallFs; writtenConfig: () => string; writtenCatalog: () => string } {
+  function capturingFs(): {
+    fs: CodexInstallFs
+    writtenConfig: () => string
+    writtenCatalog: () => string
+  } {
     let writtenConfig = ''
     let writtenCatalog = ''
     const fs: CodexInstallFs = {
@@ -126,7 +143,12 @@ describe('runCodexInstall', () => {
     const writeFileSpy = vi.fn()
     const selectModels = vi.fn().mockResolvedValue(['zhipu/glm-5.2'])
     const selectDefaultModel = vi.fn().mockResolvedValue('zhipu/glm-5.2')
-    const fs = wrapFs({ writeFile: writeFileSpy, access: async () => { throw new Error('enoent') } })
+    const fs = wrapFs({
+      writeFile: writeFileSpy,
+      access: async () => {
+        throw new Error('enoent')
+      },
+    })
     await runCodexInstall({
       settingsPath: settings.path,
       catalogFetcher: fetcher,
@@ -144,10 +166,15 @@ describe('runCodexInstall', () => {
     const writeFileSpy = vi.fn()
     await runCodexInstall({
       settingsPath: settings.path,
-      catalogFetcher: async () => { throw new Error('codex not found') },
+      catalogFetcher: async () => {
+        throw new Error('codex not found')
+      },
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -161,7 +188,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -178,7 +208,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -291,7 +324,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'], selectDefaultModel: async () => null },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'],
+        selectDefaultModel: async () => null,
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -317,7 +353,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['nonexistent'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['nonexistent'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -330,7 +369,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'], selectDefaultModel: async () => 'nonexistent' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2', 'zhipu/gpt-5'],
+        selectDefaultModel: async () => 'nonexistent',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -338,7 +380,10 @@ describe('runCodexInstall', () => {
   it('writes custom providerId and requires_openai_auth from settings', async () => {
     const customSettingsPath = await writeSettings(
       { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
-      { models_catalog: { context_window: 204800 }, install: { providerId: 'my-proxy', requiresOpenaiAuth: true } },
+      {
+        models_catalog: { context_window: 204800 },
+        install: { providerId: 'my-proxy', requiresOpenaiAuth: true },
+      },
     )
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
     const { fs, writtenConfig } = capturingFs()
@@ -347,7 +392,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs,
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writtenConfig()).toContain('model_provider = "my-proxy"')
     expect(writtenConfig()).toContain('[model_providers.my-proxy]')
@@ -366,7 +414,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs,
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writtenConfig()).toContain('check_for_update_on_startup = true')
   })
@@ -374,7 +425,15 @@ describe('runCodexInstall', () => {
   it('writes model_reasoning_effort from default model default_reasoning_level', async () => {
     const settingsPath = await writeSettings({
       zhipu: {
-        ...zhipuProvider({ 'glm-5.2': { upstreamModel: 'glm-5.2', aliases: [], headers: {}, plugins: [], reasoning_effort: { default: 'xhigh' } } }),
+        ...zhipuProvider({
+          'glm-5.2': {
+            upstreamModel: 'glm-5.2',
+            aliases: [],
+            headers: {},
+            plugins: [],
+            reasoning_effort: { default: 'xhigh' },
+          },
+        }),
       },
     })
     await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
@@ -384,7 +443,10 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs,
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writtenConfig()).toContain('model_reasoning_effort = "xhigh"')
   })
@@ -400,8 +462,38 @@ describe('runCodexInstall', () => {
       catalogFetcher,
       fs,
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['zhipu/glm-5.2'], selectDefaultModel: async () => 'zhipu/glm-5.2' },
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
     })
     expect(writtenConfig()).not.toContain('model_reasoning_effort')
+  })
+})
+
+describe('resolveSelectedModels', () => {
+  const ALL = ['zhipu/glm-5.2', 'zhipu/glm-5.1', 'zhipu/gpt-5']
+
+  it('returns all slugs when the "Select all" sentinel is present', () => {
+    expect(resolveSelectedModels(['__select_all__'], ALL)).toEqual(ALL)
+  })
+
+  it('returns all slugs even when other items are also toggled', () => {
+    expect(resolveSelectedModels(['__select_all__', 'zhipu/glm-5.2'], ALL)).toEqual(ALL)
+  })
+
+  it('passes through the selection when the sentinel is absent', () => {
+    expect(resolveSelectedModels(['zhipu/glm-5.2', 'zhipu/gpt-5'], ALL)).toEqual([
+      'zhipu/glm-5.2',
+      'zhipu/gpt-5',
+    ])
+  })
+
+  it('keeps the contract stable for a stray sentinel', () => {
+    expect(resolveSelectedModels(['zhipu/glm-5.2', '__select_all__'], ALL)).toEqual(ALL)
+  })
+
+  it('returns an empty array for empty input', () => {
+    expect(resolveSelectedModels([], ALL)).toEqual([])
   })
 })

@@ -1,10 +1,19 @@
 import * as clack from '@clack/prompts'
 import { readFile, writeFile, mkdir, access } from 'node:fs/promises'
 import type { CodexModelInfo } from '../../codex-types.js'
-import { CodexCatalogCache, buildCodexModelsResponse, type CodexCatalogFetcher } from '../../codex-catalog.js'
+import {
+  CodexCatalogCache,
+  buildCodexModelsResponse,
+  type CodexCatalogFetcher,
+} from '../../codex-catalog.js'
 import { loadSettingsFromFile } from '../../config.js'
 import type { Settings } from '../../config.js'
-import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath, DEFAULT_CATALOG_FILENAME } from './home.js'
+import {
+  resolveCodexHome,
+  resolveCodexConfigPath,
+  resolveCodexCatalogPath,
+  DEFAULT_CATALOG_FILENAME,
+} from './home.js'
 import { applyCodexConfigEdits } from './toml.js'
 
 /** Build the codex base URL from service settings (no trailing slash; IPv6 bracketed). */
@@ -44,19 +53,58 @@ const defaultFs: CodexInstallFs = {
   access: (p) => access(p),
 }
 
+/** Sentinel pseudo-option value: selecting it installs every model. */
+const SELECT_ALL_SENTINEL = '__select_all__'
+
+/**
+ * Resolve the multi-select result into the real slug list.
+ * If the "Select all" sentinel is present, install every model
+ * (individual toggles are ignored). Otherwise pass through, dropping the sentinel.
+ */
+export function resolveSelectedModels(rawSelected: string[], allSlugs: string[]): string[] {
+  if (rawSelected.includes(SELECT_ALL_SENTINEL)) return [...allSlugs]
+  return rawSelected.filter((slug) => slug !== SELECT_ALL_SENTINEL)
+}
+
+/** Replicates clack's internal default autocomplete filter (label/hint/value includes). */
+function defaultClackFilter(
+  search: string,
+  option: { label?: unknown; value: unknown; hint?: string },
+): boolean {
+  if (!search) return true
+  const label = String(option.label ?? option.value ?? '').toLowerCase()
+  const hint = (option.hint ?? '').toLowerCase()
+  const value = String(option.value).toLowerCase()
+  const needle = search.toLowerCase()
+  return label.includes(needle) || hint.includes(needle) || value.includes(needle)
+}
+
 function defaultPrompts(): CodexInstallPrompts {
   return {
     async selectModels(models) {
       const slugs = models.map((m) => m.slug)
+      const allOption = {
+        value: SELECT_ALL_SENTINEL,
+        label: 'Select all',
+        hint: 'install every model',
+      }
+      const modelOptions = models.map((m) => ({
+        value: m.slug,
+        label: m.display_name,
+        hint: m.slug,
+      }))
       const selected = await clack.autocompleteMultiselect({
         message: 'Select models to install',
-        options: models.map((m) => ({ value: m.slug, label: m.display_name, hint: m.slug })),
-        initialValues: slugs,
+        options: [allOption, ...modelOptions],
+        initialValues: [],
         required: true,
         placeholder: 'Type to search models...',
+        // Keep "Select all" always visible; real options match by clack's default rule.
+        filter: (search, option) =>
+          option.value === SELECT_ALL_SENTINEL ? true : defaultClackFilter(search, option),
       })
       if (clack.isCancel(selected)) return null
-      return selected as string[]
+      return resolveSelectedModels(selected as string[], slugs)
     },
     async selectDefaultModel(models) {
       const selected = await clack.autocomplete({
@@ -116,7 +164,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
   // 4. Non-empty catalog.
   if (modelsRes.models.length === 0) {
-    clack.log.error('Proxy returned an empty model catalog. Configure at least one provider/model in settings.jsonc.')
+    clack.log.error(
+      'Proxy returned an empty model catalog. Configure at least one provider/model in settings.jsonc.',
+    )
     clack.outro('Aborted')
     return
   }
@@ -159,7 +209,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     try {
       picked = await prompts.selectDefaultModel(subset)
     } catch (err) {
-      clack.log.error(`Default model selection failed: ${err instanceof Error ? err.message : String(err)}`)
+      clack.log.error(
+        `Default model selection failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
       clack.outro('Aborted')
       return
     }
@@ -185,18 +237,23 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     clack.outro('Aborted')
     return
   }
-  clack.log.step(`Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`)
+  clack.log.step(
+    `Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`,
+  )
 
   // 8. Edit config.toml.
   let rawConfig: string
   try {
     rawConfig = await fs.readFile(configPath)
   } catch (err) {
-    clack.log.error(`Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`)
+    clack.log.error(
+      `Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`,
+    )
     clack.outro('Aborted')
     return
   }
-  const { providerId, providerName, requiresOpenaiAuth, checkForUpdateOnStartup } = settings.codex.install
+  const { providerId, providerName, requiresOpenaiAuth, checkForUpdateOnStartup } =
+    settings.codex.install
   // 从已构建 catalog 中取默认模型的 default_reasoning_level（非空字符串时写入 config.toml）
   const defaultModel = modelsRes.models.find((m) => m.slug === defaultSlug)
   const reasoningLevel = defaultModel?.default_reasoning_level
@@ -217,7 +274,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   try {
     await fs.writeFile(configPath, newConfig)
   } catch (err) {
-    clack.log.error(`Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`)
+    clack.log.error(
+      `Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`,
+    )
     clack.outro('Aborted')
     return
   }
