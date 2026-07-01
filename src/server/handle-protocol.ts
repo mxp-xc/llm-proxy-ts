@@ -14,7 +14,9 @@ import type { AppEnv, ModelGateway } from './types.js'
 import { RequestTimeoutError, withRequestTimeout } from './stream-utils.js'
 import { inspectFirstStreamChunk, type StreamInspectContext } from './stream-inspect.js'
 import { readableStreamFromAsyncIterable } from './stream-utils.js'
+import { teeStream } from './tee-stream.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
+import type { ErrorLogger } from './error-logger.js'
 
 export interface ProtocolContext {
   routingTable: RoutingTable
@@ -26,6 +28,7 @@ export interface ProtocolContext {
     headers: Record<string, string>,
     c: Context<AppEnv>,
   ) => LanguageModel
+  errorLogger: ErrorLogger
 }
 
 interface AcquireStreamOptions {
@@ -152,11 +155,16 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         return c.json(body, status as 429)
       }
       const reqLogger = c.get('logger')
+      const enabled = ctx.settings.errorLogging.enabled
+      const buffer: ProxyStreamPart[] = []
+      const teedStream = enabled
+        ? teeStream(acquired.stream, buffer)
+        : acquired.stream
       return new Response(
         readableStreamFromAsyncIterable(
           strategy.renderStreamSSE({
             model: requestModel,
-            stream: acquired.stream,
+            stream: teedStream,
             ...(customToolNames && { customToolNames }),
             ...(customToolShimmed && { customToolShimmed }),
             ...(toolSearchShimmed && { toolSearchShimmed }),
@@ -164,6 +172,16 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
           }),
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
+            ctx.errorLogger.log({
+              requestId: c.get('requestId'),
+              phase: 'stream',
+              provider: c.get('provider') ?? '',
+              requestedModel: c.get('requestedModel') ?? '',
+              actualModel: c.get('actualModel') ?? '',
+              error: extractErrorInfo(error),
+              request,
+              response: enabled ? buffer : [],
+            })
           },
           abortController,
         ),
@@ -172,12 +190,18 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         },
       )
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream')
+      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream', {
+        errorLogger: ctx.errorLogger,
+        request,
+        response: [],
+      })
     }
   }
 
   // streamOnly: provider 仅支持流式 API，内部走 stream + 收集
   if (route.provider.options?.streamOnly) {
+    const enabled = ctx.settings.errorLogging.enabled
+    const buffer: ProxyStreamPart[] = []
     try {
       const acquired = await acquireStream({
         gateway: ctx.gateway,
@@ -194,8 +218,11 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
         const { body, status } = acquired.rateLimitResponse
         return c.json(body, status as 429)
       }
+      const teedStream = enabled
+        ? teeStream(acquired.stream, buffer)
+        : acquired.stream
       const collected = await withRequestTimeout(
-        collectStreamResult(acquired.stream),
+        collectStreamResult(teedStream),
         ctx.settings.requestTimeoutMs,
         abortController,
       )
@@ -213,7 +240,11 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
       if (namespaceFlatMap) renderInput.namespaceFlatMap = namespaceFlatMap
       return c.json(strategy.renderResult(renderInput))
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only')
+      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only', {
+        errorLogger: ctx.errorLogger,
+        request,
+        response: enabled ? buffer : [],
+      })
     }
   }
 
@@ -243,11 +274,29 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     if (namespaceFlatMap) renderInput.namespaceFlatMap = namespaceFlatMap
     return c.json(strategy.renderResult(renderInput))
   } catch (error) {
-    return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate')
+    return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate', {
+      errorLogger: ctx.errorLogger,
+      request,
+      response: null,
+    })
   }
 }
 
 export type ErrorPhase = 'stream' | 'stream-only' | 'generate'
+
+interface ErrorLogContext {
+  errorLogger: ErrorLogger
+  request: unknown
+  response: unknown[] | null
+}
+
+function extractErrorInfo(error: unknown): { name: string; message: string; stack?: string } {
+  return {
+    name: error instanceof Error ? error.name : 'Error',
+    message: error instanceof Error ? error.message : String(error),
+    ...(error instanceof Error && error.stack && { stack: error.stack }),
+  }
+}
 
 export function handleUpstreamError(
   c: Context<AppEnv>,
@@ -255,11 +304,24 @@ export function handleUpstreamError(
   formatErrors: ProtocolErrorFormatter,
   loginUrl: string,
   phase: ErrorPhase,
+  errorLogCtx?: ErrorLogContext,
 ): Response {
   c.get('logger').error({ err: error, phase }, 'upstream request failed')
   if (error instanceof OAuthError && error.code === 'auth_required') {
     const { body, status } = formatErrors.oauth(error.message, loginUrl)
     return c.json(body, status as 503)
+  }
+  if (errorLogCtx) {
+    errorLogCtx.errorLogger.log({
+      requestId: c.get('requestId'),
+      phase,
+      provider: c.get('provider') ?? '',
+      requestedModel: c.get('requestedModel') ?? '',
+      actualModel: c.get('actualModel') ?? '',
+      error: extractErrorInfo(error),
+      request: errorLogCtx.request,
+      response: errorLogCtx.response,
+    })
   }
   if (error instanceof RequestTimeoutError) {
     const { body, status } = formatErrors.timeout()

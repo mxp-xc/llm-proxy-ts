@@ -169,6 +169,13 @@ export const providerConfigSchema = z.discriminatedUnion('type', [
   openaiProviderSchema,
 ])
 
+export const errorLoggingSchema = z.object({
+  enabled: z.boolean().default(true),
+  maxBodyLength: z.number().int().positive().default(262144),
+})
+
+export type ErrorLoggingConfig = z.infer<typeof errorLoggingSchema>
+
 export const settingsSchema = z.object({
   $schema: z.string().optional(),
   service: z
@@ -193,6 +200,7 @@ export const settingsSchema = z.object({
     .default({}),
   plugins: z.array(pluginEntrySchema).default([]),
   codex: codexSettingsSchema.default({}),
+  errorLogging: errorLoggingSchema.default({}),
   providers: z.record(z.string(), providerConfigSchema).default({}),
 })
 

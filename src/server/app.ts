@@ -11,7 +11,7 @@ import {
 } from '../index.js'
 import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
 import pino from 'pino'
-import { logger as defaultLogger, requestId } from './logging.js'
+import { logger as defaultLogger, requestId, LOG_DIR } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
 import { createCodexApp } from './codex.js'
 import { CodexCatalogCache } from '../codex-catalog.js'
@@ -19,6 +19,7 @@ import type { ProviderAuthStatus } from './oauth/startup.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
 import { defaultGateway } from './gateway.js'
+import { ErrorLogger } from './error-logger.js'
 import type { ModelGateway, AppDependencies, AppEnv } from './types.js'
 
 export type { Settings } from '../index.js'
@@ -44,6 +45,7 @@ export function createApp({
   pluginRegistry,
   authFilePath,
   codexCatalogCache,
+  errorLogger,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -72,6 +74,11 @@ export function createApp({
     settings,
     gateway,
     resolveModel,
+    errorLogger: errorLogger ?? new ErrorLogger({
+      logDir: LOG_DIR,
+      enabled: settings.errorLogging.enabled,
+      maxBodyLength: settings.errorLogging.maxBodyLength,
+    }),
   }
 
   // settings 不可变(无 hot-reload),listModels 结果仅依赖 settings。

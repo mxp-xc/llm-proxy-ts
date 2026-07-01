@@ -7,7 +7,7 @@ import pino from 'pino'
 // --- Environment variable configuration ---
 
 const LOG_LEVEL = process.env.LLM_PROXY_LOG_LEVEL ?? 'info'
-const LOG_DIR = process.env.LLM_PROXY_LOG_DIR ?? resolve(process.cwd(), 'logs')
+export const LOG_DIR = process.env.LLM_PROXY_LOG_DIR ?? resolve(process.cwd(), 'logs')
 const LOG_FORMAT = process.env.LLM_PROXY_LOG_FORMAT ?? 'pretty'
 const LOG_RETENTION_DAYS = 7
 
@@ -154,15 +154,26 @@ function getLogFileName(): string {
   return `llm-proxy.${y}-${m}-${d}.log`
 }
 
+const ERROR_LOG_RETENTION_DAYS = 30
+
 export function cleanOldLogs(
   logDir: string = LOG_DIR,
   retentionDays: number = LOG_RETENTION_DAYS,
 ): void {
-  const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000
+  const now = Date.now()
+  const logCutoff = now - retentionDays * 24 * 60 * 60 * 1000
+  const errorCutoff = now - ERROR_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000
   try {
     for (const entry of readdirSync(logDir)) {
-      if (!/^llm-proxy\.\d{4}-\d{2}-\d{2}\.log$/.test(entry)) continue
       const filePath = resolve(logDir, entry)
+      let cutoff: number | undefined
+      if (/^llm-proxy\.\d{4}-\d{2}-\d{2}\.log$/.test(entry)) {
+        cutoff = logCutoff
+      } else if (/^errors-\d{4}-\d{2}-\d{2}\.ndjson$/.test(entry)) {
+        cutoff = errorCutoff
+      } else {
+        continue
+      }
       try {
         const stat = statSync(filePath)
         if (stat.isFile() && stat.mtimeMs < cutoff) {

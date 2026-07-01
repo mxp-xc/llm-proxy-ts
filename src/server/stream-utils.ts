@@ -5,6 +5,7 @@ const textEncoder = new TextEncoder()
 export class RequestTimeoutError extends Error {
   constructor() {
     super('Request timed out')
+    this.name = 'RequestTimeoutError'
   }
 }
 

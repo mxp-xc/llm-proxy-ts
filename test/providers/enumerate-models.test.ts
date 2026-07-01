@@ -21,6 +21,7 @@ function makeSettings(
         checkForUpdateOnStartup: false,
       },
     },
+    errorLogging: { enabled: true, maxBodyLength: 262144 },
     providers,
   }
 }

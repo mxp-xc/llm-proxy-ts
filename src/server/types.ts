@@ -7,6 +7,7 @@ import type { PluginRegistry } from '../plugins/registry.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import type pino from 'pino'
 import type { CodexCatalogCache } from '../codex-catalog.js'
+import type { ErrorLogger } from './error-logger.js'
 
 export type { Settings } from '../config.js'
 
@@ -39,6 +40,7 @@ export interface AppDependencies {
   pluginRegistry?: PluginRegistry
   authFilePath?: string
   codexCatalogCache?: CodexCatalogCache
+  errorLogger?: ErrorLogger
 }
 
 export type AppEnv = {

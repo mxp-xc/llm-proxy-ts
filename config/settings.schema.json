@@ -349,6 +349,22 @@
       "additionalProperties": false,
       "default": {}
     },
+    "errorLogging": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "maxBodyLength": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "default": 262144
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
     "providers": {
       "type": "object",
       "additionalProperties": {
