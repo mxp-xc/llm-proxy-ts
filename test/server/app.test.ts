@@ -21,8 +21,32 @@ function capturingPino(): { logger: pino.Logger; logs: Array<Record<string, unkn
       return true
     },
   }
+  const logger = pino({ level: 'info' }, stream)
+  return { logger, logs }
+}
+
+/** 仅捕获 error 级别日志的 pino（用于断言上游错误 phase）。 */
+function errorCapturingPino(): { logger: pino.Logger; logs: Array<Record<string, unknown>> } {
+  const logs: Array<Record<string, unknown>> = []
+  const stream = {
+    write(chunk: string) {
+      try {
+        logs.push(JSON.parse(chunk) as Record<string, unknown>)
+      } catch {
+        // 忽略非 JSON 行
+      }
+      return true
+    },
+  }
   const logger = pino({ level: 'error' }, stream)
   return { logger, logs }
+}
+
+/** 逐词 yield 后延迟结束的流，用于测试流式 completed 日志时序。 */
+async function* delayedTextStream(): AsyncIterable<unknown> {
+  yield { type: 'text-delta', text: 'hello' }
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 0, outputTokens: 1 } }
 }
 
 // ── Shared helpers ──────────────────────────────────────────────
@@ -406,7 +430,7 @@ describe('streamOnly provider', () => {
       ...openrouterSettings,
       providers: {
         openrouter: {
-          ...openrouterSettings.providers.openrouter!,
+         ...openrouterSettings.providers.openrouter!,
           options: { streamOnly: true },
           plugins: [{ name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] }],
         },
@@ -518,7 +542,7 @@ describe('streamOnly provider', () => {
   })
 
   it('logs phase "stream-only" when streamOnly upstream request fails', async () => {
-    const { logger, logs } = capturingPino()
+    const { logger, logs } = errorCapturingPino()
     const gateway = makeGateway({
       async generate() {
         throw new Error('generate should not be called for streamOnly provider')
@@ -775,6 +799,133 @@ describe('messages endpoint', () => {
 })
 
 // ── Shared test helpers ─────────────────────────────────────────
+
+// ── logging ─────────────────────────────────────────────────────
+
+describe('request logging', () => {
+  it('logs "request received" (not "request started")', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        return { text: 'hi', finishReason: 'stop' } as GenerateTextReturn
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+
+    const received = logs.find((e) => e.msg === 'request received')
+    expect(received).toBeDefined()
+    expect(logs.some((e) => e.msg === 'request started')).toBe(false)
+  })
+
+  it('logs "route resolved" with requestModel, upstreamModel and provider', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        return { text: 'hi', finishReason: 'stop' } as GenerateTextReturn
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+
+    const resolved = logs.find((e) => e.msg === 'route resolved')
+    expect(resolved).toBeDefined()
+    expect(resolved?.requestModel).toBe('openrouter/chat')
+    expect(resolved?.upstreamModel).toBe('openrouter/chat')
+    expect(resolved?.provider).toBe('openrouter')
+  })
+
+  it('logs "request completed" immediately for non-streaming responses', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        return { text: 'hi', finishReason: 'stop' } as GenerateTextReturn
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+    // 非 SSE 响应在 await next() 返回时就应已记 completed，无需消费 body
+    const completed = logs.find((e) => e.msg === 'request completed')
+    expect(completed).toBeDefined()
+    expect(completed?.status).toBe(200)
+  })
+
+  it('defers "request completed" until stream body is consumed', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream() {
+        return delayedTextStream() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+
+    // Response object is created but stream not yet consumed → completed not logged
+    expect(logs.some((e) => e.msg === 'request completed')).toBe(false)
+
+    // Consume the stream
+    await response.text()
+
+    const completed = logs.find((e) => e.msg === 'request completed')
+    expect(completed).toBeDefined()
+    expect(completed?.status).toBe(200)
+    // Stream has a 60ms delay, durationMs should reflect real consumption time
+    expect(completed?.durationMs).toBeGreaterThanOrEqual(50)
+  })
+})
 
 async function* throwingFirstChunk(): AsyncIterable<unknown> {
   throw new Error('first chunk secret')

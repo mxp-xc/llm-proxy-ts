@@ -92,25 +92,48 @@ export function createApp({
     const reqLogger = logger.child({ requestId: id })
     c.set('logger', reqLogger)
 
-    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request started')
+    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request received')
 
     const start = performance.now()
     await next()
 
-    const duration = performance.now() - start
-    reqLogger.info(
-      {
-        method: c.req.method,
-        path: c.req.path,
+    // SSE 流式响应的 body 是 ReadableStream，await next() 在 Response 创建时就 resolve，
+    // 流尚未被消费。用 TransformStream 包裹 body，在 flush（流结束）时才记 completed。
+    // 非 SSE 响应（c.json 等）虽然 body 也是 ReadableStream，但 await next() 已等完整响应，
+    // 无需延迟。
+    const logCompleted = () => {
+      const duration = performance.now() - start
+      reqLogger.info(
+        {
+          method: c.req.method,
+          path: c.req.path,
+          status: c.res.status,
+          durationMs: Math.round(duration),
+          provider: c.get('provider'),
+          requestedModel: c.get('requestedModel'),
+          actualModel: c.get('actualModel'),
+          keySelection: c.get('keySelection'),
+        },
+        'request completed',
+      )
+    }
+
+    const isSSE = c.res.headers.get('content-type')?.includes('text/event-stream')
+    if (isSSE && c.res.body instanceof ReadableStream) {
+      const body = c.res.body
+      const transform = new TransformStream<Uint8Array, Uint8Array>({
+        flush() {
+          logCompleted()
+        },
+      })
+      c.res = new Response(body.pipeThrough(transform), {
         status: c.res.status,
-        durationMs: Math.round(duration),
-        provider: c.get('provider'),
-        requestedModel: c.get('requestedModel'),
-        actualModel: c.get('actualModel'),
-        keySelection: c.get('keySelection'),
-      },
-      'request completed',
-    )
+        statusText: c.res.statusText,
+        headers: c.res.headers,
+      })
+    } else {
+      logCompleted()
+    }
     c.header('x-request-id', id)
   })
 

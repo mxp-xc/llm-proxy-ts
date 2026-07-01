@@ -99,6 +99,11 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   c.set('requestedModel', requestModel)
   c.set('actualModel', route.upstreamModel)
 
+  c.get('logger').info(
+    { requestModel, upstreamModel: route.upstreamModel, provider: route.providerName },
+    'route resolved',
+  )
+
   // 3. Map to AI SDK input
   const callInput = strategy.mapToAISDKInput(request, { providerType: route.provider.type })
   // 3.1 Collect declared custom grammar tool names for renderer discrimination
