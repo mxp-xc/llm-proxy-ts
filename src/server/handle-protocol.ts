@@ -110,7 +110,8 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   // (openai-responses only; other strategies don't implement getCustomToolNames)
   const customToolNames = strategy.getCustomToolNames?.(request)
   const customToolShimmed = customToolNames !== undefined && route.provider.type !== 'openai'
-  const toolSearchShimmed = route.provider.type !== 'openai' && (strategy.getHasClientToolSearch?.(request) ?? false)
+  const toolSearchShimmed =
+    route.provider.type !== 'openai' && (strategy.getHasClientToolSearch?.(request) ?? false)
   const namespaceFlatMap = strategy.getNamespaceFlatMap?.(request)
 
   // 4. Get LanguageModel
@@ -136,9 +137,15 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   if (strategy.isStream(request)) {
     try {
       const acquired = await acquireStream({
-        gateway: ctx.gateway, model, callInput, requestModel,
-        plugins: route.resolvedPlugins, timeoutMs: ctx.settings.requestTimeoutMs,
-        abortController, formatErrors, inspectCtx,
+        gateway: ctx.gateway,
+        model,
+        callInput,
+        requestModel,
+        plugins: route.resolvedPlugins,
+        timeoutMs: ctx.settings.requestTimeoutMs,
+        abortController,
+        formatErrors,
+        inspectCtx,
       })
       if ('rateLimitResponse' in acquired) {
         const { body, status } = acquired.rateLimitResponse
@@ -158,6 +165,7 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
           },
+          abortController,
         ),
         {
           headers: { 'content-type': 'text/event-stream' },
@@ -172,9 +180,15 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
   if (route.provider.options?.streamOnly) {
     try {
       const acquired = await acquireStream({
-        gateway: ctx.gateway, model, callInput, requestModel,
-        plugins: route.resolvedPlugins, timeoutMs: ctx.settings.requestTimeoutMs,
-        abortController, formatErrors, inspectCtx,
+        gateway: ctx.gateway,
+        model,
+        callInput,
+        requestModel,
+        plugins: route.resolvedPlugins,
+        timeoutMs: ctx.settings.requestTimeoutMs,
+        abortController,
+        formatErrors,
+        inspectCtx,
       })
       if ('rateLimitResponse' in acquired) {
         const { body, status } = acquired.rateLimitResponse
@@ -216,12 +230,12 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
       abortController,
     )
     const renderInput: Parameters<typeof strategy.renderResult>[0] = {
-        model: requestModel,
-        text: result.text,
-        finishReason: result.finishReason,
-        response: result.response,
-        toolCalls: result.toolCalls,
-      }
+      model: requestModel,
+      text: result.text,
+      finishReason: result.finishReason,
+      response: result.response,
+      toolCalls: result.toolCalls,
+    }
     if (result.usage) renderInput.usage = flattenUsage(result.usage)
     if (customToolNames) renderInput.customToolNames = customToolNames
     if (customToolShimmed) renderInput.customToolShimmed = customToolShimmed
