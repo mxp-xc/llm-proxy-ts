@@ -55,7 +55,12 @@ export interface ResponseToolSearchCall {
   arguments: Record<string, unknown>
 }
 
-export type ResponseOutputItem = ResponseOutputMessage | ResponseFunctionToolCall | ResponseCustomToolCall | ResponseWebSearchCall | ResponseToolSearchCall
+export type ResponseOutputItem =
+  | ResponseOutputMessage
+  | ResponseFunctionToolCall
+  | ResponseCustomToolCall
+  | ResponseWebSearchCall
+  | ResponseToolSearchCall
 
 export interface ResponseUsage {
   input_tokens: number
@@ -147,7 +152,13 @@ interface StreamToolSearchCallItem {
   arguments: Record<string, unknown>
 }
 
-type StreamOutputItem = StreamMessageItem | StreamFunctionCallItem | StreamCustomToolCallItem | StreamWebSearchCallItem | StreamToolSearchCallItem | StreamReasoningItem
+type StreamOutputItem =
+  | StreamMessageItem
+  | StreamFunctionCallItem
+  | StreamCustomToolCallItem
+  | StreamWebSearchCallItem
+  | StreamToolSearchCallItem
+  | StreamReasoningItem
 
 /** Minimal response object for created/in_progress events */
 interface StreamResponsePartial {

@@ -46,7 +46,8 @@ describe('applyCodexConfigEdits', () => {
   })
 
   it('preserves existing comments and other providers', () => {
-    const content = '# my codex config\nmodel = "gpt-5"\n\n[model_providers.openai]\nname = "OpenAI"\n'
+    const content =
+      '# my codex config\nmodel = "gpt-5"\n\n[model_providers.openai]\nname = "OpenAI"\n'
     const { content: out } = applyCodexConfigEdits(content, edits)
     expect(out).toContain('# my codex config')
     expect(out).toContain('[model_providers.openai]\nname = "OpenAI"')
@@ -75,7 +76,8 @@ describe('applyCodexConfigEdits: requires_openai_auth', () => {
   })
 
   it('reports overwrite when requires_openai_auth changes', () => {
-    const content = '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://127.0.0.1:8056/codex/v1"\nwire_api = "responses"\nrequires_openai_auth = true\n'
+    const content =
+      '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://127.0.0.1:8056/codex/v1"\nwire_api = "responses"\nrequires_openai_auth = true\n'
     const { overwritten } = applyCodexConfigEdits(content, edits)
     expect(overwritten.some((r) => r.kind === 'provider-table' && r.key === 'llm-proxy')).toBe(true)
   })
@@ -90,7 +92,10 @@ describe('applyCodexConfigEdits: requires_openai_auth', () => {
 
 describe('applyCodexConfigEdits: model_reasoning_effort', () => {
   it('writes model_reasoning_effort when provided', () => {
-    const { content, overwritten } = applyCodexConfigEdits('', { ...edits, modelReasoningEffort: 'xhigh' })
+    const { content, overwritten } = applyCodexConfigEdits('', {
+      ...edits,
+      modelReasoningEffort: 'xhigh',
+    })
     expect(content).toContain('model_reasoning_effort = "xhigh"')
     expect(overwritten).toEqual([])
   })
@@ -102,8 +107,13 @@ describe('applyCodexConfigEdits: model_reasoning_effort', () => {
 
   it('reports overwrite when model_reasoning_effort changes', () => {
     const content = 'model = "zhipu/glm-5.2"\nmodel_reasoning_effort = "low"\n'
-    const { overwritten } = applyCodexConfigEdits(content, { ...edits, modelReasoningEffort: 'high' })
-    expect(overwritten.some((r) => r.key === 'model_reasoning_effort' && r.oldValue === 'low')).toBe(true)
+    const { overwritten } = applyCodexConfigEdits(content, {
+      ...edits,
+      modelReasoningEffort: 'high',
+    })
+    expect(
+      overwritten.some((r) => r.key === 'model_reasoning_effort' && r.oldValue === 'low'),
+    ).toBe(true)
   })
 
   it('is idempotent with model_reasoning_effort', () => {
@@ -115,19 +125,24 @@ describe('applyCodexConfigEdits: model_reasoning_effort', () => {
   })
 })
 
-  it('removes stale model_reasoning_effort when not provided', () => {
-    const content = 'model = "zhipu/glm-5.2"\nmodel_reasoning_effort = "xhigh"\n'
-    const { content: out, overwritten } = applyCodexConfigEdits(content, edits)
-    expect(out).not.toContain('model_reasoning_effort')
-    expect(overwritten.some((r) => r.key === 'model_reasoning_effort' && r.oldValue === 'xhigh' && r.newValue === '<removed>')).toBe(true)
-  })
+it('removes stale model_reasoning_effort when not provided', () => {
+  const content = 'model = "zhipu/glm-5.2"\nmodel_reasoning_effort = "xhigh"\n'
+  const { content: out, overwritten } = applyCodexConfigEdits(content, edits)
+  expect(out).not.toContain('model_reasoning_effort')
+  expect(
+    overwritten.some(
+      (r) =>
+        r.key === 'model_reasoning_effort' && r.oldValue === 'xhigh' && r.newValue === '<removed>',
+    ),
+  ).toBe(true)
+})
 
-  it('is idempotent when model_reasoning_effort is absent and not provided', () => {
-    const first = applyCodexConfigEdits('', edits)
-    const second = applyCodexConfigEdits(first.content, edits)
-    expect(second.content).toBe(first.content)
-    expect(second.overwritten).toEqual([])
-  })
+it('is idempotent when model_reasoning_effort is absent and not provided', () => {
+  const first = applyCodexConfigEdits('', edits)
+  const second = applyCodexConfigEdits(first.content, edits)
+  expect(second.content).toBe(first.content)
+  expect(second.overwritten).toEqual([])
+})
 
 describe('applyCodexConfigEdits: check_for_update_on_startup', () => {
   it('writes check_for_update_on_startup = false by default', () => {
@@ -144,7 +159,14 @@ describe('applyCodexConfigEdits: check_for_update_on_startup', () => {
   it('reports overwrite when check_for_update_on_startup changes', () => {
     const content = 'check_for_update_on_startup = true\n'
     const { overwritten } = applyCodexConfigEdits(content, edits)
-    expect(overwritten.some((r) => r.key === 'check_for_update_on_startup' && r.oldValue === 'true' && r.newValue === 'false')).toBe(true)
+    expect(
+      overwritten.some(
+        (r) =>
+          r.key === 'check_for_update_on_startup' &&
+          r.oldValue === 'true' &&
+          r.newValue === 'false',
+      ),
+    ).toBe(true)
   })
 
   it('is idempotent with check_for_update_on_startup = false', () => {

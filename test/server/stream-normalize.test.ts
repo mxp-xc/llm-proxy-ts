@@ -27,7 +27,14 @@ describe('normalizeStream', () => {
   it('注入 finish-step.response 到 finish part', async () => {
     const ts = new Date('2026-06-24T00:00:00Z')
     const parts: ProxyStreamPart[] = [
-      { type: 'finish-step', response: { id: 'chatcmpl-1', timestamp: ts }, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
+      {
+        type: 'finish-step',
+        response: { id: 'chatcmpl-1', timestamp: ts },
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: usage },
     ]
 
@@ -59,8 +66,22 @@ describe('normalizeStream', () => {
     const ts1 = new Date('2026-06-24T00:00:00Z')
     const ts2 = new Date('2026-06-24T00:01:00Z')
     const parts: ProxyStreamPart[] = [
-      { type: 'finish-step', response: { id: 'chatcmpl-1', timestamp: ts1 }, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
-      { type: 'finish-step', response: { id: 'chatcmpl-2', timestamp: ts2 }, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
+      {
+        type: 'finish-step',
+        response: { id: 'chatcmpl-1', timestamp: ts1 },
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
+      {
+        type: 'finish-step',
+        response: { id: 'chatcmpl-2', timestamp: ts2 },
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: usage },
     ]
 
@@ -86,7 +107,14 @@ describe('normalizeStream', () => {
   it('finish-step.response 缺字段时只注入存在的字段', async () => {
     // 只有 id，无 timestamp
     const partsOnlyId: ProxyStreamPart[] = [
-      { type: 'finish-step', response: { id: 'chatcmpl-x' }, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
+      {
+        type: 'finish-step',
+        response: { id: 'chatcmpl-x' },
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: usage },
     ]
     const outOnlyId = await collect(normalizeStream(from(partsOnlyId)))
@@ -99,7 +127,14 @@ describe('normalizeStream', () => {
     // 只有 timestamp，无 id
     const ts = new Date('2026-06-24T00:00:00Z')
     const partsOnlyTs: ProxyStreamPart[] = [
-      { type: 'finish-step', response: { timestamp: ts }, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
+      {
+        type: 'finish-step',
+        response: { timestamp: ts },
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: usage },
     ]
     const outOnlyTs = await collect(normalizeStream(from(partsOnlyTs)))
@@ -111,7 +146,14 @@ describe('normalizeStream', () => {
 
     // response 为空对象 → 注入空对象（lastStepResponse 被设为 {}）
     const partsEmpty: ProxyStreamPart[] = [
-      { type: 'finish-step', response: {}, usage, finishReason: 'stop', rawFinishReason: 'stop', providerMetadata: undefined },
+      {
+        type: 'finish-step',
+        response: {},
+        usage,
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        providerMetadata: undefined,
+      },
       { type: 'finish', finishReason: 'stop', rawFinishReason: 'stop', totalUsage: usage },
     ]
     const outEmpty = await collect(normalizeStream(from(partsEmpty)))

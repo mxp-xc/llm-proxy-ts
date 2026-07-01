@@ -78,7 +78,11 @@ const toolChoiceSchema = z.union([
 // ─── Thinking Schema ───────────────────────────────────────────
 
 const thinkingSchema = z.union([
-  z.object({ type: z.literal('enabled'), budget_tokens: z.number().int().min(1024), display: z.enum(['summarized', 'omitted']).optional() }),
+  z.object({
+    type: z.literal('enabled'),
+    budget_tokens: z.number().int().min(1024),
+    display: z.enum(['summarized', 'omitted']).optional(),
+  }),
   z.object({ type: z.literal('adaptive'), display: z.enum(['summarized', 'omitted']).optional() }),
   z.object({ type: z.literal('disabled') }),
 ])
@@ -275,7 +279,10 @@ function mapMessage(
 function mapToolResultOutput(
   content: string | Array<{ type: 'text'; text: string }> | undefined,
   isError?: boolean,
-): { type: 'text'; value: string } | { type: 'error-text'; value: string } | { type: 'json'; value: unknown } {
+):
+  | { type: 'text'; value: string }
+  | { type: 'error-text'; value: string }
+  | { type: 'json'; value: unknown } {
   const outputType = isError ? 'error-text' : 'text'
   if (content === undefined) return { type: outputType, value: '' }
   if (typeof content === 'string') return { type: outputType, value: content }

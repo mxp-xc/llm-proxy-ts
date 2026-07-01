@@ -11,6 +11,7 @@
 动机:按协议/用途分组,为特定入口(如 codex)提供独立上下文根。
 
 **不在范围内**:
+
 - 不拆分 openai-compatible / anthropic / openai-responses 三个协议到各自根(保留现有 `/v1/*` 不变)
 - `GET /codex/v1/models/*`(模型详情)不实现
 - `/codex` 不挂 `chat/completions` 或 `messages` 端点(仅 responses)
@@ -47,10 +48,10 @@ test/server/
 
 ## 3. 端点清单
 
-| 方法 | 路径 | 处理 | 等价于 |
-|---|---|---|---|
+| 方法 | 路径                  | 处理                                                             | 等价于               |
+| ---- | --------------------- | ---------------------------------------------------------------- | -------------------- |
 | POST | `/codex/v1/responses` | `handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx)` | `POST /v1/responses` |
-| GET | `/codex/v1/models` | `c.json(listModels(settings))` | `GET /v1/models` |
+| GET  | `/codex/v1/models`    | `c.json(listModels(settings))`                                   | `GET /v1/models`     |
 
 `/codex/v1/models` 为自定义实现(复用 `listModels`),不透传上游 models 端点,与 `/v1/models` 返回同源。
 
@@ -69,9 +70,7 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const { settings, protocolCtx } = deps
 
-  app.post('/v1/responses', (c) =>
-    handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
-  )
+  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
   app.get('/v1/models', (c) => c.json(listModels(settings)))
 
   return app

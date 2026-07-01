@@ -58,14 +58,20 @@ describe('RoutingTable', () => {
 
   it('resolves flat aliases when enabled per-provider but globally off', () => {
     const s = settings(false)
-    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
+    s.providers.openrouter!.options = {
+      ...s.providers.openrouter!.options,
+      enableFlatModelLookup: true,
+    }
     const table = RoutingTable.fromSettings(s)
     expect(table.resolve('default').upstreamModel).toBe('openrouter/chat')
   })
 
   it('returns unknown_model when no flat alias matches (no flat_lookup_disabled)', () => {
     const s = settings(false)
-    s.providers.openrouter!.options = { ...s.providers.openrouter!.options, enableFlatModelLookup: true }
+    s.providers.openrouter!.options = {
+      ...s.providers.openrouter!.options,
+      enableFlatModelLookup: true,
+    }
     const table = RoutingTable.fromSettings(s)
     try {
       table.resolve('nonexistent')
@@ -84,7 +90,12 @@ describe('RoutingTable', () => {
       headers: {},
       plugins: [],
       models: {
-        other: { upstreamModel: 'deepseek/other', aliases: [{ name: 'default', flat: false }], headers: {}, plugins: [] },
+        other: {
+          upstreamModel: 'deepseek/other',
+          aliases: [{ name: 'default', flat: false }],
+          headers: {},
+          plugins: [],
+        },
       },
     }
     // Both openrouter (inherits global true) and deepseek (inherits global true)
@@ -161,7 +172,9 @@ describe('RoutingTable flat/alias resolution', () => {
 
   it('rejects duplicate prefixed selector: alias name == modelKey', () => {
     const s = makeSettings({ p: P({ m: M('up', [{ name: 'm', flat: false }]) }) })
-    expect(() => RoutingTable.fromSettings(s)).toThrow(/duplicate model selector 'm' in provider 'p'/)
+    expect(() => RoutingTable.fromSettings(s)).toThrow(
+      /duplicate model selector 'm' in provider 'p'/,
+    )
   })
 
   it('rejects duplicate prefixed selector: same alias name across models in same provider', () => {
@@ -171,7 +184,9 @@ describe('RoutingTable flat/alias resolution', () => {
         m2: M('up', [{ name: 'fast', flat: false }]),
       }),
     })
-    expect(() => RoutingTable.fromSettings(s)).toThrow(/duplicate model selector 'fast' in provider 'p'/)
+    expect(() => RoutingTable.fromSettings(s)).toThrow(
+      /duplicate model selector 'fast' in provider 'p'/,
+    )
   })
 })
 

@@ -173,7 +173,8 @@ describe('config', () => {
     }`)
     const p = settings.providers.custom
     expect(p?.type).toBe('openai-compatible')
-    if (p?.type === 'openai-compatible') expect(p.options?.modelsEndpoint).toBe('https://other.api.com/list')
+    if (p?.type === 'openai-compatible')
+      expect(p.options?.modelsEndpoint).toBe('https://other.api.com/list')
   })
 
   it('rejects empty modelsEndpoint', () => {
@@ -276,11 +277,18 @@ describe('config', () => {
   })
 
   it.each([
-    { name: 'openai-compatible', providerKey: 'openrouter', type: 'openai-compatible', extraFields: `"baseURL": "https://openrouter.ai/api/v1",` },
+    {
+      name: 'openai-compatible',
+      providerKey: 'openrouter',
+      type: 'openai-compatible',
+      extraFields: `"baseURL": "https://openrouter.ai/api/v1",`,
+    },
     { name: 'anthropic', providerKey: 'claude', type: 'anthropic', extraFields: '' },
     { name: 'openai', providerKey: 'gpt', type: 'openai', extraFields: '' },
-  ] as const)('accepts options.streamOnly for $name provider', ({ providerKey, type, extraFields }) => {
-    const settings = parseAndValidateSettings(`{
+  ] as const)(
+    'accepts options.streamOnly for $name provider',
+    ({ providerKey, type, extraFields }) => {
+      const settings = parseAndValidateSettings(`{
       "providers": {
         "${providerKey}": {
           "type": "${type}",
@@ -291,10 +299,11 @@ describe('config', () => {
         }
       }
     }`)
-    const p = settings.providers[providerKey]
-    expect(p?.type).toBe(type)
-    if (p?.type === type) expect(p.options?.streamOnly).toBe(true)
-  })
+      const p = settings.providers[providerKey]
+      expect(p?.type).toBe(type)
+      if (p?.type === type) expect(p.options?.streamOnly).toBe(true)
+    },
+  )
 
   it('defaults options to undefined when omitted', () => {
     const settings = parseAndValidateSettings(`{
@@ -315,12 +324,32 @@ describe('config', () => {
   // ── 向后兼容检测 ──────────────────────────────────────────
 
   it.each([
-    { field: 'enableFlatModelLookup', value: 'true', type: 'openai-compatible', providerKey: 'openrouter', extraFields: `"baseURL": "https://openrouter.ai/api/v1",` },
-    { field: 'anthropicVersion', value: '"2023-06-01"', type: 'anthropic', providerKey: 'claude', extraFields: '' },
-    { field: 'organization', value: '"org-123"', type: 'openai', providerKey: 'gpt', extraFields: '' },
-  ] as const)('rejects old top-level $field and suggests migration', ({ field, value, type, providerKey, extraFields }) => {
-    expect(() =>
-      parseAndValidateSettings(`{
+    {
+      field: 'enableFlatModelLookup',
+      value: 'true',
+      type: 'openai-compatible',
+      providerKey: 'openrouter',
+      extraFields: `"baseURL": "https://openrouter.ai/api/v1",`,
+    },
+    {
+      field: 'anthropicVersion',
+      value: '"2023-06-01"',
+      type: 'anthropic',
+      providerKey: 'claude',
+      extraFields: '',
+    },
+    {
+      field: 'organization',
+      value: '"org-123"',
+      type: 'openai',
+      providerKey: 'gpt',
+      extraFields: '',
+    },
+  ] as const)(
+    'rejects old top-level $field and suggests migration',
+    ({ field, value, type, providerKey, extraFields }) => {
+      expect(() =>
+        parseAndValidateSettings(`{
         "providers": {
           "${providerKey}": {
             "type": "${type}",
@@ -331,18 +360,39 @@ describe('config', () => {
           }
         }
       }`),
-    ).toThrow(new RegExp(`${field}.*migrated to provider\\.options`))
-  })
+      ).toThrow(new RegExp(`${field}.*migrated to provider\\.options`))
+    },
+  )
 
   // ── 跨类型选项验证 ──────────────────────────────────────
 
   it.each([
-    { option: 'anthropicVersion', optionValue: '"2023-06-01"', type: 'openai-compatible', providerKey: 'custom', extraFields: `"baseURL": "https://api.example.com/v1",` },
-    { option: 'organization', optionValue: '"org-123"', type: 'anthropic', providerKey: 'claude', extraFields: '' },
-    { option: 'modelsEndpoint', optionValue: '"/v1/models"', type: 'openai', providerKey: 'gpt', extraFields: '' },
-  ] as const)('rejects $option on $type provider', ({ option, optionValue, type, providerKey, extraFields }) => {
-    expect(() =>
-      parseAndValidateSettings(`{
+    {
+      option: 'anthropicVersion',
+      optionValue: '"2023-06-01"',
+      type: 'openai-compatible',
+      providerKey: 'custom',
+      extraFields: `"baseURL": "https://api.example.com/v1",`,
+    },
+    {
+      option: 'organization',
+      optionValue: '"org-123"',
+      type: 'anthropic',
+      providerKey: 'claude',
+      extraFields: '',
+    },
+    {
+      option: 'modelsEndpoint',
+      optionValue: '"/v1/models"',
+      type: 'openai',
+      providerKey: 'gpt',
+      extraFields: '',
+    },
+  ] as const)(
+    'rejects $option on $type provider',
+    ({ option, optionValue, type, providerKey, extraFields }) => {
+      expect(() =>
+        parseAndValidateSettings(`{
         "providers": {
           "${providerKey}": {
             "type": "${type}",
@@ -353,8 +403,9 @@ describe('config', () => {
           }
         }
       }`),
-    ).toThrow()
-  })
+      ).toThrow()
+    },
+  )
 
   // ── JSON Schema 按类型区分 options ──────────────────────
 
@@ -382,13 +433,22 @@ describe('config', () => {
 describe('modelRouteConfigSchema aliases', () => {
   it('accepts string aliases and normalizes to {name, flat:false}', () => {
     const r = modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['a1', 'a2'] })
-    expect(r.aliases).toEqual([{ name: 'a1', flat: false }, { name: 'a2', flat: false }])
+    expect(r.aliases).toEqual([
+      { name: 'a1', flat: false },
+      { name: 'a2', flat: false },
+    ])
     expect(r.flat).toBeUndefined()
   })
 
   it('accepts record aliases with flat', () => {
-    const r = modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: 'a', flat: true }, 'b'] })
-    expect(r.aliases).toEqual([{ name: 'a', flat: true }, { name: 'b', flat: false }])
+    const r = modelRouteConfigSchema.parse({
+      upstreamModel: 'm',
+      aliases: [{ name: 'a', flat: true }, 'b'],
+    })
+    expect(r.aliases).toEqual([
+      { name: 'a', flat: true },
+      { name: 'b', flat: false },
+    ])
   })
 
   it('accepts model-level flat', () => {
@@ -397,19 +457,27 @@ describe('modelRouteConfigSchema aliases', () => {
 
   it('rejects empty alias name', () => {
     expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [''] })).toThrow()
-    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: '' }] })).toThrow()
+    expect(() =>
+      modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: '' }] }),
+    ).toThrow()
   })
 
   it('rejects alias name containing "/" (string and record)', () => {
     expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['a/b'] })).toThrow()
-    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: 'a/b' }] })).toThrow()
+    expect(() =>
+      modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ name: 'a/b' }] }),
+    ).toThrow()
   })
 
   it('rejects record alias missing name', () => {
-    expect(() => modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ flat: true }] })).toThrow()
+    expect(() =>
+      modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: [{ flat: true }] }),
+    ).toThrow()
   })
 
   it('does not trim whitespace-only alias name', () => {
-    expect(modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['  '] }).aliases).toEqual([{ name: '  ', flat: false }])
+    expect(modelRouteConfigSchema.parse({ upstreamModel: 'm', aliases: ['  '] }).aliases).toEqual([
+      { name: '  ', flat: false },
+    ])
   })
 })

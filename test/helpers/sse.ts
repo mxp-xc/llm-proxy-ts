@@ -23,7 +23,9 @@ export async function collectSSEFrames<T>(
   for await (const output of stream) {
     if ('type' in output && output.type === 'done') continue
     const frame = output as SSEFrame<T>
-    frames.push(frame.event != null ? { event: frame.event, data: frame.data } : { data: frame.data })
+    frames.push(
+      frame.event != null ? { event: frame.event, data: frame.data } : { data: frame.data },
+    )
   }
   return frames
 }

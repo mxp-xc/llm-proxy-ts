@@ -4,10 +4,7 @@ import { parse, type ParseError } from 'jsonc-parser'
 import { z } from 'zod/v3'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 import { isRecord } from './providers/protocol-types.js'
-import {
-  codexModelOverrideSchema,
-  codexSettingsSchema,
-} from './codex-types.js'
+import { codexModelOverrideSchema, codexSettingsSchema } from './codex-types.js'
 
 // ─── Plugin entry schema ────────────────────────────────────────
 
@@ -26,9 +23,7 @@ const pluginEntryObjectSchema = z.object({
 export const pluginEntrySchema = z
   .union([z.string().min(1), pluginEntryObjectSchema])
   .transform((v) =>
-    typeof v === 'string'
-      ? { name: v, config: {} as Record<string, unknown>, providers: [] }
-      : v,
+    typeof v === 'string' ? { name: v, config: {} as Record<string, unknown>, providers: [] } : v,
   )
   .refine((v) => v.name || v.module, { message: 'Plugin must have name or module' })
 
@@ -53,10 +48,7 @@ export const modelLimitSchema = z.object({
 const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 /** effort 值：内置 enum 提示 + 任意自定义字符串 */
-const effortValueSchema = z.union([
-  z.enum(effortLevels),
-  z.string().min(1),
-])
+const effortValueSchema = z.union([z.enum(effortLevels), z.string().min(1)])
 
 /** reasoning effort 配置（模型属性，2 层：model + provider.options） */
 export const reasoningEffortConfigSchema = z
@@ -66,7 +58,10 @@ export const reasoningEffortConfigSchema = z
   })
   .strict()
   .refine(
-    (data) => data.default === undefined || data.supported === undefined || data.supported.includes(data.default),
+    (data) =>
+      data.default === undefined ||
+      data.supported === undefined ||
+      data.supported.includes(data.default),
     { message: 'default must be one of the supported values' },
   )
 
@@ -271,8 +266,8 @@ function checkMigratedTopLevelFields(parsed: unknown): void {
       if (MIGRATED_PROVIDER_FIELDS.has(key)) {
         throw new Error(
           `Provider "${providerName}": "${key}" has been migrated to provider.options. ` +
-          `Move \`${key}: ${String(provider[key])}\` to \`options: { ${key}: ... }\`. ` +
-          `See docs/migration.md for details.`,
+            `Move \`${key}: ${String(provider[key])}\` to \`options: { ${key}: ... }\`. ` +
+            `See docs/migration.md for details.`,
         )
       }
     }

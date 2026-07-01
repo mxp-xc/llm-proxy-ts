@@ -97,7 +97,12 @@ describe('Anthropic Messages protocol mapping', () => {
     expect(input.messages[0]).toEqual({
       role: 'assistant',
       content: [
-        { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', input: { city: 'NYC' } },
+        {
+          type: 'tool-call',
+          toolCallId: 'toolu_1',
+          toolName: 'get_weather',
+          input: { city: 'NYC' },
+        },
       ],
     })
   })
@@ -149,9 +154,7 @@ describe('Anthropic Messages protocol mapping', () => {
       messages: [
         {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'test' } },
-          ],
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'search', input: { q: 'test' } }],
         },
         {
           role: 'user',
@@ -159,7 +162,10 @@ describe('Anthropic Messages protocol mapping', () => {
             {
               type: 'tool_result',
               tool_use_id: 'toolu_1',
-              content: [{ type: 'text', text: 'Part 1' }, { type: 'text', text: 'Part 2' }],
+              content: [
+                { type: 'text', text: 'Part 1' },
+                { type: 'text', text: 'Part 2' },
+              ],
             },
           ],
         },
@@ -182,9 +188,7 @@ describe('Anthropic Messages protocol mapping', () => {
       messages: [
         {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', id: 'toolu_1', name: 'lookup', input: {} },
-          ],
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'lookup', input: {} }],
         },
         {
           role: 'user',
@@ -209,15 +213,11 @@ describe('Anthropic Messages protocol mapping', () => {
       messages: [
         {
           role: 'assistant',
-          content: [
-            { type: 'tool_use', id: 'toolu_1', name: 'query', input: {} },
-          ],
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'query', input: {} }],
         },
         {
           role: 'user',
-          content: [
-            { type: 'tool_result', tool_use_id: 'toolu_1', content: 'result only' },
-          ],
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'result only' }],
         },
       ],
     })
@@ -348,16 +348,14 @@ describe('Anthropic Messages protocol mapping', () => {
   })
 
   it('maps Anthropic-specific fields to providerOptions.anthropic', () => {
-    const input = mapAnthropicMessagesRequestToAISDKInput(
-      {
-        model: 'claude/sonnet',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: 'think' }],
-        thinking: { type: 'enabled', budget_tokens: 10000 },
-        top_k: 50,
-        metadata: { user_id: 'user-123' },
-      },
-    )
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: 'think' }],
+      thinking: { type: 'enabled', budget_tokens: 10000 },
+      top_k: 50,
+      metadata: { user_id: 'user-123' },
+    })
 
     expect(input.providerOptions).toEqual({
       anthropic: {
@@ -369,14 +367,12 @@ describe('Anthropic Messages protocol mapping', () => {
   })
 
   it('includes passthrough fields in providerOptions', () => {
-    const input = mapAnthropicMessagesRequestToAISDKInput(
-      {
-        model: 'claude/sonnet',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: 'hi' }],
-        custom_field: 'value',
-      },
-    )
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: 'hi' }],
+      custom_field: 'value',
+    })
 
     expect(input.providerOptions?.anthropic).toMatchObject({
       custom_field: 'value',

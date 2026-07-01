@@ -5,7 +5,11 @@ import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from './ren
 import type { OpenAIChatRequest } from './protocol.js'
 import type { OpenAIChatCompletion, OpenAIChatChunk, OpenAIChatStreamError } from './types.js'
 
-export const openaiCompatibleStrategy: ProtocolStrategy<OpenAIChatRequest, OpenAIChatChunk | OpenAIChatStreamError, OpenAIChatCompletion> = {
+export const openaiCompatibleStrategy: ProtocolStrategy<
+  OpenAIChatRequest,
+  OpenAIChatChunk | OpenAIChatStreamError,
+  OpenAIChatCompletion
+> = {
   validate: validateOpenAIChatRequest,
   validationMessage: 'Invalid OpenAI chat completion request',
   getModel: (req) => req.model,

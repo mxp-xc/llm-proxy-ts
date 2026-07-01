@@ -43,20 +43,14 @@ async function resolveProviderAuthStatus(
       return { provider: name, status: 'valid' }
     } catch (err) {
       const loginUrl = buildLoginUrl(settings, name)
-      logger.warn(
-        { provider: name, loginUrl, err },
-        'oauth token refresh failed — login required',
-      )
+      logger.warn({ provider: name, loginUrl, err }, 'oauth token refresh failed — login required')
       return { provider: name, status: 'needs_login', loginUrl }
     }
   }
 
   // needs_login
   const loginUrl = buildLoginUrl(settings, name)
-  logger.warn(
-    { provider: name, loginUrl },
-    'oauth login required — visit the URL to authenticate',
-  )
+  logger.warn({ provider: name, loginUrl }, 'oauth login required — visit the URL to authenticate')
   return { provider: name, status: 'needs_login', loginUrl }
 }
 

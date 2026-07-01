@@ -24,43 +24,55 @@ commit `223abdf` 引入 `/codex` models 端点(4 层 catalog 覆盖)。代码审
 
 ## 新结构关键文件
 
-| 文件 | 责任 |
-|---|---|
-| `src/codex-types.ts` | codex schema(`codexModelInfoSchema`/`codexModelOverrideSchema`/`codexSettingsSchema`),叶子模块,仅依赖 zod/v3 |
-| `src/providers/model-types.ts` | `ModelEntry`(`ids: string[]`)+ `enumerateModelEntries`(72d19dd 已提取,#6) |
-| `src/server/codex-catalog.ts` | `CodexCatalogCache` 类(注入式,构造绑定 fetcher)+ `applyOverride` + `resolveTemplateSlug` + `resolveContextWindow` + `buildCodexModelsResponse`(遍历 `entry.ids`) |
-| `src/server/codex.ts` | `/codex` 子 app:端点 handler + 错误处理(依赖 `catalogCache: CodexCatalogCache`) |
-| `test/helpers/settings.ts` | `makeSettings` 测试 helper |
+| 文件                           | 责任                                                                                                                                                             |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/codex-types.ts`           | codex schema(`codexModelInfoSchema`/`codexModelOverrideSchema`/`codexSettingsSchema`),叶子模块,仅依赖 zod/v3                                                     |
+| `src/providers/model-types.ts` | `ModelEntry`(`ids: string[]`)+ `enumerateModelEntries`(72d19dd 已提取,#6)                                                                                        |
+| `src/server/codex-catalog.ts`  | `CodexCatalogCache` 类(注入式,构造绑定 fetcher)+ `applyOverride` + `resolveTemplateSlug` + `resolveContextWindow` + `buildCodexModelsResponse`(遍历 `entry.ids`) |
+| `src/server/codex.ts`          | `/codex` 子 app:端点 handler + 错误处理(依赖 `catalogCache: CodexCatalogCache`)                                                                                  |
+| `test/helpers/settings.ts`     | `makeSettings` 测试 helper                                                                                                                                       |
 
 ## 修复项
 
 ### N1 — makeSettings codex 浅拷贝隔离(#5)
+
 `test/helpers/settings.ts` — `makeSettings` 返回对象加 `codex: { ...baseSettings.codex }`(放 `...overrides` 前)。隔离 `codex-catalog.test.ts` 的 `settings.codex.default_reasoning_level = 'medium'` mutate 不写回 `baseSettings.codex`。
+
 - 测试:`codex-catalog.test.ts` 加 `does not share codex reference across makeSettings calls`。
 
 ### N2 — applyOverride 过滤 max_context_window(#3)
+
 `src/server/codex-catalog.ts` — `applyOverride` 的 filter 增加 `k !== 'max_context_window'`。`context_window` 与 `max_context_window` 始终相等(均 = `limit.context ?? 4 层 contextWindow`),消除同时配 `codex.{context_window:X, max_context_window:Y}` 且 Y<X 时 `max < context` 的矛盾。
+
 - 测试:`codex-catalog.test.ts` 加 `max_context_window stays equal to context_window (max override ignored)`。
 
 ### N3 — context_window positive 校验(#4)
+
 `src/codex-types.ts` — `codexModelOverrideSchema.extend` 增加 `context_window: z.number().int().positive().nullable().optional()`(覆盖从 `:62` 继承的宽松 `z.number().nullable().optional()`)。`null` 仍允许(`resolveContextWindow` 的 `??` 跳过=未设),禁 `0`/负数。`codexSettingsSchema` 的 `.extend({ context_window: positive.default(200000) })` 仍覆盖为 default。
+
 - 测试:`codex-config.test.ts` 加 `rejects context_window <= 0` + `accepts null context_window at override layer`。
 
 ### N4 — defaultFetcher timeout+maxBuffer(#1,hang 可自愈)
+
 `src/server/codex-catalog.ts` — `defaultFetcher` 的 `execFileAsync` 加 `{ timeout: 10_000, maxBuffer: 10 * 1024 * 1024 }`。超时后 reject(SIGTERM)→ `CodexCatalogCache.get()` 的 `finally` 清空 `inflight` → 后续请求可重试,修复 codex 子进程 hang 导致端点永久阻塞且无法自愈。
+
 - 测试:`codex-catalog.test.ts` 加 `recovers after fetcher rejection: inflight cleared, retry succeeds`(用 `new CodexCatalogCache(fetcher)`)。
 
 ### N5 — 动态默认 templateSlug(#7)
+
 - `src/codex-types.ts`:`codexSettingsSchema.templateSlug` 从 `default('gpt-5.4')` 改 `optional()`。
 - `src/server/codex-catalog.ts`:`resolveTemplateSlug` 返回 `string | undefined`;新增 `const FALLBACK_DEFAULT_SLUG = 'gpt-5.4'` + `pickDefaultTemplateSlug(catalog)`(`catalog.values()` 首个 `supported_in_api=true` 的 slug,无则兜底);`buildCodexModelsResponse` 在 `for entry` 循环外算 `defaultSlug`(在 `for id of entry.ids` 之外,只算一次),entry 用 `resolveTemplateSlug(settings, entry) ?? defaultSlug`。用户显式配了 templateSlug 仍用它(缺失 throw);仅全层未配时动态选。
 - `test/helpers/settings.ts:9`:`baseSettings.codex` 移除 `templateSlug` → `codex: { context_window: 200000 }`。
 - 测试:`codex-catalog.test.ts` 断言 `base_instructions` `'codex-base'`→`'codex-5.5'`(CATALOG 中 gpt-5.4 `supported_in_api=false`、gpt-5.5 `=true`,动态默认选 gpt-5.5);用例名改 `dynamic default templateSlug picks first supported_in_api catalog entry`。`codex-config.test.ts` `templateSlug` 断言 `toBe('gpt-5.4')`→`toBeUndefined()`。
 
 ### N6 — 503 简短 reason + logger 可选链(#8+#9)
+
 `src/server/codex.ts` — `import { ZodError } from 'zod/v3'`;catch 中 `reason = err instanceof ZodError ? 'codex catalog schema validation failed' : err instanceof Error ? err.message : String(err)`;`c.get('logger')?.error(...)`。非 ZodError 保留 `err.message`(spec §6 要求含 reason),避免回显完整 ZodError JSON。
+
 - 测试:`codex-endpoint.test.ts` 加 `returns 503 with short reason (no ZodError JSON) on catalog schema failure`(用 `new CodexCatalogCache(async () => JSON.stringify({ models: [{}] }))` 触发 ZodError)。
 
 ### N7 — spec 同步 + schema 重生成
+
 - `docs/superpowers/specs/2026-06-23-codex-models-format-design.md`:§3 line 46 + §5 line 126 + §9 line 220(#7 动态默认);§4 字段表 + §5 line 128 + §5 示例 + §9 line 223(#3 max 对齐);§6 line 178(#8 reason 粒度)。
 - `pnpm generate:schema` 重生成 `config/settings.schema.json`(templateSlug default 移除 + context_window override 约束)。
 

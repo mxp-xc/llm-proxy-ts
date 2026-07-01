@@ -34,20 +34,22 @@ export function extractUsageFromFinishPart(
 
 /** 判断是否有实际 usage 数据（至少一个 token 计数 > 0）
  *  接受 ExtractedUsage（SSE 路径）或 RenderResultInput['usage']（非流式路径） */
-export function hasUsageData(usage: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined): boolean {
+export function hasUsageData(
+  usage: { inputTokens?: number | undefined; outputTokens?: number | undefined } | undefined,
+): boolean {
   if (usage === undefined) return false
   return (usage.inputTokens ?? 0) > 0 || (usage.outputTokens ?? 0) > 0
 }
 
 /** 将 AI SDK LanguageModelUsage（嵌套 details）展平为 RenderResultInput['usage'] */
-export function flattenUsage(
-  usage: LanguageModelUsage,
-): NonNullable<RenderResultInput['usage']> {
+export function flattenUsage(usage: LanguageModelUsage): NonNullable<RenderResultInput['usage']> {
   const result: NonNullable<RenderResultInput['usage']> = {}
   if (usage.inputTokens !== undefined) result.inputTokens = usage.inputTokens
   if (usage.outputTokens !== undefined) result.outputTokens = usage.outputTokens
   if (usage.totalTokens !== undefined) result.totalTokens = usage.totalTokens
-  if (usage.inputTokenDetails?.cacheReadTokens !== undefined) result.cacheReadTokens = usage.inputTokenDetails.cacheReadTokens
-  if (usage.outputTokenDetails?.reasoningTokens !== undefined) result.reasoningTokens = usage.outputTokenDetails.reasoningTokens
+  if (usage.inputTokenDetails?.cacheReadTokens !== undefined)
+    result.cacheReadTokens = usage.inputTokenDetails.cacheReadTokens
+  if (usage.outputTokenDetails?.reasoningTokens !== undefined)
+    result.reasoningTokens = usage.outputTokenDetails.reasoningTokens
   return result
 }

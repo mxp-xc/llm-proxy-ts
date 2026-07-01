@@ -75,7 +75,14 @@ function isVendorSseErrorConfig(value: unknown): value is VendorSseErrorConfig {
   const obj = value as Record<string, unknown>
   if ('maxPreviewEvents' in obj && typeof obj.maxPreviewEvents !== 'number') return false
   if ('maxPreviewBytes' in obj && typeof obj.maxPreviewBytes !== 'number') return false
-  if ('rateLimitCodes' in obj && !(Array.isArray(obj.rateLimitCodes) && (obj.rateLimitCodes as unknown[]).every(v => typeof v === 'string'))) return false
+  if (
+    'rateLimitCodes' in obj &&
+    !(
+      Array.isArray(obj.rateLimitCodes) &&
+      (obj.rateLimitCodes as unknown[]).every((v) => typeof v === 'string')
+    )
+  )
+    return false
   return true
 }
 

@@ -26,7 +26,8 @@ export default {
 
     return (baseFetch) => async (input, init) => {
       const fetchFn = baseFetch ?? globalThis.fetch
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
       const method = init?.method ?? 'GET'
 
       // ─── 请求日志 ────────────────────────────────────────────
@@ -67,7 +68,8 @@ export default {
         try {
           const text = await cloned.text()
           // 截断超长 body
-          resInfo.body = text.length > 2000 ? `${text.slice(0, 2000)}… [truncated, ${text.length} chars]` : text
+          resInfo.body =
+            text.length > 2000 ? `${text.slice(0, 2000)}… [truncated, ${text.length} chars]` : text
         } catch {
           resInfo.body = '[unable to read body]'
         }

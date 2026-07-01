@@ -1,6 +1,7 @@
 # codex install CLI 子命令 Implementation Plan
 
 > **实现后记（2026-06-25）**：本 plan 已实现并 squash 合并到 main（commit `358b919`）。相对 plan 的调整：
+>
 > 1. **code-review max 修复 11 项**：TOML 编辑器加固（表头带注释→重复表、read regex 捕获行内注释→读值损坏、控制字符转义、混合换行）；`normalizeTomlString`/`normalizeValue` 对称化修复幂等性误报；非 503 错误消费 response body；`catalogFilename` 复用单一常量；`defaultFs` 改静态 import；删死类型 `CodexModelsResponse`；校验 `selectModel` 返回 slug ∈ models；修复测试 `delete process.env` 泄漏。
 > 2. **rebase onto main 重构（`72d19dd`）**：codex schemas 从 `config.ts` 迁至叶子模块 `codex-types.ts`，`codex-install.ts` 的 `codexModelInfoSchema`/`CodexModelInfo` 改从 `'../codex-types.js'` import（`Settings`/`loadSettingsFromFile` 仍从 `'../config.js'`）。
 >
@@ -29,18 +30,18 @@
 
 ## File Structure
 
-| 文件 | 动作 | 职责 |
-|---|---|---|
-| `src/cli/toml-editor.ts` | Create | 无依赖 TOML 行编辑纯函数（string→string，保留注释/EOL） |
-| `src/cli/codex-home.ts` | Create | codex home / config / catalog 路径解析纯函数 |
-| `src/cli/codex-toml.ts` | Create | `applyCodexConfigEdits` 编排 4 处编辑 + 覆盖报告 |
-| `src/cli/codex-install.ts` | Create | `runCodexInstall` + `buildCodexBaseUrl` + `fetchCodexModelsResponse` + `createCodexInstallCommand` |
-| `src/cli/codex.ts` | Create | `codex` 命令组 |
-| `src/cli/cli.ts` | Modify | 注册 `createCodexCommand` |
-| `test/cli/toml-editor.test.ts` | Create | toml-editor 纯函数边界测试 |
-| `test/cli/codex-home.test.ts` | Create | codex-home 路径解析测试 |
-| `test/cli/codex-toml.test.ts` | Create | applyCodexConfigEdits 编排 + 幂等测试 |
-| `test/cli/codex-install.test.ts` | Create | runCodexInstall 端到端（注入 fetch/fs/prompts + temp dir） |
+| 文件                             | 动作   | 职责                                                                                               |
+| -------------------------------- | ------ | -------------------------------------------------------------------------------------------------- |
+| `src/cli/toml-editor.ts`         | Create | 无依赖 TOML 行编辑纯函数（string→string，保留注释/EOL）                                            |
+| `src/cli/codex-home.ts`          | Create | codex home / config / catalog 路径解析纯函数                                                       |
+| `src/cli/codex-toml.ts`          | Create | `applyCodexConfigEdits` 编排 4 处编辑 + 覆盖报告                                                   |
+| `src/cli/codex-install.ts`       | Create | `runCodexInstall` + `buildCodexBaseUrl` + `fetchCodexModelsResponse` + `createCodexInstallCommand` |
+| `src/cli/codex.ts`               | Create | `codex` 命令组                                                                                     |
+| `src/cli/cli.ts`                 | Modify | 注册 `createCodexCommand`                                                                          |
+| `test/cli/toml-editor.test.ts`   | Create | toml-editor 纯函数边界测试                                                                         |
+| `test/cli/codex-home.test.ts`    | Create | codex-home 路径解析测试                                                                            |
+| `test/cli/codex-toml.test.ts`    | Create | applyCodexConfigEdits 编排 + 幂等测试                                                              |
+| `test/cli/codex-install.test.ts` | Create | runCodexInstall 端到端（注入 fetch/fs/prompts + temp dir）                                         |
 
 复用现有：`codex-types.ts` 的 `codexModelInfoSchema`/`CodexModelInfo`；`config.ts` 的 `Settings`/`loadSettingsFromFile`；`src/cli/context.ts` 的 `resolveCliContext`；`test/helpers/temp-file.ts` 的 `createTempDir`；`test/helpers/settings.ts` 的 `makeSettings`。无新依赖。
 
@@ -49,10 +50,12 @@
 ### Task 1: toml-editor.ts — TOML 行编辑纯函数
 
 **Files:**
+
 - Create: `src/cli/toml-editor.ts`
 - Test: `test/cli/toml-editor.test.ts`
 
 **Interfaces:**
+
 - Consumes: 无（无依赖纯函数）
 - Produces: `formatTomlString`, `formatTomlBool`, `formatTableHeaderPath`, `setTopLevelKey`, `setProviderTable`, `readTopLevelKey`, `readProviderTableField`（供 Task 3 的 `applyCodexConfigEdits` 使用）
 
@@ -88,10 +91,14 @@ describe('formatTomlBool', () => {
 
 describe('formatTableHeaderPath', () => {
   it('bare keys joined by dot', () => {
-    expect(formatTableHeaderPath(['model_providers', 'llm-proxy'])).toBe('model_providers.llm-proxy')
+    expect(formatTableHeaderPath(['model_providers', 'llm-proxy'])).toBe(
+      'model_providers.llm-proxy',
+    )
   })
   it('non-bare key quoted', () => {
-    expect(formatTableHeaderPath(['model_providers', 'weird id'])).toBe('model_providers."weird id"')
+    expect(formatTableHeaderPath(['model_providers', 'weird id'])).toBe(
+      'model_providers."weird id"',
+    )
   })
 })
 
@@ -101,8 +108,9 @@ describe('setTopLevelKey', () => {
   })
   it('replaces existing root key, preserves leading comment', () => {
     const content = '# my model\nmodel = "gpt-5"\n'
-    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2')))
-      .toBe('# my model\nmodel = "glm-5.2"\n')
+    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe(
+      '# my model\nmodel = "glm-5.2"\n',
+    )
   })
   it('inserts before first table with blank separator', () => {
     const content = '[model_providers.openai]\nname = "OpenAI"\n'
@@ -121,12 +129,18 @@ describe('setTopLevelKey', () => {
   })
   it('preserves CRLF line endings', () => {
     const content = 'model = "gpt-5"\r\n'
-    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe('model = "glm-5.2"\r\n')
+    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe(
+      'model = "glm-5.2"\r\n',
+    )
   })
 })
 
 describe('setProviderTable', () => {
-  const fields = { name: 'LLM Proxy', base_url: 'http://127.0.0.1:8056/codex/v1', wire_api: 'responses' }
+  const fields = {
+    name: 'LLM Proxy',
+    base_url: 'http://127.0.0.1:8056/codex/v1',
+    wire_api: 'responses',
+  }
   it('appends new table at EOF with leading blank line', () => {
     const content = 'model = "glm-5.2"\n'
     const out = setProviderTable(content, 'llm-proxy', fields)
@@ -143,7 +157,8 @@ describe('setProviderTable', () => {
     expect(out).not.toContain('env_key')
   })
   it('stops at next table header', () => {
-    const content = '[model_providers.llm-proxy]\nname = "old"\n[model_providers.openai]\nname = "OpenAI"\n'
+    const content =
+      '[model_providers.llm-proxy]\nname = "old"\n[model_providers.openai]\nname = "OpenAI"\n'
     const out = setProviderTable(content, 'llm-proxy', fields)
     expect(out).toContain('[model_providers.openai]\nname = "OpenAI"')
     expect(out).not.toContain('name = "old"')
@@ -170,7 +185,8 @@ describe('readTopLevelKey', () => {
 
 describe('readProviderTableField', () => {
   it('reads field from target table', () => {
-    const content = '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://x/codex/v1"\n'
+    const content =
+      '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://x/codex/v1"\n'
     expect(readProviderTableField(content, 'llm-proxy', 'base_url')).toBe('http://x/codex/v1')
   })
   it('returns undefined when table missing', () => {
@@ -209,7 +225,9 @@ export function formatTomlBool(value: boolean): string {
 
 /** Format an array of key segments as a TOML dotted table header path. */
 export function formatTableHeaderPath(segments: string[]): string {
-  return segments.map((s) => (isBareKey(s) ? s : `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)).join('.')
+  return segments
+    .map((s) => (isBareKey(s) ? s : `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`))
+    .join('.')
 }
 
 type FieldValue = string | boolean
@@ -351,7 +369,10 @@ export function setProviderTable(
 /** Strip surrounding TOML quotes/whitespace from a raw value token. */
 function normalizeValue(raw: string): string {
   const trimmed = raw.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
     return trimmed.slice(1, -1)
   }
   return trimmed
@@ -416,10 +437,12 @@ git commit -m "feat(cli): add toml-editor pure functions for codex config editin
 ### Task 2: codex-home.ts — codex 路径解析
 
 **Files:**
+
 - Create: `src/cli/codex-home.ts`
 - Test: `test/cli/codex-home.test.ts`
 
 **Interfaces:**
+
 - Consumes: `node:os` 的 `homedir`, `node:path` 的 `join`
 - Produces: `resolveCodexHome`, `resolveCodexConfigPath`, `resolveCodexCatalogPath`, `DEFAULT_CATALOG_FILENAME`（供 Task 4 使用）
 
@@ -433,7 +456,11 @@ vi.mock('node:os', () => ({
 }))
 
 import { homedir } from 'node:os'
-import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath } from '../../src/cli/codex-home.js'
+import {
+  resolveCodexHome,
+  resolveCodexConfigPath,
+  resolveCodexCatalogPath,
+} from '../../src/cli/codex-home.js'
 
 const mockedHomedir = vi.mocked(homedir)
 
@@ -531,10 +558,12 @@ git commit -m "feat(cli): add codex home path resolution helpers"
 ### Task 3: codex-toml.ts — config.toml 编辑编排
 
 **Files:**
+
 - Create: `src/cli/codex-toml.ts`
 - Test: `test/cli/codex-toml.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1 的 `setTopLevelKey`, `setProviderTable`, `readTopLevelKey`, `readProviderTableField`, `formatTomlString`
 - Produces: `applyCodexConfigEdits`, `CodexConfigEdits`, `TomlOverwriteReport`（供 Task 4 使用）
 
@@ -586,7 +615,8 @@ describe('applyCodexConfigEdits', () => {
   })
 
   it('preserves existing comments and other providers', () => {
-    const content = '# my codex config\nmodel = "gpt-5"\n\n[model_providers.openai]\nname = "OpenAI"\n'
+    const content =
+      '# my codex config\nmodel = "gpt-5"\n\n[model_providers.openai]\nname = "OpenAI"\n'
     const { content: out } = applyCodexConfigEdits(content, edits)
     expect(out).toContain('# my codex config')
     expect(out).toContain('[model_providers.openai]\nname = "OpenAI"')
@@ -643,7 +673,12 @@ export function applyCodexConfigEdits(
   for (const { key, newValue } of topKeys) {
     const oldRaw = readTopLevelKey(cur, key)
     if (oldRaw !== undefined && oldRaw !== normalizeTomlString(newValue)) {
-      overwritten.push({ kind: 'top-level-key', key, oldValue: oldRaw, newValue: normalizeTomlString(newValue) })
+      overwritten.push({
+        kind: 'top-level-key',
+        key,
+        oldValue: oldRaw,
+        newValue: normalizeTomlString(newValue),
+      })
     }
     cur = setTopLevelKey(cur, key, newValue)
   }
@@ -657,11 +692,7 @@ export function applyCodexConfigEdits(
   const oldName = readProviderTableField(cur, params.providerId, 'name')
   const oldBaseUrl = readProviderTableField(cur, params.providerId, 'base_url')
   const oldWireApi = readProviderTableField(cur, params.providerId, 'wire_api')
-  if (
-    oldName !== undefined ||
-    oldBaseUrl !== undefined ||
-    oldWireApi !== undefined
-  ) {
+  if (oldName !== undefined || oldBaseUrl !== undefined || oldWireApi !== undefined) {
     const changed =
       (oldName !== undefined && oldName !== params.providerName) ||
       (oldBaseUrl !== undefined && oldBaseUrl !== params.baseUrl) ||
@@ -709,12 +740,14 @@ git commit -m "feat(cli): add applyCodexConfigEdits orchestration for codex inst
 ### Task 4: codex-install.ts + codex.ts + cli.ts — install 命令与注册
 
 **Files:**
+
 - Create: `src/cli/codex-install.ts`
 - Create: `src/cli/codex.ts`
 - Modify: `src/cli/cli.ts`
 - Test: `test/cli/codex-install.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 2 的 `resolveCodexHome`/`resolveCodexConfigPath`/`resolveCodexCatalogPath`/`DEFAULT_CATALOG_FILENAME`；Task 3 的 `applyCodexConfigEdits`/`CodexConfigEdits`；`codex-types.ts` 的 `codexModelInfoSchema`/`CodexModelInfo`；`config.ts` 的 `Settings`/`loadSettingsFromFile`；`context.ts` 的 `resolveCliContext`
 - Produces: `codex install` CLI 命令
 
@@ -726,7 +759,11 @@ import { createTempDir, writeTempSettings } from '../helpers/temp-file.js'
 import { makeSettings } from '../helpers/settings.js'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { buildCodexBaseUrl, fetchCodexModelsResponse, runCodexInstall } from '../../src/cli/codex-install.js'
+import {
+  buildCodexBaseUrl,
+  fetchCodexModelsResponse,
+  runCodexInstall,
+} from '../../src/cli/codex-install.js'
 
 function makeModel(slug: string, displayName = slug) {
   return {
@@ -748,7 +785,10 @@ function makeModel(slug: string, displayName = slug) {
 
 describe('buildCodexBaseUrl', () => {
   it('builds http url without trailing slash', () => {
-    const settings = makeSettings({}, { service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 } })
+    const settings = makeSettings(
+      {},
+      { service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 } },
+    )
     expect(buildCodexBaseUrl(settings)).toBe('http://127.0.0.1:8056/codex/v1')
   })
   it('brackets IPv6 host', () => {
@@ -773,13 +813,19 @@ describe('fetchCodexModelsResponse', () => {
       status: 503,
       json: async () => ({ error: { type: 'server_error', message: 'codex CLI missing' } }),
     }) as unknown as typeof fetch
-    await expect(fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl })).rejects.toMatchObject({
+    await expect(
+      fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl }),
+    ).rejects.toMatchObject({
       kind: 'http503',
     })
   })
   it('throws network on TypeError', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed')) as unknown as typeof fetch
-    await expect(fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl })).rejects.toMatchObject({
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValue(new TypeError('fetch failed')) as unknown as typeof fetch
+    await expect(
+      fetchCodexModelsResponse({ url: 'http://x/codex/v1/models', fetchImpl }),
+    ).rejects.toMatchObject({
       kind: 'network',
     })
   })
@@ -791,12 +837,14 @@ describe('runCodexInstall', () => {
 
   beforeEach(async () => {
     tmp = await createTempDir('codex-install-')
-    settings = await writeTempSettings(JSON.stringify({
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
-      providers: {},
-      routing: { enableFlatModelLookup: true },
-      codex: { templateSlug: 'gpt-5.5', context_window: 204800 },
-    }))
+    settings = await writeTempSettings(
+      JSON.stringify({
+        service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
+        providers: {},
+        routing: { enableFlatModelLookup: true },
+        codex: { templateSlug: 'gpt-5.5', context_window: 204800 },
+      }),
+    )
   })
   afterEach(async () => {
     await tmp.cleanup()
@@ -805,7 +853,14 @@ describe('runCodexInstall', () => {
 
   it('aborts when config.toml missing, no fetch, no catalog written', async () => {
     const fetchImpl = vi.fn()
-    const fs = { readFile, writeFile: vi.fn(), mkdir, access: async () => { throw new Error('enoent') } }
+    const fs = {
+      readFile,
+      writeFile: vi.fn(),
+      mkdir,
+      access: async () => {
+        throw new Error('enoent')
+      },
+    }
     await runCodexInstall({
       settingsPath: settings.path,
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -924,7 +979,12 @@ import type { CodexModelInfo } from '../codex-types.js'
 import { loadSettingsFromFile } from '../config.js'
 import type { Settings } from '../config.js'
 import { resolveCliContext } from './context.js'
-import { resolveCodexHome, resolveCodexConfigPath, resolveCodexCatalogPath, DEFAULT_CATALOG_FILENAME } from './codex-home.js'
+import {
+  resolveCodexHome,
+  resolveCodexConfigPath,
+  resolveCodexCatalogPath,
+  DEFAULT_CATALOG_FILENAME,
+} from './codex-home.js'
 import { applyCodexConfigEdits } from './codex-toml.js'
 
 const codexModelsResponseSchema = z.object({ models: z.array(codexModelInfoSchema) })
@@ -1067,12 +1127,17 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   clack.log.step(`Fetching model catalog from ${baseUrl}...`)
   let modelsRes: { models: CodexModelInfo[] }
   try {
-    modelsRes = await fetchCodexModelsResponse({ url: `${baseUrl}/models`, fetchImpl: options.fetchImpl })
+    modelsRes = await fetchCodexModelsResponse({
+      url: `${baseUrl}/models`,
+      fetchImpl: options.fetchImpl,
+    })
   } catch (err) {
     if (err instanceof CodexEndpointError) {
       clack.log.error(mapEndpointError(err))
     } else {
-      clack.log.error(`Failed to fetch catalog: ${err instanceof Error ? err.message : String(err)}`)
+      clack.log.error(
+        `Failed to fetch catalog: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
     clack.outro('Aborted')
     return
@@ -1080,7 +1145,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
 
   // 4. Non-empty catalog.
   if (modelsRes.models.length === 0) {
-    clack.log.error('Proxy returned an empty model catalog. Configure at least one provider/model in settings.jsonc.')
+    clack.log.error(
+      'Proxy returned an empty model catalog. Configure at least one provider/model in settings.jsonc.',
+    )
     clack.outro('Aborted')
     return
   }
@@ -1121,7 +1188,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   try {
     rawConfig = await fs.readFile(configPath)
   } catch (err) {
-    clack.log.error(`Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`)
+    clack.log.error(
+      `Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`,
+    )
     clack.outro('Aborted')
     return
   }
@@ -1139,7 +1208,9 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   try {
     await fs.writeFile(configPath, newConfig)
   } catch (err) {
-    clack.log.error(`Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`)
+    clack.log.error(
+      `Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`,
+    )
     clack.outro('Aborted')
     return
   }
@@ -1179,7 +1250,9 @@ import { Command } from 'commander'
 import { createCodexInstallCommand } from './codex-install.js'
 
 export function createCodexCommand(): Command {
-  return new Command('codex').description('Codex integration commands').addCommand(createCodexInstallCommand())
+  return new Command('codex')
+    .description('Codex integration commands')
+    .addCommand(createCodexInstallCommand())
 }
 ```
 

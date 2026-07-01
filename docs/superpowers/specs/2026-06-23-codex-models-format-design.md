@@ -11,6 +11,7 @@
 让 codex CLI 指向本代理时,`GET /codex/v1/models` 返回 codex 专有 `ModelsResponse { models: [ModelInfo] }`,使 codex 能反序列化、模型进入 picker。prompt 与能力字段取自 codex 最新版内置 catalog(动态执行 `codex debug models --bundled`),并支持 4 层配置覆盖。
 
 **不在范围内**:
+
 - 不替换 codex template 的 L1 身份行(直接用 codex 原版;如需可经 model 层覆盖 `base_instructions`/`model_messages`)
 - 不实现 ETag / If-None-Match 缓存(codex 可选,不返回也能用)
 - 不改动 `/codex/v1/responses`、`/v1/models`、现有 settings model 必填字段
@@ -84,37 +85,37 @@ test/server/
 
 **13 个必填字段**(handoff §3.1,缺失则 codex 反序列化失败):`slug`、`display_name`、`supported_reasoning_levels`、`shell_type`、`visibility`、`supported_in_api`、`priority`、`base_instructions`、`supports_reasoning_summaries`、`support_verbosity`、`truncation_policy`、`supports_parallel_tool_calls`、`experimental_supported_tools`。
 
-| 字段 | 必填 | 默认来源 | 可覆盖 |
-|---|---|---|---|
-| `slug` | ✅ | listModels id(`provider/modelKey` / `modelKey` / alias) | ❌ 固定 |
-| `display_name` | ✅ | `slug` | ✅ |
-| `description` |   | template | ✅ |
-| `context_window` / `max_context_window` |   | `limit.context` ?? 4 层 `contextWindow`(默认 `200000`),两者始终相等 | `context_window` ✅; `max_context_window` ❌(始终 = `context_window`,override 被过滤) |
-| `base_instructions` | ✅ | template | ✅ |
-| `model_messages` |   | template | ✅ |
-| `supported_reasoning_levels` | ✅ | template | ✅ |
-| `default_reasoning_level` |   | template(null 可接受) | ✅ |
-| `shell_type` | ✅ | template | ✅ |
-| `visibility` | ✅ | `"list"` | ✅ |
-| `supported_in_api` | ✅ | `true` | ✅ |
-| `priority` | ✅ | `0` | ✅ |
-| `additional_speed_tiers` / `service_tiers` |   | template(默认 `[]`) | ✅ |
-| `default_service_tier` / `availability_nux` / `upgrade` |   | template(默认 `null`) | ✅ |
-| `supports_reasoning_summaries` | ✅ | template | ✅ |
-| `default_reasoning_summary` |   | template(默认 `"auto"`) | ✅ |
-| `support_verbosity` | ✅ | template | ✅ |
-| `default_verbosity` |   | template(默认 `null`) | ✅ |
-| `apply_patch_tool_type` |   | template(默认 `null`) | ✅ |
-| `web_search_tool_type` |   | template(默认 `"text"`) | ✅ |
-| `truncation_policy` | ✅ | template | ✅ |
-| `supports_parallel_tool_calls` | ✅ | template | ✅ |
-| `supports_image_detail_original` |   | template(默认 `false`) | ✅ |
-| `auto_compact_token_limit` / `comp_hash` |   | template(默认 `null`) | ✅ |
-| `effective_context_window_percent` |   | template(默认 `95`) | ✅ |
-| `experimental_supported_tools` | ✅ | `[]` | ✅ |
-| `input_modalities` |   | template(默认 `["text"]`) | ✅ |
-| `supports_search_tool` / `use_responses_lite` |   | template(默认 `false`) | ✅ |
-| `auto_review_model_override` / `tool_mode` / `multi_agent_version` |   | template(默认 `null`) | ✅ |
+| 字段                                                               | 必填 | 默认来源                                                            | 可覆盖                                                                                |
+| ------------------------------------------------------------------ | ---- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `slug`                                                             | ✅   | listModels id(`provider/modelKey` / `modelKey` / alias)             | ❌ 固定                                                                               |
+| `display_name`                                                     | ✅   | `slug`                                                              | ✅                                                                                    |
+| `description`                                                      |      | template                                                            | ✅                                                                                    |
+| `context_window` / `max_context_window`                            |      | `limit.context` ?? 4 层 `contextWindow`(默认 `200000`),两者始终相等 | `context_window` ✅; `max_context_window` ❌(始终 = `context_window`,override 被过滤) |
+| `base_instructions`                                                | ✅   | template                                                            | ✅                                                                                    |
+| `model_messages`                                                   |      | template                                                            | ✅                                                                                    |
+| `supported_reasoning_levels`                                       | ✅   | template                                                            | ✅                                                                                    |
+| `default_reasoning_level`                                          |      | template(null 可接受)                                               | ✅                                                                                    |
+| `shell_type`                                                       | ✅   | template                                                            | ✅                                                                                    |
+| `visibility`                                                       | ✅   | `"list"`                                                            | ✅                                                                                    |
+| `supported_in_api`                                                 | ✅   | `true`                                                              | ✅                                                                                    |
+| `priority`                                                         | ✅   | `0`                                                                 | ✅                                                                                    |
+| `additional_speed_tiers` / `service_tiers`                         |      | template(默认 `[]`)                                                 | ✅                                                                                    |
+| `default_service_tier` / `availability_nux` / `upgrade`            |      | template(默认 `null`)                                               | ✅                                                                                    |
+| `supports_reasoning_summaries`                                     | ✅   | template                                                            | ✅                                                                                    |
+| `default_reasoning_summary`                                        |      | template(默认 `"auto"`)                                             | ✅                                                                                    |
+| `support_verbosity`                                                | ✅   | template                                                            | ✅                                                                                    |
+| `default_verbosity`                                                |      | template(默认 `null`)                                               | ✅                                                                                    |
+| `apply_patch_tool_type`                                            |      | template(默认 `null`)                                               | ✅                                                                                    |
+| `web_search_tool_type`                                             |      | template(默认 `"text"`)                                             | ✅                                                                                    |
+| `truncation_policy`                                                | ✅   | template                                                            | ✅                                                                                    |
+| `supports_parallel_tool_calls`                                     | ✅   | template                                                            | ✅                                                                                    |
+| `supports_image_detail_original`                                   |      | template(默认 `false`)                                              | ✅                                                                                    |
+| `auto_compact_token_limit` / `comp_hash`                           |      | template(默认 `null`)                                               | ✅                                                                                    |
+| `effective_context_window_percent`                                 |      | template(默认 `95`)                                                 | ✅                                                                                    |
+| `experimental_supported_tools`                                     | ✅   | `[]`                                                                | ✅                                                                                    |
+| `input_modalities`                                                 |      | template(默认 `["text"]`)                                           | ✅                                                                                    |
+| `supports_search_tool` / `use_responses_lite`                      |      | template(默认 `false`)                                              | ✅                                                                                    |
+| `auto_review_model_override` / `tool_mode` / `multi_agent_version` |      | template(默认 `null`)                                               | ✅                                                                                    |
 
 > 可选字段若 template 未提供且无覆盖,省略输出(codex serde 用默认值);`used_fallback_model_metadata` 不输出(handoff §3 内部标记)。
 
@@ -123,6 +124,7 @@ test/server/
 ### CodexModelOverride
 
 `templateSlug` + `contextWindow` + 所有 `ModelInfo` 字段(除 `slug`),全部可选,用于全局/provider/model 三层覆盖:
+
 - `templateSlug`:选 template 源模型。`settings.codex.templateSlug` optional(无 default);全层未配时运行时动态取 catalog 首个 `supported_in_api=true` 的 slug;provider/model 可覆盖
 - `contextWindow`:`limit.context` 缺失时的 `context_window`/`max_context_window` fallback(4 层覆盖,非 ModelInfo 字段,不参与 applyOverride)。`settings.codex.contextWindow` zod default `200000`;provider/model 可覆盖
 - 其余 `ModelInfo` 字段(除 `slug`):字段覆盖(applyOverride)
@@ -133,6 +135,7 @@ test/server/
 ### 挂载点
 
 三层共用同一 `CodexModelOverride` schema:
+
 - `settings.codex`——全局,挂到 `settingsSchema`
 - `provider.options.codex`——provider scope,加到 `commonProviderOptionsSchema`(所有 provider 类型共享)
 - `model.codex`——model scope,加到 `modelRouteConfigSchema`
@@ -143,8 +146,8 @@ test/server/
 {
   "service": { "host": "127.0.0.1", "port": 8056 },
   "codex": {
-    "templateSlug": "gpt-5.4",          // 全局:template 源 + 字段覆盖
-    "default_reasoning_level": "medium"
+    "templateSlug": "gpt-5.4", // 全局:template 源 + 字段覆盖
+    "default_reasoning_level": "medium",
   },
   "providers": {
     "zhipu": {
@@ -152,24 +155,26 @@ test/server/
       "baseURL": "https://open.bigmodel.cn/api/paas/v4",
       "apiKey": "${ZHIPU_API_KEY}",
       "options": {
-        "codex": {                        // provider scope:覆盖该 provider 下所有模型
-          "templateSlug": "gpt-5.5",      // 该 provider 模型改用 gpt-5.5 template
-          "context_window": 128000
+        "codex": {
+          // provider scope:覆盖该 provider 下所有模型
+          "templateSlug": "gpt-5.5", // 该 provider 模型改用 gpt-5.5 template
+          "context_window": 128000,
           // 注:max_context_window 不可独立覆盖,始终 = context_window,故不配置
-        }
+        },
       },
       "models": {
         "glm-5.1": {
           "upstreamModel": "glm-5.1",
           "limit": { "context": 128000 },
-          "codex": {                      // model scope:覆盖该单个模型(最高优先级)
+          "codex": {
+            // model scope:覆盖该单个模型(最高优先级)
             "display_name": "GLM-5.1",
-            "supports_parallel_tool_calls": true
-          }
-        }
-      }
-    }
-  }
+            "supports_parallel_tool_calls": true,
+          },
+        },
+      },
+    },
+  },
 }
 ```
 

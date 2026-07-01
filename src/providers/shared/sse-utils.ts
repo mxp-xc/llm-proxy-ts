@@ -32,7 +32,5 @@ export function formatSSE<T>(output: SSEOutput<T>): string {
   }
   const frame = output as SSEFrame<T>
   const json = JSON.stringify(frame.data)
-  return frame.event != null
-    ? `event: ${frame.event}\ndata: ${json}\n\n`
-    : `data: ${json}\n\n`
+  return frame.event != null ? `event: ${frame.event}\ndata: ${json}\n\n` : `data: ${json}\n\n`
 }

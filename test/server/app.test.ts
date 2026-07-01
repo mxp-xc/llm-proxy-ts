@@ -430,9 +430,11 @@ describe('streamOnly provider', () => {
       ...openrouterSettings,
       providers: {
         openrouter: {
-         ...openrouterSettings.providers.openrouter!,
+          ...openrouterSettings.providers.openrouter!,
           options: { streamOnly: true },
-          plugins: [{ name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] }],
+          plugins: [
+            { name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] },
+          ],
         },
       },
     }
@@ -452,7 +454,11 @@ describe('streamOnly provider', () => {
       },
     })
 
-    const app = createApp({ settings: streamOnlyWithPlugin, gateway, providerRegistry: stubRegistry })
+    const app = createApp({
+      settings: streamOnlyWithPlugin,
+      gateway,
+      providerRegistry: stubRegistry,
+    })
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',

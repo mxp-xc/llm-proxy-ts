@@ -1,6 +1,11 @@
 import type { Settings } from '../config.js'
 import { isFlatLookupEnabled } from '../config-helpers.js'
-import { enumerateModelEntries, type ModelLimit, type OpenAIModel, type OpenAIModelList } from './model-types.js'
+import {
+  enumerateModelEntries,
+  type ModelLimit,
+  type OpenAIModel,
+  type OpenAIModelList,
+} from './model-types.js'
 
 /** 构造 OpenAIModel，仅在 limit 有值时附带 */
 function makeModel(id: string, ownedBy: string, limit?: ModelLimit): OpenAIModel {

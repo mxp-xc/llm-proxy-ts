@@ -8,21 +8,21 @@
 
 ## 命令
 
-| 命令 | 用途 |
-|---|---|
-| `pnpm install` | 安装依赖 |
-| `pnpm dev serve` | 启动开发服务器（tsx watch 热重载） |
-| `pnpm dev serve --no-watch` | 启动服务器（无热重载） |
-| `pnpm dev models sync` | 交互式同步上游模型到配置文件 |
-| `pnpm dev models sync -p <name>` | 同步指定 provider（非交互） |
-| `pnpm dev models sync --dry-run` | 预览变更，不写入 |
-| `pnpm dev models list` | 列出已配置模型 |
-| `pnpm dev codex install` | 配置 Codex CLI（写 `~/.codex/config.toml`，多选+搜索模型） |
-| `pnpm test` | 全部测试（Vitest，无网络） |
-| `pnpm test test/xxx.test.ts` | 运行单个测试 |
-| `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm generate:schema` | 从 Zod schema 生成 `config/settings.schema.json` |
-| `pnpm format` / `pnpm format:check` | Prettier 格式化 / 检查 |
+| 命令                                | 用途                                                       |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `pnpm install`                      | 安装依赖                                                   |
+| `pnpm dev serve`                    | 启动开发服务器（tsx watch 热重载）                         |
+| `pnpm dev serve --no-watch`         | 启动服务器（无热重载）                                     |
+| `pnpm dev models sync`              | 交互式同步上游模型到配置文件                               |
+| `pnpm dev models sync -p <name>`    | 同步指定 provider（非交互）                                |
+| `pnpm dev models sync --dry-run`    | 预览变更，不写入                                           |
+| `pnpm dev models list`              | 列出已配置模型                                             |
+| `pnpm dev codex install`            | 配置 Codex CLI（写 `~/.codex/config.toml`，多选+搜索模型） |
+| `pnpm test`                         | 全部测试（Vitest，无网络）                                 |
+| `pnpm test test/xxx.test.ts`        | 运行单个测试                                               |
+| `pnpm typecheck`                    | `tsc --noEmit`                                             |
+| `pnpm generate:schema`              | 从 Zod schema 生成 `config/settings.schema.json`           |
+| `pnpm format` / `pnpm format:check` | Prettier 格式化 / 检查                                     |
 
 ## 架构
 

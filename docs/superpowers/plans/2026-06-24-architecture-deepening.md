@@ -24,12 +24,14 @@
 ## File Structure
 
 **Create:**
+
 - `src/codex-types.ts` — codex Zod schemas + inferred types (leaf module, only `zod/v3`)
 - `src/cli/models-discovery.ts` — `discoverProviderModels` pure function (T6)
 - `test/server/stream-normalize.test.ts` — normalizeStream behavior tests (T4)
 - `test/cli/models-sync.test.ts` — discovery orchestration tests (T6)
 
 **Modify (representative; pattern repeats per task):**
+
 - `src/config.ts` — drop codex schemas, import from `codex-types.ts` (T1)
 - `src/server/codex-catalog.ts` — import source (T1), consume enumeration core (T2), cache injection (T3)
 - `src/providers/model-types.ts` — add `ModelEntry` + `enumerateModelEntries` (T2)
@@ -45,11 +47,13 @@
 ### Task 1: Relocate codex schemas to leaf module `src/codex-types.ts`
 
 **Files:**
+
 - Create: `src/codex-types.ts`
 - Modify: `src/config.ts:48-139` (remove codex schema block), `src/server/codex-catalog.ts:4`, `test/server/codex-catalog.test.ts:7`
 - Test: existing `test/server/codex-*.test.ts`, `test/config.test.ts` (regression guards)
 
 **Interfaces:**
+
 - Produces: `codexModelInfoSchema`, `codexModelOverrideSchema`, `codexSettingsSchema`, types `CodexModelInfo`/`CodexModelOverride`/`CodexSettings` — all exported from `src/codex-types.ts`
 - Consumes: nothing (leaf module, only `zod/v3`)
 
@@ -65,15 +69,18 @@
 ### Task 2: Extract shared model enumeration core
 
 **Files:**
+
 - Modify: `src/providers/model-types.ts` (add `ModelEntry` + `enumerateModelEntries`)
 - Modify: `src/providers/models.ts:13` (`listModels`), `src/cli/models-list.ts:21` (`collectRows`), `src/server/codex-catalog.ts:61` (`enumerateModelEntries`), `src/routing.ts:45` (evaluate)
 - Test: `test/providers/models.test.ts`, `test/cli/models-list.test.ts`, `test/server/codex-catalog.test.ts`, `test/routing.test.ts`; new direct unit test for `enumerateModelEntries`
 
 **Interfaces:**
+
 - Produces: `ModelEntry` interface and `enumerateModelEntries(settings: Settings): ModelEntry[]` in `src/providers/model-types.ts`
 - Consumes: `isFlatLookupEnabled` from `src/config-helpers.js`; `Settings` from `src/config.js`; `ModelLimit` (already in `model-types.ts`)
 
 `ModelEntry` shape (per modelKey, carries all its ids):
+
 ```ts
 export interface ModelEntry {
   providerName: string
@@ -82,7 +89,7 @@ export interface ModelEntry {
   aliases: string[]
   limit: ModelLimit | undefined
   flat: boolean
-  ids: string[]  // [`${providerName}/${modelKey}`, ...(flat ? [modelKey, ...aliases] : [])]
+  ids: string[] // [`${providerName}/${modelKey}`, ...(flat ? [modelKey, ...aliases] : [])]
 }
 ```
 
@@ -99,10 +106,12 @@ export interface ModelEntry {
 ### Task 3: Inject codex catalog cache
 
 **Files:**
+
 - Modify: `src/server/codex-catalog.ts` (replace module-level cache + `__reset` with `CodexCatalogCache` class), `src/server/codex.ts`, `src/server/types.ts`, `src/server/app.ts:46,160`
 - Modify: `test/server/codex-catalog.test.ts`, `test/server/codex-endpoint.test.ts:8,41,47,62,72`
 
 **Interfaces:**
+
 - Produces: `CodexCatalogCache` class in `src/server/codex-catalog.ts` with `get(fetcher: CodexCatalogFetcher): Promise<Map<string, CodexModelInfo>>`
 - Consumes: `enumerateModelEntries` (from T2) inside `buildCodexModelsResponse`; `CodexCatalogFetcher` type
 
@@ -119,11 +128,13 @@ export interface ModelEntry {
 ### Task 4: Inline normalizeStream into gateway.ts (TDD)
 
 **Files:**
+
 - Modify: `src/server/gateway.ts` (inline into `stream()`)
 - Delete: `src/server/stream-normalize.ts`
 - Create: `test/server/stream-normalize.test.ts`
 
 **Interfaces:**
+
 - Produces: none new (behavior moves into `defaultGateway.stream()`)
 - Consumes: `ProxyStreamPart` type; the AI SDK quirk that `response` lives on `finish-step` not `finish`
 
@@ -139,10 +150,12 @@ export interface ModelEntry {
 ### Task 5: handle-protocol ErrorPhase + streamOnly timeout test
 
 **Files:**
+
 - Modify: `src/server/handle-protocol.ts` (`handleUpstreamError` signature + 3 call sites)
 - Modify: `test/server/app.test.ts` (add streamOnly timeout test; fix any log-message assertions)
 
 **Interfaces:**
+
 - Produces: `type ErrorPhase = 'stream' | 'stream-only' | 'generate'` in `handle-protocol.ts`
 - Consumes: unchanged `formatErrors` error formatters; HTTP response contract unchanged
 
@@ -159,11 +172,13 @@ export interface ModelEntry {
 ### Task 6: Extract models-sync discovery pure function
 
 **Files:**
+
 - Create: `src/cli/models-discovery.ts` (`discoverProviderModels`)
 - Modify: `src/cli/models-sync.ts:118-227` (replace with calls)
 - Create: `test/cli/models-sync.test.ts`
 
 **Interfaces:**
+
 - Produces: `discoverProviderModels` in `src/cli/models-discovery.ts`
 - Consumes: `fetchUpstreamModels` + `openAIToDiscoveredModels` (from `discover-models.ts`), `TokenManager`, `PluginRegistry`, `isRecord` guard
 
@@ -176,11 +191,11 @@ async function discoverProviderModels(input: {
   providerName: string
   provider: ProviderConfig
   settings: Settings
-  rawParsed: Record<string, unknown>   // isRecord-guarded, for apiKey env resolution
+  rawParsed: Record<string, unknown> // isRecord-guarded, for apiKey env resolution
   pluginRegistry?: PluginRegistry
   tokenManager?: TokenManager
   authFilePath: string
-  fetchUpstream?: typeof fetchUpstreamModels   // injectable for tests
+  fetchUpstream?: typeof fetchUpstreamModels // injectable for tests
 }): Promise<DiscoverResult>
 ```
 
@@ -196,10 +211,12 @@ async function discoverProviderModels(input: {
 ### Task 7: Shared `createTokenManagerIfNeeded` (narrowed)
 
 **Files:**
+
 - Modify: `src/oauth/index.ts` (or new `src/oauth/token-bootstrap.ts`)
 - Modify: `src/cli/models-sync.ts:121-126`, `src/server/server.ts:44-55`
 
 **Interfaces:**
+
 - Produces: `createTokenManagerIfNeeded(authFilePath: string, hasOAuth: boolean): Promise<TokenManager | undefined>` in `src/oauth/`
 - Consumes: `TokenManager.fromFile` + `.load()`
 
@@ -216,14 +233,17 @@ async function discoverProviderModels(input: {
 ### Task 8: Extract `mapToolToAISDK` shared helper
 
 **Files:**
+
 - Modify: `src/providers/shared/protocol-utils.ts` (add `mapToolToAISDK`)
 - Modify: `src/providers/anthropic/protocol.ts:287`, `src/providers/openai-compatible/protocol.ts:256`, `src/providers/openai-responses/protocol.ts:233`
 
 **Interfaces:**
+
 - Produces: `mapToolToAISDK(parameters: Record<string, unknown>, description?: string): ToolSet[string]` in `protocol-utils.ts`
 - Consumes: `jsonSchema` + `ToolSet` from `'ai'`
 
 - [ ] **Step 1: Implement** in `protocol-utils.ts`:
+
 ```ts
 import { jsonSchema, type ToolSet } from 'ai'
 export function mapToolToAISDK(
@@ -235,6 +255,7 @@ export function mapToolToAISDK(
   return def
 }
 ```
+
 - [ ] **Step 2: Delegate** in three `protocol.ts`: `mapAnthropicTool` → `mapToolToAISDK(tool.input_schema, tool.description)`; `mapFunctionTool` → `mapToolToAISDK(tool.function.parameters, tool.function.description)`; `mapResponsesFunctionTool` → `mapToolToAISDK(tool.parameters ?? { type: 'object', properties: {} }, tool.description)`. Keep the three function names/signatures (existing tests untouched).
 - [ ] **Step 3: Verify** — `pnpm typecheck` ✓; `pnpm test` ✓ (three `protocol.test.ts` mapTool cases green).
 - [ ] **Step 4: Commit** — `git commit -m "refactor: extract mapToolToAISDK shared helper"`

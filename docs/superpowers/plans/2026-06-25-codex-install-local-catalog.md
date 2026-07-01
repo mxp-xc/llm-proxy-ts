@@ -34,9 +34,11 @@
 **新增** import：`CodexCatalogCache`、`buildCodexModelsResponse`、`type CodexCatalogFetcher` from `'../codex-catalog.js'`，以及 `type CodexModelInfo` from `'../codex-types.js'`。
 
 `CodexInstallOptions`：
+
 - `fetchImpl?: typeof fetch` → `catalogFetcher?: CodexCatalogFetcher`
 
 `runCodexInstall` 步骤 3 改为本地构建：
+
 ```ts
 const cache = new CodexCatalogCache(options.catalogFetcher)
 let modelsRes: { models: CodexModelInfo[] }
@@ -51,6 +53,7 @@ try {
 ```
 
 新增 `mapCatalogError(err)` 本地化提示（替代 `mapEndpointError`）：
+
 - catalog 执行失败（`execFile` ENOENT / 超时 / 非零退出）→ `Failed to run 'codex debug models --bundled'. Is codex CLI installed and on PATH?`
 - stdout 畸形 / `codexCatalogSchema` 校验失败 → `Malformed codex catalog output: <detail>`
 - `template slug not in catalog`（`buildCodexModelsResponse` 抛）→ 透传 message，提示检查 settings 的 `codex.templateSlug`

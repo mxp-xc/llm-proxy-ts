@@ -35,7 +35,12 @@ export interface RenderResultInput {
     reasoningTokens?: number
   }
   response?: { id?: string; timestamp?: Date }
-  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown; providerExecuted?: boolean }>
+  toolCalls?: Array<{
+    toolCallId: string
+    toolName: string
+    input: unknown
+    providerExecuted?: boolean
+  }>
   /** 请求侧声明的 custom grammar tool（type:'custom'）名称集合。
    *  供 openai-responses renderer 判别 custom_tool_call；其他 renderer 忽略。 */
   customToolNames?: Set<string>
@@ -58,7 +63,11 @@ export function toErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message
   if (typeof err === 'string') return err
   if (err === null || err === undefined) return 'Unknown error'
-  try { return JSON.stringify(err) } catch { return String(err) }
+  try {
+    return JSON.stringify(err)
+  } catch {
+    return String(err)
+  }
 }
 
 /**

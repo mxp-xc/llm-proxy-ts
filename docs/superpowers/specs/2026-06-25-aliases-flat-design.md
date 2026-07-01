@@ -51,10 +51,12 @@ export const aliasEntrySchema = z
 ```
 
 `modelRouteConfigSchema` 内：
+
 - `aliases: z.array(aliasEntrySchema).optional().default([])` —— 运行时类型 `AliasEntry[]`（`{ name: string; flat: boolean }`，`flat` 经 `.default` 为必填）。
 - 新增 `flat: z.boolean().optional()` —— model 级开关（无 `.default`，`z.infer` 为 `boolean | undefined`，现有配置字面量无需写 `flat`；代码用 `!!model.flat` 归一）。
 
 要点：
+
 - 导出 `AliasEntry` 类型，并在 `src/index.ts` re-export（与 `ModelEntry` 同处）。
 - `ModelRouteInput`（`z.input`）的 `aliases` 类型 = `(string | { name: string; flat?: boolean })[]`；`settings-writer` 透传（实现时确认无需改）；`models sync` 暂不支持交互式配 alias，保持现状。
 - `exactOptionalPropertyTypes`：`AliasEntry.flat` 是 `boolean`（非可选），实现时勿写成 `flat?: boolean`。
@@ -88,6 +90,7 @@ ids = [ `${providerName}/${modelKey}` ]
 ### 4. Models API — `src/providers/models.ts`
 
 `getModel` 两个分支都改：
+
 - `slashIndex > 0` 分支（`:24-38`）：补 alias 遍历，使 `provider/<alias-name>` 命中。
 - 扁平分支（`:40-54`）：flat 判定从 `isFlatLookupEnabled(provider)` 改为按入口类型判定——modelKey 裸名 `providerFlat || model.flat`、alias 裸名 `providerFlat || model.flat || alias.flat`，否则 `model.flat=true` 但 provider flat 关时 `getModel('glm-5.2')` 会误返回 null。
 - 返回的 `id` 始终 = 入参 `modelId`（保持现状，不改成 modelKey）。
@@ -119,11 +122,13 @@ openai/gpt-4o     openai    gpt-4o          -                128M     -      -
 ## 测试
 
 更新既有用例适配新语义与 ids 顺序。**ids 顺序新期望**（锁定顺序语义）：
+
 - flat 关 + 1 string alias `a` → `['p/m', 'p/a']`
 - flat 开 + 2 string alias `a1,a2` → `['p/m', 'm', 'p/a1', 'a1', 'p/a2', 'a2']`
 - flat 关 + 1 record alias `{name:'a', flat:true}` → `['p/m', 'p/a', 'a']`（modelKey 裸名不出现，alias 裸名出现）
 
 更新/新增：
+
 - `test/config.test.ts`：空字符串 name 拒绝、`name` 含 `/` 拒绝、缺 `name` 的 record 拒绝、空白 name 不 trim（与现有 `min(1)` 一致）。
 - `test/routing.test.ts`：alias 解析、flat、ambiguous 迁到 `AliasEntry[]`；新增跨 provider `alias.flat` 同名裸名冲突；移除 `flat_lookup_disabled` 断言改为 `unknown_model`。
 - `test/providers/enumerate-models.test.ts`：`entry.flat` 断言改 `entry.modelFlat`；`entry.aliases` 是 `AliasEntry[]`；ids 顺序新期望。

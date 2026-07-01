@@ -91,4 +91,3 @@ export function mergeTokenStore(data: AuthFileData, store: TokenStore): AuthFile
   }
   return result
 }
-

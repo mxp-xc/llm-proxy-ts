@@ -29,7 +29,13 @@ const capturedOptions: Array<{
  * replacing the previous vi.mock of provider-factory.js.
  */
 const stubFactory = {
-  createOpenAICompatible(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAICompatible(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     capturedOptions.push({
       providerName,
       selectedApiKey,
@@ -37,7 +43,13 @@ const stubFactory = {
     })
     return (upstreamModel: string) => ({ upstreamModel, providerName })
   },
-  createAnthropic(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createAnthropic(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     capturedOptions.push({
       providerName,
       selectedApiKey,
@@ -45,7 +57,13 @@ const stubFactory = {
     })
     return (upstreamModel: string) => ({ upstreamModel, providerName })
   },
-  createOpenAI(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAI(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     capturedOptions.push({
       providerName,
       selectedApiKey,
@@ -99,7 +117,14 @@ describe('OAuth provider registry', () => {
     const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      tokenManager,
+      undefined,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     const result = registry.languageModel('oauth-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
@@ -121,7 +146,14 @@ describe('OAuth provider registry', () => {
       },
     })
 
-    const registry = await createProviderRegistry(settings, undefined, undefined, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     const result = registry.languageModel('static-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
@@ -159,7 +191,14 @@ describe('OAuth provider registry', () => {
     const tokenManager = TokenManager.fromFile(authFilePath)
     await tokenManager.load()
 
-    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      tokenManager,
+      undefined,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     const result = registry.languageModel('both-provider', 'm', {})
 
     expect(result.model).toBeTruthy()
@@ -197,7 +236,14 @@ describe('OAuth provider registry', () => {
     // the fetch function calls ensureValidToken which throws OAuthError.
     // But languageModel() itself doesn't call ensureValidToken — the fetch
     // function does at request time. So languageModel() succeeds here.
-    const registry = await createProviderRegistry(settings, tokenManager, undefined, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      tokenManager,
+      undefined,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     const result = registry.languageModel('auth-code-provider', 'm', {})
     expect(result.model).toBeTruthy()
   })

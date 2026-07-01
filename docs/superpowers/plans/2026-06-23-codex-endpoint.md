@@ -24,11 +24,13 @@
 ### Task 1: /codex/v1/models 端点 + 子应用骨架
 
 **Files:**
+
 - Create: `src/server/codex.ts`
 - Create: `test/server/codex-endpoint.test.ts`
 - Modify: `src/server/app.ts`(加导入 + 挂载 `app.route('/codex', ...)`)
 
 **Interfaces:**
+
 - Consumes: `listModels(settings: Settings): OpenAIModelList`(来自 `../index.js`)、`AppEnv`(来自 `./types.js`)、`Settings`(来自 `../index.js`)
 - Produces: `createCodexApp(deps: { settings: Settings }): Hono<AppEnv>`(本任务签名只含 `settings`;Task 2 扩展为含 `protocolCtx`)
 
@@ -110,7 +112,7 @@ import { createCodexApp } from './codex.js'
 在 `app.post('/v1/responses', ...)` 路由之后、`return app` 之前加挂载:
 
 ```typescript
-  app.route('/codex', createCodexApp({ settings }))
+app.route('/codex', createCodexApp({ settings }))
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
@@ -130,11 +132,13 @@ git commit -m "feat: add /codex context root with /v1/models endpoint"
 ### Task 2: /codex/v1/responses 端点
 
 **Files:**
+
 - Modify: `src/server/codex.ts`(加 `protocolCtx` 依赖 + `/v1/responses` 路由)
 - Modify: `src/server/app.ts`(挂载调用改为传 `protocolCtx`)
 - Modify: `test/server/codex-endpoint.test.ts`(加 imports + `stripVolatile` + `POST /codex/v1/responses` describe 块)
 
 **Interfaces:**
+
 - Consumes: `handleProtocolRequest(c, strategy, ctx)` 与 `ProtocolContext`(来自 `./handle-protocol.js`)、`openaiResponsesStrategy`(来自 `../index.js`)、Task 1 的 `createCodexApp`、`makeGateway`/`stubRegistry`/`makeSettings`(test helpers)、`GenerateTextReturn`/`ProxyStreamPart`(类型)
 - Produces: `createCodexApp(deps: { settings: Settings; protocolCtx: ProtocolContext }): Hono<AppEnv>`(最终签名)
 
@@ -299,9 +303,7 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
   const { settings, protocolCtx } = deps
   const app = new Hono<AppEnv>()
 
-  app.post('/v1/responses', (c) =>
-    handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
-  )
+  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
   app.get('/v1/models', (c) => c.json(listModels(settings)))
 
   return app
@@ -313,13 +315,13 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
 把 Task 1 加的挂载行:
 
 ```typescript
-  app.route('/codex', createCodexApp({ settings }))
+app.route('/codex', createCodexApp({ settings }))
 ```
 
 改为:
 
 ```typescript
-  app.route('/codex', createCodexApp({ settings, protocolCtx }))
+app.route('/codex', createCodexApp({ settings, protocolCtx }))
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -339,6 +341,7 @@ git commit -m "feat: add POST /codex/v1/responses endpoint"
 ### Task 3: 类型检查 + 全量测试 + 文档提交
 
 **Files:**
+
 - Verify only(不改实现代码)
 
 - [ ] **Step 1: Run typecheck**

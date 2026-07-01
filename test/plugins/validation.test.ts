@@ -20,7 +20,10 @@ function makeProxyPlugin(name: string): ProxyPlugin {
   }
 }
 
-function makeResolvedPlugin(plugin: AuthPlugin | ProxyPlugin, providers: string[] = []): ResolvedPlugin {
+function makeResolvedPlugin(
+  plugin: AuthPlugin | ProxyPlugin,
+  providers: string[] = [],
+): ResolvedPlugin {
   return {
     plugin,
     config: {},
@@ -30,76 +33,88 @@ function makeResolvedPlugin(plugin: AuthPlugin | ProxyPlugin, providers: string[
 
 describe('validatePluginConstraints', () => {
   it('passes when no auth plugins are present', () => {
-    const settings = makeSettings({ 'test-provider': {
-      type: 'openai-compatible',
-      baseURL: 'https://api.example.com/v1',
-      apiKey: 'test',
-      headers: {},
-      plugins: [],
-      models: {},
-    } })
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+    })
 
     const globalPlugins = [makeResolvedPlugin(makeProxyPlugin('proxy-1'))]
     const providerPlugins = new Map<string, ResolvedPlugin[]>()
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).not.toThrow()
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).not.toThrow()
   })
 
   it('passes when auth plugin targets a provider without oauth', () => {
-    const settings = makeSettings({ 'my-provider': {
-      type: 'openai-compatible',
-      baseURL: 'https://api.example.com/v1',
-      apiKey: 'test',
-      headers: {},
-      plugins: [],
-      models: {},
-    } })
+    const settings = makeSettings({
+      'my-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+    })
 
     const authPlugin = makeAuthPlugin('my-auth')
     const globalPlugins = [makeResolvedPlugin(authPlugin, ['my-provider'])]
     const providerPlugins = new Map<string, ResolvedPlugin[]>()
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).not.toThrow()
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).not.toThrow()
   })
 
   it('throws when auth plugin targets a provider with oauth', () => {
-    const settings = makeSettings({ 'oauth-provider': {
-      type: 'openai-compatible',
-      baseURL: 'https://api.example.com/v1',
-      apiKey: null,
-      headers: {},
-      plugins: [],
-      models: {},
-      oauth: {
-        flow: 'client_credentials',
-        clientId: 'test-id',
-        clientSecret: 'test-secret',
-        tokenUrl: 'https://auth.example.com/token',
-        scopes: [],
+    const settings = makeSettings({
+      'oauth-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: null,
+        headers: {},
+        plugins: [],
+        models: {},
+        oauth: {
+          flow: 'client_credentials',
+          clientId: 'test-id',
+          clientSecret: 'test-secret',
+          tokenUrl: 'https://auth.example.com/token',
+          scopes: [],
+        },
       },
-    } })
+    })
 
     const authPlugin = makeAuthPlugin('clash-auth')
     const globalPlugins = [makeResolvedPlugin(authPlugin, ['oauth-provider'])]
     const providerPlugins = new Map<string, ResolvedPlugin[]>()
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).toThrow(
-      /cannot have both oauth and auth plugin/,
-    )
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).toThrow(/cannot have both oauth and auth plugin/)
   })
 
   it('throws when auth plugin is at provider level', () => {
-    const settings = makeSettings({ 'test-provider': {
-      type: 'openai-compatible',
-      baseURL: 'https://api.example.com/v1',
-      apiKey: 'test',
-      headers: {},
-      plugins: [],
-      models: {},
-    } })
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+    })
 
     const authPlugin = makeAuthPlugin('provider-auth')
     const globalPlugins: ResolvedPlugin[] = []
@@ -108,33 +123,36 @@ describe('validatePluginConstraints', () => {
     ])
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).toThrow(
-      /cannot be configured at provider level/,
-    )
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).toThrow(/cannot be configured at provider level/)
   })
 
   it('throws when auth plugin is at model level', () => {
-    const settings = makeSettings({ 'test-provider': {
-      type: 'openai-compatible',
-      baseURL: 'https://api.example.com/v1',
-      apiKey: 'test',
-      headers: {},
-      plugins: [],
-      models: {},
-    } })
+    const settings = makeSettings({
+      'test-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+    })
 
     const authPlugin = makeAuthPlugin('model-auth')
     const globalPlugins: ResolvedPlugin[] = []
     const providerPlugins = new Map<string, ResolvedPlugin[]>()
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>([
-      ['test-provider', new Map([
-        ['model-a', [makeResolvedPlugin(authPlugin, ['test-provider'])]],
-      ])],
+      [
+        'test-provider',
+        new Map([['model-a', [makeResolvedPlugin(authPlugin, ['test-provider'])]]]),
+      ],
     ])
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).toThrow(
-      /cannot be configured at model level/,
-    )
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).toThrow(/cannot be configured at model level/)
   })
 
   it('passes with empty plugin lists', () => {
@@ -143,6 +161,8 @@ describe('validatePluginConstraints', () => {
     const providerPlugins = new Map<string, ResolvedPlugin[]>()
     const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
 
-    expect(() => validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)).not.toThrow()
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).not.toThrow()
   })
 })

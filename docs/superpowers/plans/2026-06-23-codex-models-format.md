@@ -27,10 +27,12 @@
 ### Task 1: codex schema + config 三层挂载
 
 **Files:**
+
 - Modify: `src/config.ts`(加 `codexModelInfoSchema`/`codexModelOverrideSchema`/类型;挂到 `settings.codex`、`commonProviderOptionsSchema.codex`、`modelRouteConfigSchema.codex`)
 - Create: `test/server/codex-config.test.ts`
 
 **Interfaces:**
+
 - Produces: `codexModelInfoSchema`、`codexModelOverrideSchema`、`CodexModelInfo`、`CodexModelOverride`(均从 `../config.js` 导出);`settings.codex`/`provider.options.codex`/`model.codex` 可选字段
 
 - [ ] **Step 1: Write the failing test**
@@ -90,65 +92,75 @@ Expected: FAIL — `settings.codex` undefined(字段未挂载),或 zod 报 `code
 在 `modelRouteConfigSchema`(line 48)定义**之前**插入 codex 字段 schema(被 `modelRouteConfigSchema` 引用):
 
 ```typescript
-const codexReasoningLevelSchema = z.object({
-  effort: z.string(),
-  description: z.string().optional(),
-}).passthrough()
+const codexReasoningLevelSchema = z
+  .object({
+    effort: z.string(),
+    description: z.string().optional(),
+  })
+  .passthrough()
 
-const codexModelMessagesSchema = z.object({
-  instructions_template: z.string(),
-  instructions_variables: z.object({
-    personality_default: z.string(),
-    personality_friendly: z.string().optional(),
-    personality_pragmatic: z.string().optional(),
-  }).passthrough(),
-}).passthrough()
+const codexModelMessagesSchema = z
+  .object({
+    instructions_template: z.string(),
+    instructions_variables: z
+      .object({
+        personality_default: z.string(),
+        personality_friendly: z.string().optional(),
+        personality_pragmatic: z.string().optional(),
+      })
+      .passthrough(),
+  })
+  .passthrough()
 
-const codexTruncationPolicySchema = z.object({
-  mode: z.string(),
-  limit: z.number(),
-}).passthrough()
+const codexTruncationPolicySchema = z
+  .object({
+    mode: z.string(),
+    limit: z.number(),
+  })
+  .passthrough()
 
 /** codex bundled catalog 条目(解析 codex 输出,宽松 passthrough 容忍 codex 新增字段) */
-export const codexModelInfoSchema = z.object({
-  slug: z.string(),
-  display_name: z.string(),
-  description: z.string().nullable().optional(),
-  default_reasoning_level: z.string().nullable().optional(),
-  supported_reasoning_levels: z.array(codexReasoningLevelSchema),
-  shell_type: z.string(),
-  visibility: z.string(),
-  supported_in_api: z.boolean(),
-  priority: z.number(),
-  additional_speed_tiers: z.array(z.string()).optional(),
-  service_tiers: z.array(z.record(z.string(), z.unknown())).optional(),
-  default_service_tier: z.string().nullable().optional(),
-  availability_nux: z.record(z.string(), z.unknown()).nullable().optional(),
-  upgrade: z.record(z.string(), z.unknown()).nullable().optional(),
-  base_instructions: z.string(),
-  model_messages: codexModelMessagesSchema.nullable().optional(),
-  supports_reasoning_summaries: z.boolean(),
-  default_reasoning_summary: z.string().optional(),
-  support_verbosity: z.boolean(),
-  default_verbosity: z.string().nullable().optional(),
-  apply_patch_tool_type: z.string().nullable().optional(),
-  web_search_tool_type: z.string().optional(),
-  truncation_policy: codexTruncationPolicySchema,
-  supports_parallel_tool_calls: z.boolean(),
-  supports_image_detail_original: z.boolean().optional(),
-  context_window: z.number().nullable().optional(),
-  max_context_window: z.number().nullable().optional(),
-  auto_compact_token_limit: z.number().nullable().optional(),
-  comp_hash: z.string().nullable().optional(),
-  effective_context_window_percent: z.number().optional(),
-  experimental_supported_tools: z.array(z.record(z.string(), z.unknown())),
-  input_modalities: z.array(z.string()).optional(),
-  supports_search_tool: z.boolean().optional(),
-  use_responses_lite: z.boolean().optional(),
-  auto_review_model_override: z.string().nullable().optional(),
-  tool_mode: z.string().nullable().optional(),
-  multi_agent_version: z.string().nullable().optional(),
-}).passthrough()
+export const codexModelInfoSchema = z
+  .object({
+    slug: z.string(),
+    display_name: z.string(),
+    description: z.string().nullable().optional(),
+    default_reasoning_level: z.string().nullable().optional(),
+    supported_reasoning_levels: z.array(codexReasoningLevelSchema),
+    shell_type: z.string(),
+    visibility: z.string(),
+    supported_in_api: z.boolean(),
+    priority: z.number(),
+    additional_speed_tiers: z.array(z.string()).optional(),
+    service_tiers: z.array(z.record(z.string(), z.unknown())).optional(),
+    default_service_tier: z.string().nullable().optional(),
+    availability_nux: z.record(z.string(), z.unknown()).nullable().optional(),
+    upgrade: z.record(z.string(), z.unknown()).nullable().optional(),
+    base_instructions: z.string(),
+    model_messages: codexModelMessagesSchema.nullable().optional(),
+    supports_reasoning_summaries: z.boolean(),
+    default_reasoning_summary: z.string().optional(),
+    support_verbosity: z.boolean(),
+    default_verbosity: z.string().nullable().optional(),
+    apply_patch_tool_type: z.string().nullable().optional(),
+    web_search_tool_type: z.string().optional(),
+    truncation_policy: codexTruncationPolicySchema,
+    supports_parallel_tool_calls: z.boolean(),
+    supports_image_detail_original: z.boolean().optional(),
+    context_window: z.number().nullable().optional(),
+    max_context_window: z.number().nullable().optional(),
+    auto_compact_token_limit: z.number().nullable().optional(),
+    comp_hash: z.string().nullable().optional(),
+    effective_context_window_percent: z.number().optional(),
+    experimental_supported_tools: z.array(z.record(z.string(), z.unknown())),
+    input_modalities: z.array(z.string()).optional(),
+    supports_search_tool: z.boolean().optional(),
+    use_responses_lite: z.boolean().optional(),
+    auto_review_model_override: z.string().nullable().optional(),
+    tool_mode: z.string().nullable().optional(),
+    multi_agent_version: z.string().nullable().optional(),
+  })
+  .passthrough()
 
 export type CodexModelInfo = z.infer<typeof codexModelInfoSchema>
 
@@ -216,10 +228,12 @@ git commit -m "feat(codex): add codex ModelInfo/override schema + 3-layer config
 ### Task 2: catalog 获取 + 缓存(懒加载 + 并发去重)
 
 **Files:**
+
 - Create: `src/server/codex-catalog.ts`(catalog 获取 + 缓存部分;合并逻辑在 Task 3 加)
 - Create: `test/server/codex-catalog.test.ts`
 
 **Interfaces:**
+
 - Consumes: `codexModelInfoSchema`、`CodexModelInfo`(from `../config.js`)
 - Produces: `fetchCodexBundledCatalog(fetcher?: () => Promise<string>): Promise<Map<string, CodexModelInfo>>`、`CodexCatalogFetcher` 类型、`__resetCodexCatalogCacheForTest()`
 
@@ -259,7 +273,10 @@ describe('fetchCodexBundledCatalog', () => {
       calls++
       return JSON.stringify({ models: [FULL_MODEL] })
     }
-    const [m1, m2] = await Promise.all([fetchCodexBundledCatalog(fetcher), fetchCodexBundledCatalog(fetcher)])
+    const [m1, m2] = await Promise.all([
+      fetchCodexBundledCatalog(fetcher),
+      fetchCodexBundledCatalog(fetcher),
+    ])
     const m3 = await fetchCodexBundledCatalog(fetcher)
     expect(calls).toBe(1)
     expect(m1).toBe(m2)
@@ -281,7 +298,9 @@ describe('fetchCodexBundledCatalog', () => {
 
   it('throws on entry missing slug', async () => {
     await expect(
-      fetchCodexBundledCatalog(async () => JSON.stringify({ models: [{ ...FULL_MODEL, slug: undefined }] })),
+      fetchCodexBundledCatalog(async () =>
+        JSON.stringify({ models: [{ ...FULL_MODEL, slug: undefined }] }),
+      ),
     ).rejects.toThrow()
   })
 })
@@ -366,10 +385,12 @@ git commit -m "feat(codex): lazy-fetch + cache codex bundled catalog"
 ### Task 3: buildCodexModelsResponse(4 层合并)
 
 **Files:**
+
 - Modify: `src/server/codex-catalog.ts`(加 `buildCodexModelsResponse` + `enumerateModelEntries` + 合并)
 - Modify: `test/server/codex-catalog.test.ts`(加合并用例)
 
 **Interfaces:**
+
 - Consumes: `Settings`、`CodexModelInfo`、`CodexModelOverride`(from `../config.js`)、`isFlatLookupEnabled`(from `../config-helpers.js`)、`ModelLimit`(from `../providers/model-types.js`)
 - Produces: `buildCodexModelsResponse(settings: Settings, catalog: Map<string, CodexModelInfo>): { models: CodexModelInfo[] }`
 
@@ -417,7 +438,9 @@ describe('buildCodexModelsResponse', () => {
         apiKey: 'k',
         headers: {},
         plugins: [],
-        models: { 'glm-5.1': { upstreamModel: 'glm-5.1', aliases: ['g'], headers: {}, plugins: [] } },
+        models: {
+          'glm-5.1': { upstreamModel: 'glm-5.1', aliases: ['g'], headers: {}, plugins: [] },
+        },
       },
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)
@@ -573,7 +596,12 @@ function enumerateModelEntries(settings: Settings): ModelEntry[] {
   for (const [providerName, provider] of Object.entries(settings.providers)) {
     const flatEnabled = isFlatLookupEnabled(provider, settings)
     for (const [modelKey, model] of Object.entries(provider.models)) {
-      entries.push({ id: `${providerName}/${modelKey}`, providerName, modelKey, limit: model.limit })
+      entries.push({
+        id: `${providerName}/${modelKey}`,
+        providerName,
+        modelKey,
+        limit: model.limit,
+      })
       if (flatEnabled) {
         entries.push({ id: modelKey, providerName, modelKey, limit: model.limit })
         for (const alias of model.aliases) {
@@ -585,7 +613,10 @@ function enumerateModelEntries(settings: Settings): ModelEntry[] {
   return entries
 }
 
-function applyOverride(base: CodexModelInfo, override: NonNullable<CodexModelOverride>): CodexModelInfo {
+function applyOverride(
+  base: CodexModelInfo,
+  override: NonNullable<CodexModelOverride>,
+): CodexModelInfo {
   const result: CodexModelInfo = { ...base }
   for (const [k, v] of Object.entries(override)) {
     if (k === 'templateSlug' || k === 'slug' || v === undefined) continue
@@ -659,12 +690,14 @@ git commit -m "feat(codex): build ModelsResponse with 4-layer override merge"
 ### Task 4: /codex/v1/models handler 接入 + 503
 
 **Files:**
+
 - Modify: `src/server/types.ts`(AppDependencies 加 `codexCatalogFetcher?`)
 - Modify: `src/server/app.ts`(createApp 透传 `codexCatalogFetcher` 给 createCodexApp)
 - Modify: `src/server/codex.ts`(`/v1/models` handler 改 codex 格式 + 503)
 - Modify: `test/server/codex-endpoint.test.ts`(`/codex/v1/models` 用例改断言 codex 格式)
 
 **Interfaces:**
+
 - Consumes: `fetchCodexBundledCatalog`、`buildCodexModelsResponse`(from `./codex-catalog.js`)
 - Produces: `AppDependencies.codexCatalogFetcher?: () => Promise<string>`
 
@@ -679,7 +712,10 @@ import { __resetCodexCatalogCacheForTest } from './codex-catalog.js'
 > 注:`codex-catalog.test.ts` 已 import `__resetCodexCatalogCacheForTest`,此处 test 文件在同目录 `test/server/`,import 路径 `./codex-catalog.js` 指向 `test/server/codex-catalog.test.ts`?不对——应 import 源模块。改为:
 
 ```typescript
-import { __resetCodexCatalogCacheForTest, type CodexCatalogFetcher } from '../../src/server/codex-catalog.js'
+import {
+  __resetCodexCatalogCacheForTest,
+  type CodexCatalogFetcher,
+} from '../../src/server/codex-catalog.js'
 ```
 
 把现有 `describe('GET /codex/v1/models', ...)` 整块替换为:
@@ -701,8 +737,7 @@ const FULL_MODEL = {
   experimental_supported_tools: [],
 }
 
-const codexFetcher: CodexCatalogFetcher = async () =>
-  JSON.stringify({ models: [FULL_MODEL] })
+const codexFetcher: CodexCatalogFetcher = async () => JSON.stringify({ models: [FULL_MODEL] })
 
 describe('GET /codex/v1/models', () => {
   beforeEach(() => __resetCodexCatalogCacheForTest())
@@ -779,7 +814,7 @@ export interface AppDependencies {
 `src/server/app.ts` 的 `createApp` 调用处改为:
 
 ```typescript
-  app.route('/codex', createCodexApp({ settings, protocolCtx, codexCatalogFetcher }))
+app.route('/codex', createCodexApp({ settings, protocolCtx, codexCatalogFetcher }))
 ```
 
 - [ ] **Step 5: Rewrite /v1/models handler in codex.ts**
@@ -793,7 +828,11 @@ import type { Settings } from '../index.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
 import type { AppEnv } from './types.js'
-import { buildCodexModelsResponse, fetchCodexBundledCatalog, type CodexCatalogFetcher } from './codex-catalog.js'
+import {
+  buildCodexModelsResponse,
+  fetchCodexBundledCatalog,
+  type CodexCatalogFetcher,
+} from './codex-catalog.js'
 
 interface CodexAppDeps {
   settings: Settings
@@ -805,9 +844,7 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
   const { settings, protocolCtx, codexCatalogFetcher } = deps
   const app = new Hono<AppEnv>()
 
-  app.post('/v1/responses', (c) =>
-    handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
-  )
+  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
 
   app.get('/v1/models', async (c) => {
     try {
@@ -817,7 +854,12 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
       c.get('logger').error({ err }, 'codex /v1/models failed')
       const message = err instanceof Error ? err.message : String(err)
       return c.json(
-        { error: { type: 'server_error', message: `Failed to fetch codex bundled catalog: ${message}` } },
+        {
+          error: {
+            type: 'server_error',
+            message: `Failed to fetch codex bundled catalog: ${message}`,
+          },
+        },
         503,
       )
     }
@@ -844,6 +886,7 @@ git commit -m "feat(codex): return codex ModelsResponse from /codex/v1/models"
 ### Task 5: 全量测试 + 收尾
 
 **Files:**
+
 - Verify only
 
 - [ ] **Step 1: Run full test suite**

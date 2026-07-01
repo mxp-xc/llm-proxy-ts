@@ -43,8 +43,15 @@ export interface DiscoverInput {
  * 不含任何 clack UI 调用，返回 discriminated union 供调用方决定文案。
  */
 export async function discoverProviderModels(input: DiscoverInput): Promise<DiscoverResult> {
-  const { providerName, provider, settings, rawParsed, pluginRegistry, tokenManager, authFilePath } =
-    input
+  const {
+    providerName,
+    provider,
+    settings,
+    rawParsed,
+    pluginRegistry,
+    tokenManager,
+    authFilePath,
+  } = input
   const fetchUpstream = input.fetchUpstream ?? fetchUpstreamModels
 
   // 1. 优先 auth 插件 discoverModels

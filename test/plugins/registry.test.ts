@@ -38,7 +38,13 @@ function createMockAuthPlugin() {
  * model objects for auth plugin integration testing.
  */
 const stubFactory = {
-  createOpenAICompatible(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAICompatible(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,
@@ -46,7 +52,13 @@ const stubFactory = {
       customFetch: customFetch ? 'present' : 'absent',
     })
   },
-  createAnthropic(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createAnthropic(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,
@@ -54,7 +66,13 @@ const stubFactory = {
       customFetch: customFetch ? 'present' : 'absent',
     })
   },
-  createOpenAI(providerName: string, _provider: unknown, _modelHeaders: Record<string, string>, selectedApiKey: string | undefined, customFetch?: (baseFetch?: typeof fetch) => typeof fetch) {
+  createOpenAI(
+    providerName: string,
+    _provider: unknown,
+    _modelHeaders: Record<string, string>,
+    selectedApiKey: string | undefined,
+    customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
+  ) {
     return (upstreamModel: string) => ({
       upstreamModel,
       providerName,
@@ -119,12 +137,15 @@ describe('auth plugin integration with createProviderRegistry', () => {
       },
     } as unknown as import('../../src/plugins/registry.js').PluginRegistry
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry, undefined, stubFactory)
-    const result = registry.languageModel(
-      'auth-provider',
-      'upstream-model',
-      {},
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      noopLogger,
+      pluginRegistry,
+      undefined,
+      stubFactory,
     )
+    const result = registry.languageModel('auth-provider', 'upstream-model', {})
     const model = result.model as unknown as Record<string, unknown>
 
     // authFetch should be present; apiKey should still be passed (plugin only extends fetch)
@@ -144,12 +165,15 @@ describe('auth plugin integration with createProviderRegistry', () => {
       },
     })
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger, undefined, undefined, stubFactory)
-    const result = registry.languageModel(
-      'simple-provider',
-      'upstream-model',
-      {},
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      noopLogger,
+      undefined,
+      undefined,
+      stubFactory,
     )
+    const result = registry.languageModel('simple-provider', 'upstream-model', {})
     const model = result.model as unknown as Record<string, unknown>
 
     expect(model.customFetch).toBe('absent')
@@ -188,11 +212,11 @@ describe('auth plugin integration with createProviderRegistry', () => {
               provider: settings.providers[providerId]!,
               config: rp.config,
               store: {
-              async get() {
-                return {}
+                async get() {
+                  return {}
+                },
+                async set() {},
               },
-              async set() {},
-            },
               log: noopLogger,
             }
             return (rp.plugin as AuthPlugin).createFetch(ctx)
@@ -202,12 +226,15 @@ describe('auth plugin integration with createProviderRegistry', () => {
       },
     } as unknown as import('../../src/plugins/registry.js').PluginRegistry
 
-    const registry = await createProviderRegistry(settings, undefined, noopLogger, pluginRegistry, undefined, stubFactory)
-    const result = registry.languageModel(
-      'auth-provider',
-      'upstream-model',
-      {},
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      noopLogger,
+      pluginRegistry,
+      undefined,
+      stubFactory,
     )
+    const result = registry.languageModel('auth-provider', 'upstream-model', {})
     const model = result.model as unknown as Record<string, unknown>
 
     // No authFetch for 'auth-provider' since plugin targets 'other-provider'

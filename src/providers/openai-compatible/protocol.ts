@@ -100,9 +100,7 @@ export function validateOpenAIChatRequest(value: unknown): OpenAIChatRequest {
   return openAIChatRequestSchema.parse(value)
 }
 
-export function mapOpenAIChatRequestToAISDKInput(
-  request: OpenAIChatRequest,
-): AISDKInput {
+export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AISDKInput {
   // System prompt → AI SDK system 选项（不放入 messages，避免 AI SDK v4+ 警告）
   const systemParts: string[] = []
   for (const msg of request.messages) {
@@ -153,7 +151,8 @@ export function mapOpenAIChatRequestToAISDKInput(
   // 其他 provider（如 @ai-sdk/anthropic）不认识此 key，自动忽略 → 不泄漏
   const providerOptions = mapProviderOptions(request, mappedRequestKeys)
   // parallel_tool_calls: AI SDK openai-compatible 不原生支持，通过 providerOptions 透传
-  if (request.parallel_tool_calls !== undefined) providerOptions.parallel_tool_calls = request.parallel_tool_calls
+  if (request.parallel_tool_calls !== undefined)
+    providerOptions.parallel_tool_calls = request.parallel_tool_calls
   if (Object.keys(providerOptions).length > 0) {
     input.providerOptions = { openaiCompatible: providerOptions }
   }
@@ -177,7 +176,10 @@ export function mapOpenAIChatRequestToAISDKInput(
   return input
 }
 
-function mapMessage(message: z.infer<typeof messageSchema>, toolCallIdToName: Map<string, string>): ProtocolMessage {
+function mapMessage(
+  message: z.infer<typeof messageSchema>,
+  toolCallIdToName: Map<string, string>,
+): ProtocolMessage {
   if (message.role === 'assistant' && message.tool_calls?.length) {
     const content: ProtocolMessagePart[] = message.tool_calls.map((toolCall) => ({
       type: 'tool-call' as const,
@@ -202,7 +204,8 @@ function mapMessage(message: z.infer<typeof messageSchema>, toolCallIdToName: Ma
         {
           type: 'tool-result',
           toolCallId: message.tool_call_id ?? 'tool',
-          toolName: toolCallIdToName.get(message.tool_call_id ?? '') ?? message.tool_call_id ?? 'tool',
+          toolName:
+            toolCallIdToName.get(message.tool_call_id ?? '') ?? message.tool_call_id ?? 'tool',
           output: mapToolResultOutput(message.content),
         },
       ],

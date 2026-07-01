@@ -43,7 +43,12 @@ export function applyCodexConfigEdits(
   for (const { key, newValue } of topKeys) {
     const oldRaw = readTopLevelKey(cur, key)
     if (oldRaw !== undefined && oldRaw !== normalizeTomlString(newValue)) {
-      overwritten.push({ kind: 'top-level-key', key, oldValue: oldRaw, newValue: normalizeTomlString(newValue) })
+      overwritten.push({
+        kind: 'top-level-key',
+        key,
+        oldValue: oldRaw,
+        newValue: normalizeTomlString(newValue),
+      })
     }
     cur = setTopLevelKey(cur, key, newValue)
   }
@@ -53,7 +58,12 @@ export function applyCodexConfigEdits(
     const formatted = formatTomlBool(params.checkForUpdateOnStartup)
     const oldRaw = readTopLevelKey(cur, 'check_for_update_on_startup')
     if (oldRaw !== undefined && oldRaw !== formatted) {
-      overwritten.push({ kind: 'top-level-key', key: 'check_for_update_on_startup', oldValue: oldRaw, newValue: formatted })
+      overwritten.push({
+        kind: 'top-level-key',
+        key: 'check_for_update_on_startup',
+        oldValue: oldRaw,
+        newValue: formatted,
+      })
     }
     cur = setTopLevelKey(cur, 'check_for_update_on_startup', formatted)
   }
@@ -63,13 +73,23 @@ export function applyCodexConfigEdits(
     const formatted = formatTomlString(params.modelReasoningEffort)
     const oldRaw = readTopLevelKey(cur, 'model_reasoning_effort')
     if (oldRaw !== undefined && oldRaw !== normalizeTomlString(formatted)) {
-      overwritten.push({ kind: 'top-level-key', key: 'model_reasoning_effort', oldValue: oldRaw, newValue: normalizeTomlString(formatted) })
+      overwritten.push({
+        kind: 'top-level-key',
+        key: 'model_reasoning_effort',
+        oldValue: oldRaw,
+        newValue: normalizeTomlString(formatted),
+      })
     }
     cur = setTopLevelKey(cur, 'model_reasoning_effort', formatted)
   } else {
     const oldRaw = readTopLevelKey(cur, 'model_reasoning_effort')
     if (oldRaw !== undefined) {
-      overwritten.push({ kind: 'top-level-key', key: 'model_reasoning_effort', oldValue: oldRaw, newValue: '<removed>' })
+      overwritten.push({
+        kind: 'top-level-key',
+        key: 'model_reasoning_effort',
+        oldValue: oldRaw,
+        newValue: '<removed>',
+      })
       cur = removeTopLevelKey(cur, 'model_reasoning_effort')
     }
   }
@@ -97,7 +117,13 @@ export function applyCodexConfigEdits(
       (oldBaseUrl !== undefined && oldBaseUrl !== params.baseUrl) ||
       (oldWireApi !== undefined && oldWireApi !== params.wireApi) ||
       (oldRequiresAuth !== undefined && oldRequiresAuth !== requiresAuthStr)
-    if (changed || oldName === undefined || oldBaseUrl === undefined || oldWireApi === undefined || oldRequiresAuth === undefined) {
+    if (
+      changed ||
+      oldName === undefined ||
+      oldBaseUrl === undefined ||
+      oldWireApi === undefined ||
+      oldRequiresAuth === undefined
+    ) {
       overwritten.push({
         kind: 'provider-table',
         key: params.providerId,

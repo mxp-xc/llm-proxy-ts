@@ -26,10 +26,10 @@
       "baseURL": "https://...",
       "apiKey": "...",
       "options": {
-        "streamOnly": true  // 该 provider 仅支持流式 API
-      }
-    }
-  }
+        "streamOnly": true, // 该 provider 仅支持流式 API
+      },
+    },
+  },
 }
 ```
 
@@ -56,13 +56,13 @@ isStream(request)?
 
 调用 `gateway.stream()` 获取 `fullStream`，遍历流收集：
 
-| 字段 | 收集逻辑 |
-|------|---------|
-| `text` | 拼接所有 `text-delta` chunk 的 `textDelta` |
-| `finishReason` | 取 `finish` chunk 的 `finishReason` |
-| `usage` | 取 `finish` chunk 的 `usage`（inputTokens / outputTokens / totalTokens） |
-| `toolCalls` | 取 `tool-call` chunk（toolCallId / toolName / args），`tool-result` chunk 补全 input |
-| `response` | 取流的 `response` metadata（id、timestamp） |
+| 字段           | 收集逻辑                                                                             |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `text`         | 拼接所有 `text-delta` chunk 的 `textDelta`                                           |
+| `finishReason` | 取 `finish` chunk 的 `finishReason`                                                  |
+| `usage`        | 取 `finish` chunk 的 `usage`（inputTokens / outputTokens / totalTokens）             |
+| `toolCalls`    | 取 `tool-call` chunk（toolCallId / toolName / args），`tool-result` chunk 补全 input |
+| `response`     | 取流的 `response` metadata（id、timestamp）                                          |
 
 收集完成后，用 `strategy.renderResult()` 渲染为非流式响应，与 `gateway.generate()` 路径完全一致。
 
@@ -78,7 +78,7 @@ interface Route {
   upstreamModel: string
   headers: Record<string, string>
   resolvedPlugins: ResolvedPlugin[]
-  streamOnly?: boolean  // 新增：从 provider.options.streamOnly 读取
+  streamOnly?: boolean // 新增：从 provider.options.streamOnly 读取
 }
 ```
 

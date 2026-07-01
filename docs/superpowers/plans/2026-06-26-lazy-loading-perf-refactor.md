@@ -22,6 +22,7 @@
 ## File Structure
 
 **Layer A (CLI lazy-load):**
+
 - `src/cli/context.ts` — modify: import directly from `env.js` + `resolve-settings-path.js` (bypass barrel).
 - `src/cli/models/list.ts` — modify: becomes shell (only `commander`).
 - `src/cli/models/list-run.ts` — create: `runModelsList` + render helpers + config/model-types imports.
@@ -41,15 +42,18 @@
 ### Task 1: context.ts direct-connect (bypass barrel)
 
 **Files:**
+
 - Modify: `src/cli/context.ts:4`
 - Test: `test/cli/context.test.ts` (create — minimal, asserts `resolveCliContext` returns paths)
 
 **Interfaces:**
+
 - Produces: `resolveCliContext()` unchanged signature; just lighter import graph.
 
 - [ ] **Step 1: Write the failing test**
 
 Create `test/cli/context.test.ts`:
+
 ```ts
 import { describe, it, expect } from 'vitest'
 import { resolveCliContext } from '../../src/cli/context.js'
@@ -71,6 +75,7 @@ Expected: PASS (function already works; this guards the import-graph change).
 - [ ] **Step 3: Change context.ts imports**
 
 In `src/cli/context.ts`, replace line 4:
+
 ```ts
 // from
 import { resolveSettingsPath, loadEnvironmentFiles } from '../index.js'
@@ -78,6 +83,7 @@ import { resolveSettingsPath, loadEnvironmentFiles } from '../index.js'
 import { resolveSettingsPath } from '../resolve-settings-path.js'
 import { loadEnvironmentFiles } from '../env.js'
 ```
+
 (`index.ts:26-27` re-exports these verbatim from `./env.js` and `./resolve-settings-path.js`.)
 
 - [ ] **Step 4: typecheck + test**
@@ -102,27 +108,32 @@ git commit -m "perf(cli): bypass barrel in context.ts to skip @ai-sdk load"
 ### Task 2: Split list.ts into shell + list-run.ts
 
 **Files:**
+
 - Modify: `src/cli/models/list.ts` (becomes shell)
 - Create: `src/cli/models/list-run.ts`
 - Modify: `test/cli/models-list.test.ts` (import path)
 
 **Interfaces:**
+
 - Consumes: `resolveCliContext` from `../context.js` (Task 1), `loadSettingsFromFile` from `../../config.js`, `enumerateModelEntries` from `../../providers/model-types.js`.
 - Produces: `runModelsList` exported from `list-run.ts`; `createModelsListCommand` stays in `list.ts`.
 
 - [ ] **Step 1: Create list-run.ts with the logic**
 
 Create `src/cli/models/list-run.ts` containing everything currently in `list.ts` EXCEPT `createModelsListCommand`: `ModelsListOptions`, `ModelRow`, `collectRows`, `formatLimitNum`, `ROW_COL_DEFS`, `Prepared`, `prepare`, `renderRows`, `formatTable`, `runModelsList`. Top imports:
+
 ```ts
 import { loadSettingsFromFile } from '../../config.js'
 import type { AliasEntry, ModelRouteConfig, Settings } from '../../config.js'
 import { enumerateModelEntries } from '../../providers/model-types.js'
 ```
+
 Move `formatLimitNum`/`renderRows` exports here (test imports them).
 
 - [ ] **Step 2: Reduce list.ts to a shell**
 
 Replace entire `src/cli/models/list.ts` with:
+
 ```ts
 import { Command } from 'commander'
 
@@ -164,15 +175,18 @@ git commit -m "refactor(cli): split list command into shell + lazy list-run"
 ### Task 3: Split sync.ts into shell + sync-run.ts
 
 **Files:**
+
 - Modify: `src/cli/models/sync.ts` (becomes shell)
 - Create: `src/cli/models/sync-run.ts`
 
 **Interfaces:**
+
 - Produces: `runModelsSync` exported from `sync-run.ts`; `createModelsSyncCommand` stays in `sync.ts` with option declarations (`-p/--provider`, `--dry-run`) intact for `--help`.
 
 - [ ] **Step 1: Create sync-run.ts with the logic**
 
 Create `src/cli/models/sync-run.ts` containing `ModelsSyncOptions` and `runModelsSync` (lines 14-284 of current `sync.ts`), with the heavy top imports:
+
 ```ts
 import * as clack from '@clack/prompts'
 import { readFile } from 'node:fs/promises'
@@ -189,6 +203,7 @@ import { discoverProviderModels, type ProviderModelsResult } from './discovery.j
 - [ ] **Step 2: Reduce sync.ts to a shell**
 
 Replace entire `src/cli/models/sync.ts` with:
+
 ```ts
 import { Command } from 'commander'
 
@@ -233,11 +248,13 @@ git commit -m "refactor(cli): split sync command into shell + lazy sync-run"
 ### Task 4: Split install.ts into shell + install-run.ts
 
 **Files:**
+
 - Modify: `src/cli/codex/install.ts` (becomes shell)
 - Create: `src/cli/codex/install-run.ts`
 - Modify: `test/cli/codex-install.test.ts` (import path)
 
 **Interfaces:**
+
 - Produces: `runCodexInstall`, `buildCodexBaseUrl` (and any helpers the test imports) exported from `install-run.ts`; `createCodexInstallCommand` stays in `install.ts`.
 
 - [ ] **Step 1: Create install-run.ts with the logic**
@@ -247,6 +264,7 @@ Read current `src/cli/codex/install.ts`. Move into `src/cli/codex/install-run.ts
 - [ ] **Step 2: Reduce install.ts to a shell**
 
 Replace entire `src/cli/codex/install.ts` with:
+
 ```ts
 import { Command } from 'commander'
 
@@ -288,6 +306,7 @@ git commit -m "refactor(cli): split codex install into shell + lazy install-run"
 ### Task 5: Barrel direct-connect for P0/P1 consumers
 
 **Files:**
+
 - Modify: `src/server/stream-inspect.ts:1-2`
 - Modify: `src/server/oauth/startup.ts:1-3` (also touched by Task 7 — do the import change here, the function change in Task 7)
 - Modify: `src/server/oauth/callback.ts:2-3`
@@ -300,6 +319,7 @@ git commit -m "refactor(cli): split codex install into shell + lazy install-run"
 - [ ] **Step 1: stream-inspect.ts — type-only direct connect**
 
 Replace lines 1-2:
+
 ```ts
 // from
 import type { ... } from '../index.js'   // Settings, ProviderConfig, ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin
@@ -307,11 +327,13 @@ import type { ... } from '../index.js'   // Settings, ProviderConfig, ResolvedPl
 import type { Settings, ProviderConfig } from '../config.js'
 import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../plugins/types.js'
 ```
+
 (Preserve the exact symbol list currently imported; split light `config.js` types from `plugins/types.js` types.)
 
 - [ ] **Step 2: oauth/startup.ts — direct connect**
 
 Replace lines 1-3:
+
 ```ts
 // from
 import type { Settings, OAuthConfig } from '../../index.js'
@@ -323,11 +345,13 @@ import { classifyStatus } from '../../oauth/token-manager.js'
 import type { TokenManager } from '../../oauth/token-manager.js'
 import type { AuthStatus } from '../../oauth/types.js'
 ```
+
 (Verify `classifyStatus` lives in `token-manager.js` — if it's in `oauth/types.js`, import from there. Check `oauth/index.js` re-export source.)
 
 - [ ] **Step 3: oauth/callback.ts — type-only direct connect**
 
 Replace lines 2-3:
+
 ```ts
 // from
 import type { Settings, OAuthConfig } from '../../index.js'
@@ -340,36 +364,47 @@ import type { TokenManager } from '../../oauth/token-manager.js'
 - [ ] **Step 4: types.ts — type-only direct connect**
 
 Replace lines 3-4 (and line 9 re-export):
+
 ```ts
 // from
-import type { Settings, TokenManager, ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
+import type {
+  Settings,
+  TokenManager,
+  ProviderRegistry,
+  PluginRegistry,
+  KeySelection,
+} from '../index.js'
 // to
 import type { Settings } from '../config.js'
 import type { TokenManager } from '../oauth/token-manager.js'
 import type { ProviderRegistry, KeySelection } from '../providers/registry.js'
 import type { PluginRegistry } from '../plugins/registry.js'
 ```
+
 Line 9 `export type { Settings } from '../index.js'` → `export type { Settings } from '../config.js'`.
 
 - [ ] **Step 5: handle-protocol.ts — mixed direct connect**
 
 Replace lines 3-6 (value + type imports). Read the current import block to get exact symbols, then split by source:
+
 ```ts
 import { OAuthError } from '../oauth/types.js'
 import { RoutingError } from '../routing.js'
 import { flattenUsage } from '../providers/shared/renderer-utils.js'
 import { collectStreamResult } from '../providers/shared/stream-collector.js'
 import type { ProtocolStrategy, ProtocolErrorFormatter } from '../providers/shared/strategy.js'
-import type { AISDKInput } from '../providers/openai-compatible/protocol.js'  // verify source via index.ts:88
+import type { AISDKInput } from '../providers/openai-compatible/protocol.js' // verify source via index.ts:88
 import type { Settings } from '../config.js'
 import type { RoutingTable } from '../routing.js'
 import type { ResolvedPlugin } from '../plugins/registry.js'
 ```
+
 **Verify `AISDKInput`'s actual definition source:** `index.ts:88` re-exports it from `./providers/openai-compatible/protocol.js`. If the symbol is actually defined in `providers/shared/aisdk-types.js` and re-exported, import from the definition source. Confirm by grepping `export.*AISDKInput` under `src/providers/`.
 
 - [ ] **Step 6: codex.ts — direct connect**
 
 Replace lines 3-4:
+
 ```ts
 // from
 import { openaiResponsesStrategy } from '../index.js'
@@ -396,6 +431,7 @@ git commit -m "refactor: direct-connect barrel consumers to skip transitive @ai-
 ### Task 6: Side-effect cleanup (Layer D)
 
 **Files:**
+
 - Modify: `src/server/logging.ts` (move `cleanOldLogs()` call into `createLogger` with a guard)
 - Modify: `src/plugins/builtins/vendor-sse-error.ts:96` (remove top-level `registerBuiltInPlugin`)
 - Modify: `src/plugins/loader.ts` (static `builtInPlugins` Map)
@@ -403,6 +439,7 @@ git commit -m "refactor: direct-connect barrel consumers to skip transitive @ai-
 - Modify: `src/server/server.ts:127-133` (move `process.on` into `start()`)
 
 **Interfaces:**
+
 - `registerBuiltInPlugin` removed from public API; `getBuiltInPlugin` now reads a static Map.
 - `logger` export unchanged.
 
@@ -417,6 +454,7 @@ Read `src/plugins/builtins/vendor-sse-error.ts`. Remove the top-level `registerB
 - [ ] **Step 3: loader.ts — static builtInPlugins Map**
 
 Read `src/plugins/loader.ts`. Replace the runtime `builtInPlugins = new Map()` + `registerBuiltInPlugin`/`getBuiltInPlugin` API with a static initialization:
+
 ```ts
 import { vendorSseErrorPlugin } from './builtins/vendor-sse-error.js'
 // ...
@@ -427,6 +465,7 @@ export function getBuiltInPlugin(name: string): Plugin | undefined {
   return builtInPlugins.get(name)
 }
 ```
+
 Remove `registerBuiltInPlugin` export. Confirm no other code calls `registerBuiltInPlugin` (grep).
 
 - [ ] **Step 4: index.ts — drop registerBuiltInPlugin export**
@@ -454,6 +493,7 @@ git commit -m "refactor: remove module top-level side effects (log cleanup, plug
 ### Task 7: Startup parallelization (H1/H2/M5/M6)
 
 **Files:**
+
 - Modify: `src/server/oauth/startup.ts` (add `refreshAuthStatuses`)
 - Modify: `src/server/server.ts` (non-blocking refresh, parallel plugin/registry)
 - Modify: `src/server/app.ts` (`authStatuses` → `getAuthStatuses` getter)
@@ -462,6 +502,7 @@ git commit -m "refactor: remove module top-level side effects (log cleanup, plug
 - Modify: `src/plugins/registry.ts` (parallel `fromSettings`/`initAll`/`afterServerStartAll`, cache `allResolved`)
 
 **Interfaces:**
+
 - `AppDependencies`: `authStatuses?: ProviderAuthStatus[]` → `getAuthStatuses?: () => ProviderAuthStatus[]`.
 - `refreshAuthStatuses(settings, tokenManager): Promise<ProviderAuthStatus[]>` — new export.
 - `validateOAuthStatus` kept for `startup.test.ts` compatibility.
@@ -469,6 +510,7 @@ git commit -m "refactor: remove module top-level side effects (log cleanup, plug
 - [ ] **Step 1: Add refreshAuthStatuses (parallel, non-throwing)**
 
 In `src/server/oauth/startup.ts`, add:
+
 ```ts
 export async function refreshAuthStatuses(
   settings: Settings,
@@ -490,38 +532,55 @@ export async function refreshAuthStatuses(
           return { provider: name, status: 'valid' as const }
         } catch (err) {
           const loginUrl = buildLoginUrl(settings, name)
-          logger.warn({ provider: name, loginUrl, err }, 'oauth token refresh failed — login required')
+          logger.warn(
+            { provider: name, loginUrl, err },
+            'oauth token refresh failed — login required',
+          )
           return { provider: name, status: 'needs_login', loginUrl }
         }
       }
       const loginUrl = buildLoginUrl(settings, name)
-      logger.warn({ provider: name, loginUrl }, 'oauth login required — visit the URL to authenticate')
+      logger.warn(
+        { provider: name, loginUrl },
+        'oauth login required — visit the URL to authenticate',
+      )
       return { provider: name, status: 'needs_login', loginUrl }
     }),
   )
   return settled.map((r, i) =>
     r.status === 'fulfilled'
       ? r.value
-      : { provider: oauthProviders[i]![0], status: 'needs_login' as const, loginUrl: buildLoginUrl(settings, oauthProviders[i]![0]) },
+      : {
+          provider: oauthProviders[i]![0],
+          status: 'needs_login' as const,
+          loginUrl: buildLoginUrl(settings, oauthProviders[i]![0]),
+        },
   )
 }
 ```
+
 Keep `validateOAuthStatus` (used by `startup.test.ts`).
 
 - [ ] **Step 2: AppDependencies — getter instead of snapshot**
 
 In `src/server/types.ts`, change `authStatuses?: ProviderAuthStatus[]` → `getAuthStatuses?: () => ProviderAuthStatus[]` (import `ProviderAuthStatus` from `./oauth/startup.js`). In `src/server/app.ts`:
+
 - Destructure `getAuthStatuses` instead of `authStatuses`.
 - `/health` handler: replace `if (authStatuses && authStatuses.length > 0)` with:
+
 ```ts
 const authStatuses = getAuthStatuses?.() ?? []
-if (authStatuses.length > 0) { /* existing mapping */ }
+if (authStatuses.length > 0) {
+  /* existing mapping */
+}
 ```
 
 - [ ] **Step 3: server.ts — non-blocking refresh + getter wiring**
 
 In `src/server/server.ts` `main()`:
+
 - Replace lines 56-59 (`if (tokenManager) { authStatuses = await validateOAuthStatus(...) }`) with a mutable container + background refresh:
+
 ```ts
 let authStatuses: ProviderAuthStatus[] = []
 if (tokenManager) {
@@ -532,12 +591,14 @@ if (tokenManager) {
     .catch((err) => logger.error({ err }, 'oauth status refresh failed'))
 }
 ```
+
 - In the `createApp({...})` call, replace `...(authStatuses ? { authStatuses } : {})` with `getAuthStatuses: () => authStatuses`.
 - Import `refreshAuthStatuses` (keep `validateOAuthStatus` import only if still referenced — remove if not).
 
 - [ ] **Step 4: registry.ts — parallel createAuthFetch**
 
 In `src/providers/registry.ts` (lines ~107-114), replace the serial `for...of`:
+
 ```ts
 const authFetchMap = new Map<string, (baseFetch?: typeof fetch) => typeof fetch>()
 if (pluginRegistry) {
@@ -555,6 +616,7 @@ if (pluginRegistry) {
 - [ ] **Step 5: plugins/registry.ts — cache allResolved + parallel lifecycle**
 
 Read `src/plugins/registry.ts`. Three changes:
+
 1. `allResolved()` (lines ~314-343): compute once in the constructor, store as `private readonly allResolvedCache: ResolvedPlugin[]`; `allResolved()` returns it.
 2. `initAll` (lines ~187-203): change serial `for...of await` to `Promise.allSettled` over `this.allResolved()`. Preserve per-plugin error logging (collect rejected reasons, log each).
 3. `afterServerStartAll` (lines ~215-221): same → `Promise.allSettled`.
@@ -578,6 +640,7 @@ git commit -m "perf: parallelize startup (oauth refresh non-blocking, plugin loa
 ### Task 8: Request-path caching (H3/H4/M1/M2)
 
 **Files:**
+
 - Modify: `src/routing.ts` (prefixedRoutes cache)
 - Modify: `src/providers/shared/provider-factory.ts` (accept proxyFetch instead of proxySettings)
 - Modify: `src/providers/registry.ts` (sharedProxyFetch at registry scope)
@@ -586,6 +649,7 @@ git commit -m "perf: parallelize startup (oauth refresh non-blocking, plugin loa
 - Test: `test/routing.test.ts` (prefixed cache), `test/providers/registry.test.ts` (ProxyAgent singleton)
 
 **Interfaces:**
+
 - `applyProviderAuth` signature: `proxySettings` param → `proxyFetch: typeof fetch | undefined`.
 - `createOpenAICompatibleProvider`/`createAnthropicProvider`/`createOpenAIProvider`: `settings` param dropped if only used for `settings.proxy`; accept `proxyFetch` instead (check each — some may still need `settings` for other fields).
 - `RoutingTable.resolve()`: unchanged signature; internal cache.
@@ -593,14 +657,16 @@ git commit -m "perf: parallelize startup (oauth refresh non-blocking, plugin loa
 - [ ] **Step 1: routing.ts — prefixedRoutes cache**
 
 In `src/routing.ts`:
+
 - Add `private readonly prefixedRoutes: Map<string, RouteMatch>` to the constructor params.
-- In `fromSettings`, build it in the existing `enumerateModelEntries` loop (lines 53-92). For each entry, after `buildRoute(...)` for `${providerName}/${modelKey}`, store into `prefixedRoutes`. For each alias, store `buildRoute(providerName, provider, modelKey, \`${providerName}/${alias.name}\`, pluginRegistry)` under key `${providerName}/${alias.name}`. (The route for modelKey and its aliases shares the same `resolvedPlugins`/headers except `modelSelector` — build once per selector or reuse; simplest: call `buildRoute` per selector key.)
+- In `fromSettings`, build it in the existing `enumerateModelEntries` loop (lines 53-92). For each entry, after `buildRoute(...)` for `${providerName}/${modelKey}`, store into `prefixedRoutes`. For each alias, store `buildRoute(providerName, provider, modelKey, \`${providerName}/${alias.name}\`, pluginRegistry)`under key`${providerName}/${alias.name}`. (The route for modelKey and its aliases shares the same `resolvedPlugins`/headers except `modelSelector`— build once per selector or reuse; simplest: call`buildRoute` per selector key.)
 - In `resolve()`, replace the prefixed branch (lines 129-148): split selector, then `const route = this.prefixedRoutes.get(selector); if (route) return route;` — fall through to the existing provider-not-found / unknown-model errors. Remove the per-request `buildRoute` + alias linear scan.
 - Keep `Object.keys(this.settings.providers).length` empty check (or precompute `providerCount`).
 
 - [ ] **Step 2: routing cache test**
 
 Add to `test/routing.test.ts`:
+
 ```ts
 it('caches prefixed routes — resolve returns same RouteMatch instance for repeated selectors', () => {
   const settings = /* minimal settings with one provider/model + alias */
@@ -616,7 +682,9 @@ it('caches prefixed routes — resolve returns same RouteMatch instance for repe
 - [ ] **Step 3: provider-factory.ts — accept proxyFetch**
 
 In `src/providers/shared/provider-factory.ts`:
+
 - `applyProviderAuth`: change `proxySettings: { url: string; verify: boolean } | null` → `proxyFetch: typeof fetch | undefined`:
+
 ```ts
 export function applyProviderAuth(
   options: { apiKey?: string; fetch?: typeof fetch },
@@ -633,17 +701,20 @@ export function applyProviderAuth(
   }
 }
 ```
+
 - `createOpenAICompatibleProvider`: drop `settings` param if it was only used for `settings.proxy`; add `proxyFetch: typeof fetch | undefined` param; call `applyProviderAuth(options, selectedApiKey, customFetch, proxyFetch)`. Do the same for `createAnthropicProvider` and `createOpenAIProvider` (read `src/providers/anthropic/provider.ts` and `src/providers/openai/provider.ts` to apply the same pattern — they currently pass `settings.proxy`).
 - `createProxyFetch` stays (now called once at registry scope, not per request).
 
 - [ ] **Step 4: registry.ts — sharedProxyFetch singleton**
 
 In `src/providers/registry.ts` `createProviderRegistry`, before the return, build once:
+
 ```ts
 const sharedProxyFetch = settings.proxy
   ? createProxyFetch(settings.proxy.url, settings.proxy.verify)
   : undefined
 ```
+
 Import `createProxyFetch` from `./shared/provider-factory.js`. In `languageModel()`, pass `sharedProxyFetch` to each `createXxxProvider` call instead of having them read `settings.proxy`. Update `createProviderModelFactory` (read it — it wraps the three provider factories) to thread `proxyFetch` through instead of `settings`.
 
 - [ ] **Step 5: ProxyAgent singleton test**
@@ -653,6 +724,7 @@ Add to `test/providers/registry.test.ts` a test that mocks `undici`'s `ProxyAgen
 - [ ] **Step 6: codex.ts — cache buildCodexModelsResponse**
 
 In `src/server/codex.ts` `createCodexApp`, add a closure cache for the `/v1/models` response:
+
 ```ts
 let cachedModels: { models: CodexModelInfo[] } | null = null
 // in the GET /v1/models handler:
@@ -662,11 +734,13 @@ if (!cachedModels) {
 }
 return c.json(cachedModels)
 ```
+
 (Preserve existing error handling around `catalogCache.get()` + `buildCodexModelsResponse` — the cache only stores the success result.)
 
 - [ ] **Step 7: app.ts — cache listModels/getModel**
 
 In `src/server/app.ts` `createApp`, precompute once:
+
 ```ts
 const modelsList = listModels(settings)
 const modelsById = new Map<string, ReturnType<typeof getModel>>()
@@ -677,6 +751,7 @@ for (const entry of enumerateModelEntries(settings)) {
   }
 }
 ```
+
 Import `enumerateModelEntries` from `../providers/model-types.js`. Change `/v1/models` handler to `c.json(modelsList)`. Change `/v1/models/*` handler to look up `modelsById.get(modelId)` first; fall back to `getModel(settings, modelId)` only if not in map (defensive — should always be in map).
 
 - [ ] **Step 8: typecheck + full test**
@@ -696,6 +771,7 @@ git commit -m "perf: cache per-request recomputations (prefixed routes, ProxyAge
 ## Self-Review
 
 **1. Spec coverage:**
+
 - CLI lazy-load (Layer A): Tasks 1-4 cover context.ts + list/sync/install splits. ✅
 - Barrel direct-connect (Layer B): Task 5 covers all 6 P0/P1 consumers. ✅
 - Side effects (Layer D): Task 6 covers logging/vendor-sse-error/loader/server. ✅
@@ -706,6 +782,7 @@ git commit -m "perf: cache per-request recomputations (prefixed routes, ProxyAge
 **2. Placeholder scan:** No "TBD"/"implement later". Where exact code depends on reading a file the controller hasn't fully read (install.ts helpers, anthropic/openai provider factories, plugins/registry.ts line ranges), the step says "read X, then apply pattern Y" with the pattern shown concretely — acceptable for a refactor where the edit is mechanical once the file is seen.
 
 **3. Type consistency:**
+
 - `getAuthStatuses: () => ProviderAuthStatus[]` used consistently in Task 7 (types.ts define, app.ts consume, server.ts wire).
 - `applyProviderAuth` proxyFetch signature consistent across provider-factory.ts (define) and registry.ts (call) in Task 8.
 - `refreshAuthStatuses` export name consistent in startup.ts (define) and server.ts (import).
@@ -713,6 +790,7 @@ git commit -m "perf: cache per-request recomputations (prefixed routes, ProxyAge
 ## Verification (end-to-end)
 
 After all 8 tasks:
+
 - `pnpm typecheck && pnpm test` — all green.
 - `time pnpm dev models list` — ~1.5s → ~0.95s; `./node_modules/.bin/tsx src/cli/cli.ts models list` → ~0.65s.
 - `pnpm dev --help` / `models --help` / `models sync --help` / `codex --help` — all subcommands + options render.

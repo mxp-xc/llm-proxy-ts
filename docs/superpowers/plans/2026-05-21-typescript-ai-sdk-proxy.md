@@ -39,6 +39,7 @@
 ## Task 1: Workspace And Server Skeleton
 
 **Files:**
+
 - Create: `package.json`
 - Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.base.json`
@@ -55,8 +56,8 @@
 Create `apps/server/test/health.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { createApp } from '../src/app.js';
+import { describe, expect, it } from 'vitest'
+import { createApp } from '../src/app.js'
 
 describe('health endpoint', () => {
   it('returns local service status without providers', async () => {
@@ -68,18 +69,18 @@ describe('health endpoint', () => {
         routing: { enableFlatModelLookup: false },
         providers: {},
       },
-    });
+    })
 
-    const response = await app.request('/health');
+    const response = await app.request('/health')
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
       status: 'ok',
       service: 'llm-proxy',
       providersConfigured: 0,
-    });
-  });
-});
+    })
+  })
+})
 ```
 
 - [ ] **Step 2: Add workspace files and minimal app**
@@ -177,35 +178,35 @@ Create `apps/server/tsconfig.json`:
 Create `apps/server/vitest.config.ts`:
 
 ```ts
-import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
   },
-});
+})
 ```
 
 Create `apps/server/src/app.ts`:
 
 ```ts
-import { Hono } from 'hono';
+import { Hono } from 'hono'
 
 export interface Settings {
-  service: { name: string; host: string; port: number };
-  requestTimeoutMs: number;
-  proxy: { url: string; verify: boolean } | null;
-  routing: { enableFlatModelLookup: boolean };
-  providers: Record<string, unknown>;
+  service: { name: string; host: string; port: number }
+  requestTimeoutMs: number
+  proxy: { url: string; verify: boolean } | null
+  routing: { enableFlatModelLookup: boolean }
+  providers: Record<string, unknown>
 }
 
 export interface AppDependencies {
-  settings: Settings;
+  settings: Settings
 }
 
 export function createApp({ settings }: AppDependencies): Hono {
-  const app = new Hono();
+  const app = new Hono()
 
   app.get('/health', (c) =>
     c.json({
@@ -213,17 +214,17 @@ export function createApp({ settings }: AppDependencies): Hono {
       service: settings.service.name,
       providersConfigured: Object.keys(settings.providers).length,
     }),
-  );
+  )
 
-  return app;
+  return app
 }
 ```
 
 Create `apps/server/src/server.ts`:
 
 ```ts
-import { serve } from '@hono/node-server';
-import { createApp } from './app.js';
+import { serve } from '@hono/node-server'
+import { createApp } from './app.js'
 
 const settings = {
   service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
@@ -231,17 +232,17 @@ const settings = {
   proxy: null,
   routing: { enableFlatModelLookup: false },
   providers: {},
-};
+}
 
-const app = createApp({ settings });
+const app = createApp({ settings })
 
 serve({
   fetch: app.fetch,
   hostname: settings.service.host,
   port: settings.service.port,
-});
+})
 
-console.log(`llm-proxy listening on http://${settings.service.host}:${settings.service.port}`);
+console.log(`llm-proxy listening on http://${settings.service.host}:${settings.service.port}`)
 ```
 
 Modify `.gitignore` to include:
@@ -282,6 +283,7 @@ git commit -m "chore: scaffold hono server workspace"
 ## Task 2: JSONC Configuration And Generated Schema
 
 **Files:**
+
 - Replace: `apps/server/src/app.ts` settings import usage only if needed
 - Create: `apps/server/src/config.ts`
 - Create: `apps/server/test/config.test.ts`
@@ -293,17 +295,21 @@ git commit -m "chore: scaffold hono server workspace"
 Create `apps/server/test/config.test.ts`:
 
 ```ts
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { generateSettingsJsonSchema, loadSettingsFromFile, resolveEnvPlaceholders } from '../src/config.js';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import {
+  generateSettingsJsonSchema,
+  loadSettingsFromFile,
+  resolveEnvPlaceholders,
+} from '../src/config.js'
 
 describe('config', () => {
   it('loads JSONC settings and resolves env placeholders', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'));
-    const settingsPath = join(dir, 'settings.jsonc');
-    process.env.OPENROUTER_API_KEY = 'env-secret';
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-config-'))
+    const settingsPath = join(dir, 'settings.jsonc')
+    process.env.OPENROUTER_API_KEY = 'env-secret'
     await writeFile(
       settingsPath,
       `{
@@ -323,30 +329,32 @@ describe('config', () => {
           }
         }
       }`,
-    );
+    )
 
-    const settings = await loadSettingsFromFile(settingsPath);
+    const settings = await loadSettingsFromFile(settingsPath)
 
-    expect(settings.proxy).toEqual({ url: 'http://127.0.0.1:7890', verify: false });
-    expect(settings.providers.openrouter?.apiKey).toBe('env-secret');
-    expect(settings.providers.openrouter?.models['deepseek-r1']?.upstreamModel).toBe('deepseek/deepseek-r1');
-  });
+    expect(settings.proxy).toEqual({ url: 'http://127.0.0.1:7890', verify: false })
+    expect(settings.providers.openrouter?.apiKey).toBe('env-secret')
+    expect(settings.providers.openrouter?.models['deepseek-r1']?.upstreamModel).toBe(
+      'deepseek/deepseek-r1',
+    )
+  })
 
   it('allows inline api keys', () => {
-    expect(resolveEnvPlaceholders('ak-inline')).toBe('ak-inline');
-  });
+    expect(resolveEnvPlaceholders('ak-inline')).toBe('ak-inline')
+  })
 
   it('generates a JSON schema from the Zod settings schema', async () => {
-    const schema = generateSettingsJsonSchema();
+    const schema = generateSettingsJsonSchema()
 
     expect(schema).toMatchObject({
       $schema: 'http://json-schema.org/draft-07/schema#',
       title: 'Settings',
       type: 'object',
-    });
-    expect(JSON.stringify(schema)).toContain('providers');
-  });
-});
+    })
+    expect(JSON.stringify(schema)).toContain('providers')
+  })
+})
 ```
 
 - [ ] **Step 2: Run config tests to verify they fail**
@@ -360,24 +368,24 @@ Expected: FAIL because `src/config.ts` does not exist.
 Create `apps/server/src/config.ts`:
 
 ```ts
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { parse } from 'jsonc-parser';
-import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parse } from 'jsonc-parser'
+import { z } from 'zod'
+import { zodToJsonSchema } from 'zod-to-json-schema'
 
 const pluginConfigSchema = z.object({
   name: z.string().min(1),
   config: z.record(z.string(), z.unknown()).default({}),
-});
+})
 
 const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
   aliases: z.array(z.string().min(1)).default([]),
   headers: z.record(z.string(), z.string()).default({}),
   plugins: z.array(pluginConfigSchema).default([]),
-});
+})
 
 const providerConfigSchema = z.object({
   type: z.literal('openai-compatible'),
@@ -386,7 +394,7 @@ const providerConfigSchema = z.object({
   headers: z.record(z.string(), z.string()).default({}),
   plugins: z.array(pluginConfigSchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
-});
+})
 
 export const settingsSchema = z.object({
   $schema: z.string().optional(),
@@ -411,56 +419,56 @@ export const settingsSchema = z.object({
     })
     .default({}),
   providers: z.record(z.string(), providerConfigSchema).default({}),
-});
+})
 
-export type Settings = z.infer<typeof settingsSchema>;
-export type ProviderConfig = Settings['providers'][string];
-export type ModelRouteConfig = ProviderConfig['models'][string];
-export type PluginConfig = z.infer<typeof pluginConfigSchema>;
+export type Settings = z.infer<typeof settingsSchema>
+export type ProviderConfig = Settings['providers'][string]
+export type ModelRouteConfig = ProviderConfig['models'][string]
+export type PluginConfig = z.infer<typeof pluginConfigSchema>
 
-const ENV_PLACEHOLDER = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+const ENV_PLACEHOLDER = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/
 
 export function resolveEnvPlaceholders(value: unknown): unknown {
   if (typeof value === 'string') {
-    const match = ENV_PLACEHOLDER.exec(value);
-    if (!match) return value;
-    const envName = match[1];
-    const envValue = process.env[envName];
-    if (envValue === undefined) throw new Error(`Environment variable ${envName} is required`);
-    return envValue;
+    const match = ENV_PLACEHOLDER.exec(value)
+    if (!match) return value
+    const envName = match[1]
+    const envValue = process.env[envName]
+    if (envValue === undefined) throw new Error(`Environment variable ${envName} is required`)
+    return envValue
   }
-  if (Array.isArray(value)) return value.map((item) => resolveEnvPlaceholders(item));
+  if (Array.isArray(value)) return value.map((item) => resolveEnvPlaceholders(item))
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, child]) => [key, resolveEnvPlaceholders(child)]),
-    );
+    )
   }
-  return value;
+  return value
 }
 
 export async function loadSettingsFromFile(path: string): Promise<Settings> {
-  const content = await readFile(path, 'utf8');
-  const parsed = parse(content);
-  return settingsSchema.parse(resolveEnvPlaceholders(parsed));
+  const content = await readFile(path, 'utf8')
+  const parsed = parse(content)
+  return settingsSchema.parse(resolveEnvPlaceholders(parsed))
 }
 
 export function generateSettingsJsonSchema(): object {
-  return zodToJsonSchema(settingsSchema, { name: 'Settings', $refStrategy: 'none' });
+  return zodToJsonSchema(settingsSchema, { name: 'Settings', $refStrategy: 'none' })
 }
 
 export async function writeSettingsJsonSchema(path: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(generateSettingsJsonSchema(), null, 2)}\n`);
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `${JSON.stringify(generateSettingsJsonSchema(), null, 2)}\n`)
 }
 
 async function main(): Promise<void> {
   if (process.argv.includes('--generate-schema')) {
-    const here = dirname(fileURLToPath(import.meta.url));
-    await writeSettingsJsonSchema(resolve(here, '../config/settings.schema.json'));
+    const here = dirname(fileURLToPath(import.meta.url))
+    await writeSettingsJsonSchema(resolve(here, '../config/settings.schema.json'))
   }
 }
 
-await main();
+await main()
 ```
 
 - [ ] **Step 4: Add example config**
@@ -486,20 +494,20 @@ Create `apps/server/config/settings.example.jsonc`:
           "config": {
             "maxPreviewEvents": 3,
             "maxPreviewBytes": 65536,
-            "rateLimitCodes": ["rate_limit", "too_many_requests"]
-          }
-        }
+            "rateLimitCodes": ["rate_limit", "too_many_requests"],
+          },
+        },
       ],
       "models": {
         "deepseek-r1": {
           "upstreamModel": "deepseek/deepseek-r1",
           "aliases": ["default"],
           "headers": {},
-          "plugins": []
-        }
-      }
-    }
-  }
+          "plugins": [],
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -531,6 +539,7 @@ git commit -m "feat: add jsonc settings schema"
 ## Task 3: Routing Table And Plugin Resolution
 
 **Files:**
+
 - Create: `apps/server/src/plugins/types.ts`
 - Create: `apps/server/src/plugins/registry.ts`
 - Create: `apps/server/src/routing.ts`
@@ -541,9 +550,9 @@ git commit -m "feat: add jsonc settings schema"
 Create `apps/server/test/routing.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import type { Settings } from '../src/config.js';
-import { RoutingError, RoutingTable } from '../src/routing.js';
+import { describe, expect, it } from 'vitest'
+import type { Settings } from '../src/config.js'
+import { RoutingError, RoutingTable } from '../src/routing.js'
 
 function settings(enableFlatModelLookup = false): Settings {
   return {
@@ -568,41 +577,41 @@ function settings(enableFlatModelLookup = false): Settings {
         },
       },
     },
-  };
+  }
 }
 
 describe('RoutingTable', () => {
   it('resolves provider/model selectors and merged route data', () => {
-    const table = RoutingTable.fromSettings(settings());
-    const route = table.resolve('openrouter/chat');
+    const table = RoutingTable.fromSettings(settings())
+    const route = table.resolve('openrouter/chat')
 
-    expect(route.providerName).toBe('openrouter');
-    expect(route.modelKey).toBe('chat');
-    expect(route.upstreamModel).toBe('openrouter/chat');
-    expect(route.headers).toEqual({ 'X-Provider': 'provider', 'X-Model': 'model' });
-    expect(route.plugins).toEqual([{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 } }]);
-  });
+    expect(route.providerName).toBe('openrouter')
+    expect(route.modelKey).toBe('chat')
+    expect(route.upstreamModel).toBe('openrouter/chat')
+    expect(route.headers).toEqual({ 'X-Provider': 'provider', 'X-Model': 'model' })
+    expect(route.plugins).toEqual([{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 } }])
+  })
 
   it('resolves aliases inside an explicit provider', () => {
-    const table = RoutingTable.fromSettings(settings());
-    expect(table.resolve('openrouter/default').modelKey).toBe('chat');
-  });
+    const table = RoutingTable.fromSettings(settings())
+    expect(table.resolve('openrouter/default').modelKey).toBe('chat')
+  })
 
   it('rejects flat lookup when disabled', () => {
-    const table = RoutingTable.fromSettings(settings(false));
-    expect(() => table.resolve('default')).toThrow(RoutingError);
+    const table = RoutingTable.fromSettings(settings(false))
+    expect(() => table.resolve('default')).toThrow(RoutingError)
     try {
-      table.resolve('default');
+      table.resolve('default')
     } catch (error) {
-      expect((error as RoutingError).code).toBe('flat_lookup_disabled');
+      expect((error as RoutingError).code).toBe('flat_lookup_disabled')
     }
-  });
+  })
 
   it('resolves flat aliases when enabled', () => {
-    const table = RoutingTable.fromSettings(settings(true));
-    expect(table.resolve('default').upstreamModel).toBe('openrouter/chat');
-  });
-});
+    const table = RoutingTable.fromSettings(settings(true))
+    expect(table.resolve('default').upstreamModel).toBe('openrouter/chat')
+  })
+})
 ```
 
 - [ ] **Step 2: Run routing tests to verify they fail**
@@ -616,63 +625,63 @@ Expected: FAIL because routing modules do not exist.
 Create `apps/server/src/plugins/types.ts`:
 
 ```ts
-import type { PluginConfig, Settings } from '../config.js';
+import type { PluginConfig, Settings } from '../config.js'
 
 export interface PluginContext {
-  requestId: string;
-  settings: Settings;
-  route?: unknown;
-  request?: unknown;
+  requestId: string
+  settings: Settings
+  route?: unknown
+  request?: unknown
 }
 
 export interface PluginResponse {
-  status: number;
-  body: unknown;
-  headers?: Record<string, string>;
+  status: number
+  body: unknown
+  headers?: Record<string, string>
 }
 
 export interface ProviderCallPatch {
-  headers?: Record<string, string>;
-  providerOptions?: Record<string, unknown>;
+  headers?: Record<string, string>
+  providerOptions?: Record<string, unknown>
 }
 
 export interface ProviderResultPatch {
-  body?: unknown;
+  body?: unknown
 }
 
 export interface ProxyPlugin {
-  name: string;
-  beforeRequest?(ctx: PluginContext): Promise<void | PluginResponse>;
-  beforeProviderCall?(ctx: PluginContext): Promise<void | ProviderCallPatch>;
-  afterProviderResult?(ctx: PluginContext): Promise<void | ProviderResultPatch>;
-  inspectStreamChunk?(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse>;
-  mapProviderError?(ctx: PluginContext & { error: unknown }): Promise<void | PluginResponse>;
+  name: string
+  beforeRequest?(ctx: PluginContext): Promise<void | PluginResponse>
+  beforeProviderCall?(ctx: PluginContext): Promise<void | ProviderCallPatch>
+  afterProviderResult?(ctx: PluginContext): Promise<void | ProviderResultPatch>
+  inspectStreamChunk?(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse>
+  mapProviderError?(ctx: PluginContext & { error: unknown }): Promise<void | PluginResponse>
 }
 
-export type ResolvedPluginConfig = PluginConfig;
+export type ResolvedPluginConfig = PluginConfig
 ```
 
 Create `apps/server/src/plugins/registry.ts`:
 
 ```ts
-import type { PluginConfig } from '../config.js';
+import type { PluginConfig } from '../config.js'
 
-export const BUILT_IN_PLUGIN_NAMES = new Set(['vendor_sse_error']);
+export const BUILT_IN_PLUGIN_NAMES = new Set(['vendor_sse_error'])
 
 export function resolvePluginConfigs(
   providerPlugins: PluginConfig[],
   modelPlugins: PluginConfig[],
 ): PluginConfig[] {
-  const byName = new Map<string, PluginConfig>();
-  for (const plugin of providerPlugins) byName.set(plugin.name, plugin);
-  for (const plugin of modelPlugins) byName.set(plugin.name, plugin);
-  return [...byName.values()];
+  const byName = new Map<string, PluginConfig>()
+  for (const plugin of providerPlugins) byName.set(plugin.name, plugin)
+  for (const plugin of modelPlugins) byName.set(plugin.name, plugin)
+  return [...byName.values()]
 }
 
 export function assertKnownPlugins(plugins: PluginConfig[]): void {
   for (const plugin of plugins) {
     if (!BUILT_IN_PLUGIN_NAMES.has(plugin.name)) {
-      throw new Error(`Unknown plugin '${plugin.name}'`);
+      throw new Error(`Unknown plugin '${plugin.name}'`)
     }
   }
 }
@@ -683,17 +692,17 @@ export function assertKnownPlugins(plugins: PluginConfig[]): void {
 Create `apps/server/src/routing.ts`:
 
 ```ts
-import type { PluginConfig, ProviderConfig, Settings } from './config.js';
-import { assertKnownPlugins, resolvePluginConfigs } from './plugins/registry.js';
+import type { PluginConfig, ProviderConfig, Settings } from './config.js'
+import { assertKnownPlugins, resolvePluginConfigs } from './plugins/registry.js'
 
 export interface RouteMatch {
-  providerName: string;
-  provider: ProviderConfig;
-  modelKey: string;
-  modelSelector: string;
-  upstreamModel: string;
-  headers: Record<string, string>;
-  plugins: PluginConfig[];
+  providerName: string
+  provider: ProviderConfig
+  modelKey: string
+  modelSelector: string
+  upstreamModel: string
+  headers: Record<string, string>
+  plugins: PluginConfig[]
 }
 
 export class RoutingError extends Error {
@@ -703,7 +712,7 @@ export class RoutingError extends Error {
     public readonly selector: string,
     message: string,
   ) {
-    super(message);
+    super(message)
   }
 
   toResponse(): { error: { type: string; code: string; message: string; selector: string } } {
@@ -714,7 +723,7 @@ export class RoutingError extends Error {
         message: this.message,
         selector: this.selector,
       },
-    };
+    }
   }
 }
 
@@ -725,53 +734,92 @@ export class RoutingTable {
   ) {}
 
   static fromSettings(settings: Settings): RoutingTable {
-    const flatRoutes = new Map<string, RouteMatch>();
+    const flatRoutes = new Map<string, RouteMatch>()
     for (const [providerName, provider] of Object.entries(settings.providers)) {
-      assertKnownPlugins(provider.plugins);
+      assertKnownPlugins(provider.plugins)
       for (const [modelKey, model] of Object.entries(provider.models)) {
-        const route = buildRoute(providerName, provider, modelKey, `${providerName}/${modelKey}`);
-        assertKnownPlugins(route.plugins);
+        const route = buildRoute(providerName, provider, modelKey, `${providerName}/${modelKey}`)
+        assertKnownPlugins(route.plugins)
         if (settings.routing.enableFlatModelLookup) {
           for (const selector of [modelKey, ...model.aliases]) {
-            if (flatRoutes.has(selector)) throw new Error(`ambiguous flat route '${selector}' is configured`);
-            flatRoutes.set(selector, route);
+            if (flatRoutes.has(selector))
+              throw new Error(`ambiguous flat route '${selector}' is configured`)
+            flatRoutes.set(selector, route)
           }
         }
       }
     }
-    return new RoutingTable(settings, flatRoutes);
+    return new RoutingTable(settings, flatRoutes)
   }
 
   resolve(selector: string): RouteMatch {
     if (Object.keys(this.settings.providers).length === 0) {
-      throw new RoutingError(404, 'no_providers_configured', selector, 'No upstream providers are configured');
+      throw new RoutingError(
+        404,
+        'no_providers_configured',
+        selector,
+        'No upstream providers are configured',
+      )
     }
     if (!selector.includes('/')) {
       if (!this.settings.routing.enableFlatModelLookup) {
-        throw new RoutingError(404, 'flat_lookup_disabled', selector, 'Flat model lookup is disabled');
+        throw new RoutingError(
+          404,
+          'flat_lookup_disabled',
+          selector,
+          'Flat model lookup is disabled',
+        )
       }
-      const route = this.flatRoutes.get(selector);
-      if (!route) throw new RoutingError(404, 'unknown_model', selector, 'No model route matched requested model selector');
-      return route;
+      const route = this.flatRoutes.get(selector)
+      if (!route)
+        throw new RoutingError(
+          404,
+          'unknown_model',
+          selector,
+          'No model route matched requested model selector',
+        )
+      return route
     }
     if (selector.split('/').length !== 2) {
-      throw new RoutingError(404, 'unknown_model', selector, 'Model selector must use configured provider/model routing');
+      throw new RoutingError(
+        404,
+        'unknown_model',
+        selector,
+        'Model selector must use configured provider/model routing',
+      )
     }
-    const [providerName, requestedModel] = selector.split('/') as [string, string];
-    const provider = this.settings.providers[providerName];
-    if (!provider) throw new RoutingError(404, 'unknown_provider', selector, 'No provider matched requested model selector');
-    const direct = provider.models[requestedModel];
-    if (direct) return buildRoute(providerName, provider, requestedModel, selector);
+    const [providerName, requestedModel] = selector.split('/') as [string, string]
+    const provider = this.settings.providers[providerName]
+    if (!provider)
+      throw new RoutingError(
+        404,
+        'unknown_provider',
+        selector,
+        'No provider matched requested model selector',
+      )
+    const direct = provider.models[requestedModel]
+    if (direct) return buildRoute(providerName, provider, requestedModel, selector)
     for (const [modelKey, model] of Object.entries(provider.models)) {
-      if (model.aliases.includes(requestedModel)) return buildRoute(providerName, provider, modelKey, selector);
+      if (model.aliases.includes(requestedModel))
+        return buildRoute(providerName, provider, modelKey, selector)
     }
-    throw new RoutingError(404, 'unknown_model', selector, 'No model route matched requested model selector');
+    throw new RoutingError(
+      404,
+      'unknown_model',
+      selector,
+      'No model route matched requested model selector',
+    )
   }
 }
 
-function buildRoute(providerName: string, provider: ProviderConfig, modelKey: string, modelSelector: string): RouteMatch {
-  const model = provider.models[modelKey];
-  if (!model) throw new Error(`Missing model route '${modelKey}'`);
+function buildRoute(
+  providerName: string,
+  provider: ProviderConfig,
+  modelKey: string,
+  modelSelector: string,
+): RouteMatch {
+  const model = provider.models[modelKey]
+  if (!model) throw new Error(`Missing model route '${modelKey}'`)
   return {
     providerName,
     provider,
@@ -780,7 +828,7 @@ function buildRoute(providerName: string, provider: ProviderConfig, modelKey: st
     upstreamModel: model.upstreamModel,
     headers: { ...provider.headers, ...model.headers },
     plugins: resolvePluginConfigs(provider.plugins, model.plugins),
-  };
+  }
 }
 ```
 
@@ -806,6 +854,7 @@ git commit -m "feat: add provider model routing"
 ## Task 4: OpenAI Chat Request Validation And AI SDK Input Mapping
 
 **Files:**
+
 - Create: `apps/server/src/protocols/openai-chat.ts`
 - Create: `apps/server/test/openai-chat.test.ts`
 
@@ -814,19 +863,22 @@ git commit -m "feat: add provider model routing"
 Create `apps/server/test/openai-chat.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest } from '../src/protocols/openai-chat.js';
+import { describe, expect, it } from 'vitest'
+import {
+  mapOpenAIChatRequestToAISDKInput,
+  validateOpenAIChatRequest,
+} from '../src/protocols/openai-chat.js'
 
 describe('OpenAI chat protocol mapping', () => {
   it('validates required model and messages', () => {
     const parsed = validateOpenAIChatRequest({
       model: 'openrouter/chat',
       messages: [{ role: 'user', content: 'hello' }],
-    });
+    })
 
-    expect(parsed.model).toBe('openrouter/chat');
-    expect(parsed.messages).toHaveLength(1);
-  });
+    expect(parsed.model).toBe('openrouter/chat')
+    expect(parsed.messages).toHaveLength(1)
+  })
 
   it('maps common OpenAI parameters to AI SDK settings', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -836,7 +888,7 @@ describe('OpenAI chat protocol mapping', () => {
       top_p: 0.9,
       max_completion_tokens: 123,
       stop: ['END'],
-    });
+    })
 
     expect(input).toMatchObject({
       messages: [{ role: 'user', content: 'hello' }],
@@ -844,8 +896,8 @@ describe('OpenAI chat protocol mapping', () => {
       topP: 0.9,
       maxOutputTokens: 123,
       stopSequences: ['END'],
-    });
-  });
+    })
+  })
 
   it('maps function tools without execute handlers', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
@@ -857,18 +909,22 @@ describe('OpenAI chat protocol mapping', () => {
           function: {
             name: 'get_weather',
             description: 'Get weather',
-            parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+            parameters: {
+              type: 'object',
+              properties: { city: { type: 'string' } },
+              required: ['city'],
+            },
           },
         },
       ],
       tool_choice: { type: 'function', function: { name: 'get_weather' } },
-    });
+    })
 
-    expect(Object.keys(input.tools ?? {})).toEqual(['get_weather']);
-    expect(input.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' });
-    expect(input.tools?.get_weather).not.toHaveProperty('execute');
-  });
-});
+    expect(Object.keys(input.tools ?? {})).toEqual(['get_weather'])
+    expect(input.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' })
+    expect(input.tools?.get_weather).not.toHaveProperty('execute')
+  })
+})
 ```
 
 - [ ] **Step 2: Run protocol tests to verify they fail**
@@ -882,15 +938,15 @@ Expected: FAIL because `protocols/openai-chat.ts` does not exist.
 Create `apps/server/src/protocols/openai-chat.ts`:
 
 ```ts
-import { jsonSchema, type ToolSet } from 'ai';
-import { z } from 'zod';
+import { jsonSchema, type ToolSet } from 'ai'
+import { z } from 'zod'
 
 const messageSchema = z.object({
   role: z.enum(['system', 'user', 'assistant', 'tool']),
   content: z.unknown().optional(),
   tool_call_id: z.string().optional(),
   tool_calls: z.array(z.unknown()).optional(),
-});
+})
 
 const functionToolSchema = z.object({
   type: z.literal('function'),
@@ -899,7 +955,7 @@ const functionToolSchema = z.object({
     description: z.string().optional(),
     parameters: z.record(z.string(), z.unknown()).default({ type: 'object', properties: {} }),
   }),
-});
+})
 
 export const openAIChatRequestSchema = z
   .object({
@@ -922,65 +978,80 @@ export const openAIChatRequestSchema = z
       .optional(),
     parallel_tool_calls: z.boolean().optional(),
   })
-  .passthrough();
+  .passthrough()
 
-export type OpenAIChatRequest = z.infer<typeof openAIChatRequestSchema>;
+export type OpenAIChatRequest = z.infer<typeof openAIChatRequestSchema>
 
 export function validateOpenAIChatRequest(value: unknown): OpenAIChatRequest {
-  return openAIChatRequestSchema.parse(value);
+  return openAIChatRequestSchema.parse(value)
 }
 
 export interface AISDKInput {
-  messages: Array<Record<string, unknown>>;
-  temperature?: number;
-  topP?: number;
-  presencePenalty?: number;
-  frequencyPenalty?: number;
-  maxOutputTokens?: number;
-  stopSequences?: string[];
-  tools?: ToolSet;
-  toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
-  providerOptions?: Record<string, Record<string, unknown>>;
+  messages: Array<Record<string, unknown>>
+  temperature?: number
+  topP?: number
+  presencePenalty?: number
+  frequencyPenalty?: number
+  maxOutputTokens?: number
+  stopSequences?: string[]
+  tools?: ToolSet
+  toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string }
+  providerOptions?: Record<string, Record<string, unknown>>
 }
 
 export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AISDKInput {
   const input: AISDKInput = {
     messages: request.messages.map(mapMessage),
-  };
-  if (request.temperature !== undefined) input.temperature = request.temperature;
-  if (request.top_p !== undefined) input.topP = request.top_p;
-  if (request.presence_penalty !== undefined) input.presencePenalty = request.presence_penalty;
-  if (request.frequency_penalty !== undefined) input.frequencyPenalty = request.frequency_penalty;
-  if (request.max_completion_tokens !== undefined) input.maxOutputTokens = request.max_completion_tokens;
-  else if (request.max_tokens !== undefined) input.maxOutputTokens = request.max_tokens;
-  if (request.stop !== undefined) input.stopSequences = Array.isArray(request.stop) ? request.stop : [request.stop];
-  if (request.tools) input.tools = Object.fromEntries(request.tools.map((item) => [item.function.name, mapFunctionTool(item)]));
-  if (request.tool_choice) input.toolChoice = mapToolChoice(request.tool_choice);
-  return input;
+  }
+  if (request.temperature !== undefined) input.temperature = request.temperature
+  if (request.top_p !== undefined) input.topP = request.top_p
+  if (request.presence_penalty !== undefined) input.presencePenalty = request.presence_penalty
+  if (request.frequency_penalty !== undefined) input.frequencyPenalty = request.frequency_penalty
+  if (request.max_completion_tokens !== undefined)
+    input.maxOutputTokens = request.max_completion_tokens
+  else if (request.max_tokens !== undefined) input.maxOutputTokens = request.max_tokens
+  if (request.stop !== undefined)
+    input.stopSequences = Array.isArray(request.stop) ? request.stop : [request.stop]
+  if (request.tools)
+    input.tools = Object.fromEntries(
+      request.tools.map((item) => [item.function.name, mapFunctionTool(item)]),
+    )
+  if (request.tool_choice) input.toolChoice = mapToolChoice(request.tool_choice)
+  return input
 }
 
 function mapMessage(message: z.infer<typeof messageSchema>): Record<string, unknown> {
   if (message.role === 'tool') {
-    return { role: 'tool', content: [{ type: 'tool-result', toolCallId: message.tool_call_id, toolName: message.tool_call_id ?? 'tool', output: message.content }] };
+    return {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: message.tool_call_id,
+          toolName: message.tool_call_id ?? 'tool',
+          output: message.content,
+        },
+      ],
+    }
   }
-  return message as Record<string, unknown>;
+  return message as Record<string, unknown>
 }
 
 function mapFunctionTool(item: z.infer<typeof functionToolSchema>): ToolSet[string] {
   return {
     description: item.function.description,
     inputSchema: jsonSchema(item.function.parameters),
-  };
+  }
 }
 
 function mapToolChoice(choice: OpenAIChatRequest['tool_choice']): AISDKInput['toolChoice'] {
-  if (!choice) return undefined;
-  if (typeof choice === 'string') return choice;
-  return { type: 'tool', toolName: choice.function.name };
+  if (!choice) return undefined
+  if (typeof choice === 'string') return choice
+  return { type: 'tool', toolName: choice.function.name }
 }
 
 export function openAIError(status: number, type: string, code: string, message: string): Response {
-  return Response.json({ error: { type, code, message } }, { status });
+  return Response.json({ error: { type, code, message } }, { status })
 }
 ```
 
@@ -1006,6 +1077,7 @@ git commit -m "feat: map openai chat requests"
 ## Task 5: Provider Registry And AI SDK OpenAI-Compatible Adapter
 
 **Files:**
+
 - Create: `apps/server/src/providers/registry.ts`
 - Create: `apps/server/src/providers/openai-compatible.ts`
 - Create: `apps/server/test/provider-registry.test.ts`
@@ -1015,9 +1087,9 @@ git commit -m "feat: map openai chat requests"
 Create `apps/server/test/provider-registry.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import type { Settings } from '../src/config.js';
-import { createProviderRegistry } from '../src/providers/registry.js';
+import { describe, expect, it } from 'vitest'
+import type { Settings } from '../src/config.js'
+import { createProviderRegistry } from '../src/providers/registry.js'
 
 const settings: Settings = {
   service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
@@ -1034,21 +1106,23 @@ const settings: Settings = {
       models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
     },
   },
-};
+}
 
 describe('provider registry', () => {
   it('creates openai-compatible language models and filters auth header overrides', () => {
-    const registry = createProviderRegistry(settings);
-    const model = registry.languageModel('openrouter', 'openrouter/chat', { 'AUTHORIZATION': 'Bearer also-wrong' });
+    const registry = createProviderRegistry(settings)
+    const model = registry.languageModel('openrouter', 'openrouter/chat', {
+      AUTHORIZATION: 'Bearer also-wrong',
+    })
 
-    expect(model).toBeTruthy();
+    expect(model).toBeTruthy()
     expect(registry.debugProviderConfig('openrouter')).toMatchObject({
       baseURL: 'https://openrouter.ai/api/v1',
       headers: { 'X-Test': 'yes' },
       proxyEnabled: true,
-    });
-  });
-});
+    })
+  })
+})
 ```
 
 - [ ] **Step 2: Run provider tests to verify they fail**
@@ -1062,12 +1136,14 @@ Expected: FAIL because provider registry does not exist.
 Create `apps/server/src/providers/openai-compatible.ts`:
 
 ```ts
-import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { ProxyAgent, request } from 'undici';
-import type { ProviderConfig, Settings } from '../config.js';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
+import { ProxyAgent, request } from 'undici'
+import type { ProviderConfig, Settings } from '../config.js'
 
 export function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== 'authorization'));
+  return Object.fromEntries(
+    Object.entries(headers).filter(([key]) => key.toLowerCase() !== 'authorization'),
+  )
 }
 
 export function createOpenAICompatibleProvider(
@@ -1076,61 +1152,79 @@ export function createOpenAICompatibleProvider(
   settings: Settings,
   modelHeaders: Record<string, string>,
 ) {
-  const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders });
+  const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
   return createOpenAICompatible({
     name: providerName,
     baseURL: provider.baseURL,
     apiKey: provider.apiKey,
     headers,
     fetch: settings.proxy ? createProxyFetch(settings.proxy.url, settings.proxy.verify) : undefined,
-  });
+  })
 }
 
 function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {
-  const dispatcher = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: verify } });
+  const dispatcher = new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: verify } })
   return async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     const response = await request(url, {
       method: init?.method,
       body: init?.body as never,
       headers: init?.headers as never,
       dispatcher,
-    });
-    return new Response(response.body as never, { status: response.statusCode, headers: response.headers as HeadersInit });
-  };
+    })
+    return new Response(response.body as never, {
+      status: response.statusCode,
+      headers: response.headers as HeadersInit,
+    })
+  }
 }
 ```
 
 Create `apps/server/src/providers/registry.ts`:
 
 ```ts
-import type { LanguageModel } from 'ai';
-import type { Settings } from '../config.js';
-import { createOpenAICompatibleProvider, sanitizeHeaders } from './openai-compatible.js';
+import type { LanguageModel } from 'ai'
+import type { Settings } from '../config.js'
+import { createOpenAICompatibleProvider, sanitizeHeaders } from './openai-compatible.js'
 
 export interface ProviderRegistry {
-  languageModel(providerName: string, upstreamModel: string, modelHeaders: Record<string, string>): LanguageModel;
-  debugProviderConfig(providerName: string): { baseURL: string; headers: Record<string, string>; proxyEnabled: boolean };
+  languageModel(
+    providerName: string,
+    upstreamModel: string,
+    modelHeaders: Record<string, string>,
+  ): LanguageModel
+  debugProviderConfig(providerName: string): {
+    baseURL: string
+    headers: Record<string, string>
+    proxyEnabled: boolean
+  }
 }
 
 export function createProviderRegistry(settings: Settings): ProviderRegistry {
   return {
     languageModel(providerName, upstreamModel, modelHeaders) {
-      const provider = settings.providers[providerName];
-      if (!provider) throw new Error(`Unknown provider '${providerName}'`);
-      if (provider.type !== 'openai-compatible') throw new Error(`Unsupported provider type '${provider.type}'`);
-      return createOpenAICompatibleProvider(providerName, provider, settings, modelHeaders)(upstreamModel);
+      const provider = settings.providers[providerName]
+      if (!provider) throw new Error(`Unknown provider '${providerName}'`)
+      if (provider.type !== 'openai-compatible')
+        throw new Error(`Unsupported provider type '${provider.type}'`)
+      return createOpenAICompatibleProvider(
+        providerName,
+        provider,
+        settings,
+        modelHeaders,
+      )(upstreamModel)
     },
     debugProviderConfig(providerName) {
-      const provider = settings.providers[providerName];
-      if (!provider) throw new Error(`Unknown provider '${providerName}'`);
+      const provider = settings.providers[providerName]
+      if (!provider) throw new Error(`Unknown provider '${providerName}'`)
       return {
         baseURL: provider.baseURL,
         headers: sanitizeHeaders(provider.headers),
         proxyEnabled: settings.proxy !== null,
-      };
+      }
     },
-  };
+  }
 }
 ```
 
@@ -1156,6 +1250,7 @@ git commit -m "feat: add ai sdk provider registry"
 ## Task 6: OpenAI-Compatible Response And SSE Renderer
 
 **Files:**
+
 - Create: `apps/server/src/protocols/openai-chat-renderer.ts`
 - Create: `apps/server/test/openai-chat-renderer.test.ts`
 
@@ -1164,8 +1259,11 @@ git commit -m "feat: add ai sdk provider registry"
 Create `apps/server/test/openai-chat-renderer.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from '../src/protocols/openai-chat-renderer.js';
+import { describe, expect, it } from 'vitest'
+import {
+  renderOpenAIChatCompletion,
+  renderOpenAIChatCompletionSSE,
+} from '../src/protocols/openai-chat-renderer.js'
 
 describe('OpenAI chat renderer', () => {
   it('renders text completions', () => {
@@ -1175,17 +1273,19 @@ describe('OpenAI chat renderer', () => {
       finishReason: 'stop',
       usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
       response: { id: 'upstream-id', timestamp: new Date(0) },
-    });
+    })
 
     expect(body).toMatchObject({
       id: 'upstream-id',
       object: 'chat.completion',
       created: 0,
       model: 'openrouter/chat',
-      choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }],
+      choices: [
+        { index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' },
+      ],
       usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
-    });
-  });
+    })
+  })
 
   it('renders non-streaming tool calls', () => {
     const body = renderOpenAIChatCompletion({
@@ -1193,31 +1293,38 @@ describe('OpenAI chat renderer', () => {
       text: '',
       finishReason: 'tool-calls',
       toolCalls: [{ toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } }],
-    });
+    })
 
     expect(body.choices[0].message.tool_calls).toEqual([
-      { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"NYC"}' } },
-    ]);
-    expect(body.choices[0].finish_reason).toBe('tool_calls');
-  });
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+      },
+    ])
+    expect(body.choices[0].finish_reason).toBe('tool_calls')
+  })
 
   it('renders text and done SSE chunks', async () => {
     async function* parts() {
-      yield { type: 'text-delta', text: 'hel' };
-      yield { type: 'text-delta', text: 'lo' };
-      yield { type: 'finish', finishReason: 'stop' };
+      yield { type: 'text-delta', text: 'hel' }
+      yield { type: 'text-delta', text: 'lo' }
+      yield { type: 'finish', finishReason: 'stop' }
     }
 
-    const chunks: string[] = [];
-    for await (const chunk of renderOpenAIChatCompletionSSE({ model: 'openrouter/chat', stream: parts() })) {
-      chunks.push(new TextDecoder().decode(chunk));
+    const chunks: string[] = []
+    for await (const chunk of renderOpenAIChatCompletionSSE({
+      model: 'openrouter/chat',
+      stream: parts(),
+    })) {
+      chunks.push(new TextDecoder().decode(chunk))
     }
 
-    expect(chunks.join('')).toContain('"content":"hel"');
-    expect(chunks.join('')).toContain('"content":"lo"');
-    expect(chunks.at(-1)).toBe('data: [DONE]\n\n');
-  });
-});
+    expect(chunks.join('')).toContain('"content":"hel"')
+    expect(chunks.join('')).toContain('"content":"lo"')
+    expect(chunks.at(-1)).toBe('data: [DONE]\n\n')
+  })
+})
 ```
 
 - [ ] **Step 2: Run renderer tests to verify they fail**
@@ -1231,77 +1338,125 @@ Expected: FAIL because renderer does not exist.
 Create `apps/server/src/protocols/openai-chat-renderer.ts`:
 
 ```ts
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto'
 
-type FinishReason = 'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other' | undefined;
+type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'content-filter'
+  | 'tool-calls'
+  | 'error'
+  | 'other'
+  | undefined
 
 export interface RenderResultInput {
-  model: string;
-  text: string;
-  finishReason?: FinishReason;
-  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-  response?: { id?: string; timestamp?: Date };
-  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>;
+  model: string
+  text: string
+  finishReason?: FinishReason
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number }
+  response?: { id?: string; timestamp?: Date }
+  toolCalls?: Array<{ toolCallId: string; toolName: string; input: unknown }>
 }
 
 export function renderOpenAIChatCompletion(input: RenderResultInput): any {
-  const message: any = { role: 'assistant', content: input.text || null };
+  const message: any = { role: 'assistant', content: input.text || null }
   if (input.toolCalls?.length) {
     message.tool_calls = input.toolCalls.map((call) => ({
       id: call.toolCallId,
       type: 'function',
       function: { name: call.toolName, arguments: JSON.stringify(call.input ?? {}) },
-    }));
+    }))
   }
   const body: any = {
     id: input.response?.id ?? `chatcmpl_${randomUUID()}`,
     object: 'chat.completion',
     created: Math.floor((input.response?.timestamp?.getTime() ?? Date.now()) / 1000),
     model: input.model,
-    choices: [{ index: 0, message, finish_reason: mapFinishReason(input.finishReason, input.toolCalls) }],
-  };
+    choices: [
+      { index: 0, message, finish_reason: mapFinishReason(input.finishReason, input.toolCalls) },
+    ],
+  }
   if (input.usage) {
     body.usage = {
       prompt_tokens: input.usage.inputTokens,
       completion_tokens: input.usage.outputTokens,
       total_tokens: input.usage.totalTokens,
-    };
+    }
   }
-  return body;
+  return body
 }
 
 export async function* renderOpenAIChatCompletionSSE(input: {
-  model: string;
-  stream: AsyncIterable<any>;
+  model: string
+  stream: AsyncIterable<any>
 }): AsyncIterable<Uint8Array> {
-  const encoder = new TextEncoder();
-  const id = `chatcmpl_${randomUUID()}`;
-  const created = Math.floor(Date.now() / 1000);
-  const toolIndexes = new Map<string, number>();
+  const encoder = new TextEncoder()
+  const id = `chatcmpl_${randomUUID()}`
+  const created = Math.floor(Date.now() / 1000)
+  const toolIndexes = new Map<string, number>()
   for await (const part of input.stream) {
     if (part.type === 'text-delta') {
-      yield encoder.encode(sse({ id, object: 'chat.completion.chunk', created, model: input.model, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] }));
+      yield encoder.encode(
+        sse({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: input.model,
+          choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
+        }),
+      )
     } else if (part.type === 'tool-call') {
-      const index = toolIndexes.size;
-      toolIndexes.set(part.toolCallId, index);
-      yield encoder.encode(sse({ id, object: 'chat.completion.chunk', created, model: input.model, choices: [{ index: 0, delta: { tool_calls: [{ index, id: part.toolCallId, type: 'function', function: { name: part.toolName, arguments: JSON.stringify(part.input ?? {}) } }] }, finish_reason: null }] }));
+      const index = toolIndexes.size
+      toolIndexes.set(part.toolCallId, index)
+      yield encoder.encode(
+        sse({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: input.model,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index,
+                    id: part.toolCallId,
+                    type: 'function',
+                    function: { name: part.toolName, arguments: JSON.stringify(part.input ?? {}) },
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        }),
+      )
     } else if (part.type === 'finish') {
-      yield encoder.encode(sse({ id, object: 'chat.completion.chunk', created, model: input.model, choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(part.finishReason) }] }));
+      yield encoder.encode(
+        sse({
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: input.model,
+          choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(part.finishReason) }],
+        }),
+      )
     }
   }
-  yield encoder.encode('data: [DONE]\n\n');
+  yield encoder.encode('data: [DONE]\n\n')
 }
 
 function sse(value: unknown): string {
-  return `data: ${JSON.stringify(value)}\n\n`;
+  return `data: ${JSON.stringify(value)}\n\n`
 }
 
 function mapFinishReason(reason?: FinishReason, toolCalls?: unknown[]): string | null {
-  if (toolCalls?.length) return 'tool_calls';
-  if (reason === 'tool-calls') return 'tool_calls';
-  if (reason === 'content-filter') return 'content_filter';
-  if (reason === 'stop' || reason === 'length') return reason;
-  return null;
+  if (toolCalls?.length) return 'tool_calls'
+  if (reason === 'tool-calls') return 'tool_calls'
+  if (reason === 'content-filter') return 'content_filter'
+  if (reason === 'stop' || reason === 'length') return reason
+  return null
 }
 ```
 
@@ -1327,6 +1482,7 @@ git commit -m "feat: render openai chat responses"
 ## Task 7: Hono Chat Endpoint With Mockable AI SDK Gateway
 
 **Files:**
+
 - Modify: `apps/server/src/app.ts`
 - Create: `apps/server/test/chat-endpoint.test.ts`
 
@@ -1335,9 +1491,9 @@ git commit -m "feat: render openai chat responses"
 Create `apps/server/test/chat-endpoint.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { createApp, type ModelGateway } from '../src/app.js';
-import type { Settings } from '../src/config.js';
+import { describe, expect, it } from 'vitest'
+import { createApp, type ModelGateway } from '../src/app.js'
+import type { Settings } from '../src/config.js'
 
 const settings: Settings = {
   service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
@@ -1354,55 +1510,62 @@ const settings: Settings = {
       models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
     },
   },
-};
+}
 
 describe('chat endpoint', () => {
   it('returns non-streaming OpenAI-compatible responses', async () => {
     const gateway: ModelGateway = {
       async generate() {
-        return { text: 'hello', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+        return {
+          text: 'hello',
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        }
       },
       stream() {
-        throw new Error('not used');
+        throw new Error('not used')
       },
-    };
-    const app = createApp({ settings, gateway });
+    }
+    const app = createApp({ settings, gateway })
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'openrouter/chat', messages: [{ role: 'user', content: 'hi' }] }),
-    });
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
 
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.choices[0].message.content).toBe('hello');
-  });
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.choices[0].message.content).toBe('hello')
+  })
 
   it('does not call gateway on routing errors', async () => {
-    let calls = 0;
+    let calls = 0
     const gateway: ModelGateway = {
       async generate() {
-        calls += 1;
-        return { text: 'wrong' };
+        calls += 1
+        return { text: 'wrong' }
       },
       stream() {
-        calls += 1;
-        throw new Error('wrong');
+        calls += 1
+        throw new Error('wrong')
       },
-    };
-    const app = createApp({ settings, gateway });
+    }
+    const app = createApp({ settings, gateway })
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'missing/chat', messages: [{ role: 'user', content: 'hi' }] }),
-    });
+    })
 
-    expect(response.status).toBe(404);
-    expect(calls).toBe(0);
-  });
-});
+    expect(response.status).toBe(404)
+    expect(calls).toBe(0)
+  })
+})
 ```
 
 - [ ] **Step 2: Run endpoint tests to verify they fail**
@@ -1416,88 +1579,131 @@ Expected: FAIL because `createApp` does not support `gateway` or chat route.
 Replace `apps/server/src/app.ts` with:
 
 ```ts
-import { generateText, streamText } from 'ai';
-import { Hono } from 'hono';
-import type { Settings } from './config.js';
-import { mapOpenAIChatRequestToAISDKInput, validateOpenAIChatRequest } from './protocols/openai-chat.js';
-import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from './protocols/openai-chat-renderer.js';
-import { createProviderRegistry, type ProviderRegistry } from './providers/registry.js';
-import { RoutingError, RoutingTable } from './routing.js';
+import { generateText, streamText } from 'ai'
+import { Hono } from 'hono'
+import type { Settings } from './config.js'
+import {
+  mapOpenAIChatRequestToAISDKInput,
+  validateOpenAIChatRequest,
+} from './protocols/openai-chat.js'
+import {
+  renderOpenAIChatCompletion,
+  renderOpenAIChatCompletionSSE,
+} from './protocols/openai-chat-renderer.js'
+import { createProviderRegistry, type ProviderRegistry } from './providers/registry.js'
+import { RoutingError, RoutingTable } from './routing.js'
 
 export interface ModelGateway {
-  generate(input: { model: unknown; callInput: any; requestModel: string }): Promise<any>;
-  stream(input: { model: unknown; callInput: any; requestModel: string }): AsyncIterable<any>;
+  generate(input: { model: unknown; callInput: any; requestModel: string }): Promise<any>
+  stream(input: { model: unknown; callInput: any; requestModel: string }): AsyncIterable<any>
 }
 
 export interface AppDependencies {
-  settings: Settings;
-  providerRegistry?: ProviderRegistry;
-  gateway?: ModelGateway;
+  settings: Settings
+  providerRegistry?: ProviderRegistry
+  gateway?: ModelGateway
 }
 
-export function createApp({ settings, providerRegistry = createProviderRegistry(settings), gateway = defaultGateway }: AppDependencies): Hono {
-  const app = new Hono();
-  const routingTable = RoutingTable.fromSettings(settings);
+export function createApp({
+  settings,
+  providerRegistry = createProviderRegistry(settings),
+  gateway = defaultGateway,
+}: AppDependencies): Hono {
+  const app = new Hono()
+  const routingTable = RoutingTable.fromSettings(settings)
 
   app.get('/health', (c) =>
-    c.json({ status: 'ok', service: settings.service.name, providersConfigured: Object.keys(settings.providers).length }),
-  );
+    c.json({
+      status: 'ok',
+      service: settings.service.name,
+      providersConfigured: Object.keys(settings.providers).length,
+    }),
+  )
 
   app.post('/v1/chat/completions', async (c) => {
-    let request;
+    let request
     try {
-      request = validateOpenAIChatRequest(await c.req.json());
+      request = validateOpenAIChatRequest(await c.req.json())
     } catch (error) {
-      return c.json({ error: { type: 'invalid_request_error', code: 'invalid_request', message: 'Invalid OpenAI chat completion request' } }, 400);
+      return c.json(
+        {
+          error: {
+            type: 'invalid_request_error',
+            code: 'invalid_request',
+            message: 'Invalid OpenAI chat completion request',
+          },
+        },
+        400,
+      )
     }
 
-    let route;
+    let route
     try {
-      route = routingTable.resolve(request.model);
+      route = routingTable.resolve(request.model)
     } catch (error) {
-      if (error instanceof RoutingError) return c.json(error.toResponse(), error.status as 404);
-      throw error;
+      if (error instanceof RoutingError) return c.json(error.toResponse(), error.status as 404)
+      throw error
     }
 
-    const callInput = mapOpenAIChatRequestToAISDKInput(request);
-    const model = providerRegistry.languageModel(route.providerName, route.upstreamModel, route.headers);
+    const callInput = mapOpenAIChatRequestToAISDKInput(request)
+    const model = providerRegistry.languageModel(
+      route.providerName,
+      route.upstreamModel,
+      route.headers,
+    )
 
     if (request.stream) {
-      const stream = gateway.stream({ model, callInput, requestModel: request.model });
-      return new Response(ReadableStreamFromAsyncIterable(renderOpenAIChatCompletionSSE({ model: request.model, stream })), {
-        headers: { 'content-type': 'text/event-stream' },
-      });
+      const stream = gateway.stream({ model, callInput, requestModel: request.model })
+      return new Response(
+        ReadableStreamFromAsyncIterable(
+          renderOpenAIChatCompletionSSE({ model: request.model, stream }),
+        ),
+        {
+          headers: { 'content-type': 'text/event-stream' },
+        },
+      )
     }
 
     try {
-      const result = await gateway.generate({ model, callInput, requestModel: request.model });
-      return c.json(renderOpenAIChatCompletion({ model: request.model, ...result }));
+      const result = await gateway.generate({ model, callInput, requestModel: request.model })
+      return c.json(renderOpenAIChatCompletion({ model: request.model, ...result }))
     } catch {
-      return c.json({ error: { type: 'upstream_error', code: 'upstream_request_failed', message: 'Upstream provider request failed' } }, 502);
+      return c.json(
+        {
+          error: {
+            type: 'upstream_error',
+            code: 'upstream_request_failed',
+            message: 'Upstream provider request failed',
+          },
+        },
+        502,
+      )
     }
-  });
+  })
 
-  return app;
+  return app
 }
 
 const defaultGateway: ModelGateway = {
   async generate({ model, callInput }) {
-    return generateText({ model: model as never, ...callInput });
+    return generateText({ model: model as never, ...callInput })
   },
   stream({ model, callInput }) {
-    return streamText({ model: model as never, ...callInput }).fullStream as AsyncIterable<any>;
+    return streamText({ model: model as never, ...callInput }).fullStream as AsyncIterable<any>
   },
-};
+}
 
-function ReadableStreamFromAsyncIterable(iterable: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
-  const iterator = iterable[Symbol.asyncIterator]();
+function ReadableStreamFromAsyncIterable(
+  iterable: AsyncIterable<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const iterator = iterable[Symbol.asyncIterator]()
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const next = await iterator.next();
-      if (next.done) controller.close();
-      else controller.enqueue(next.value);
+      const next = await iterator.next()
+      if (next.done) controller.close()
+      else controller.enqueue(next.value)
     },
-  });
+  })
 }
 ```
 
@@ -1529,6 +1735,7 @@ git commit -m "feat: add openai chat endpoint"
 ## Task 8: Logging, Request IDs, Vendor SSE Error Plugin, And Docs
 
 **Files:**
+
 - Create: `apps/server/src/logging.ts`
 - Create: `apps/server/src/plugins/vendor-sse-error.ts`
 - Modify: `apps/server/src/app.ts`
@@ -1542,38 +1749,50 @@ git commit -m "feat: add openai chat endpoint"
 Create `apps/server/test/security-and-plugins.test.ts`:
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { redact, safeProxyHost } from '../src/logging.js';
-import { inspectVendorSseError } from '../src/plugins/vendor-sse-error.js';
+import { describe, expect, it } from 'vitest'
+import { redact, safeProxyHost } from '../src/logging.js'
+import { inspectVendorSseError } from '../src/plugins/vendor-sse-error.js'
 
 describe('logging redaction', () => {
   it('redacts known secret fields recursively', () => {
-    expect(redact({ apiKey: 'secret', nested: { authorization: 'Bearer token' }, ok: 'value' })).toEqual({
+    expect(
+      redact({ apiKey: 'secret', nested: { authorization: 'Bearer token' }, ok: 'value' }),
+    ).toEqual({
       apiKey: '[REDACTED]',
       nested: { authorization: '[REDACTED]' },
       ok: 'value',
-    });
-  });
+    })
+  })
 
   it('logs only proxy host', () => {
-    expect(safeProxyHost('http://user:pass@127.0.0.1:7890')).toBe('127.0.0.1:7890');
-  });
-});
+    expect(safeProxyHost('http://user:pass@127.0.0.1:7890')).toBe('127.0.0.1:7890')
+  })
+})
 
 describe('vendor_sse_error', () => {
   it('converts provider stream rate-limit errors to a safe 429 response', () => {
     const result = inspectVendorSseError(
       { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['rate_limit'] },
-      { type: 'raw', rawValue: 'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n' },
-    );
+      {
+        type: 'raw',
+        rawValue:
+          'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n',
+      },
+    )
 
     expect(result).toEqual({
       status: 429,
-      body: { error: { message: 'Rate limited by upstream provider', code: 'rate_limit', type: 'rate_limit_error' } },
-    });
-    expect(JSON.stringify(result)).not.toContain('secret text');
-  });
-});
+      body: {
+        error: {
+          message: 'Rate limited by upstream provider',
+          code: 'rate_limit',
+          type: 'rate_limit_error',
+        },
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('secret text')
+  })
+})
 ```
 
 - [ ] **Step 2: Run security/plugin tests to verify they fail**
@@ -1587,33 +1806,39 @@ Expected: FAIL because logging and plugin modules do not exist.
 Create `apps/server/src/logging.ts`:
 
 ```ts
-import pino from 'pino';
-import { randomUUID } from 'node:crypto';
+import pino from 'pino'
+import { randomUUID } from 'node:crypto'
 
-const SECRET_KEYS = new Set(['apikey', 'api_key', 'authorization', 'x-api-key', 'proxy-authorization']);
+const SECRET_KEYS = new Set([
+  'apikey',
+  'api_key',
+  'authorization',
+  'x-api-key',
+  'proxy-authorization',
+])
 
-export const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+export const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' })
 
 export function requestId(): string {
-  return randomUUID();
+  return randomUUID()
 }
 
 export function redact(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redact);
+  if (Array.isArray(value)) return value.map(redact)
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([key, child]) => [
         key,
         SECRET_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : redact(child),
       ]),
-    );
+    )
   }
-  return value;
+  return value
 }
 
 export function safeProxyHost(proxyUrl: string): string {
-  const url = new URL(proxyUrl);
-  return url.host;
+  const url = new URL(proxyUrl)
+  return url.host
 }
 ```
 
@@ -1623,26 +1848,29 @@ Create `apps/server/src/plugins/vendor-sse-error.ts`:
 
 ```ts
 export interface VendorSseErrorConfig {
-  maxPreviewEvents?: number;
-  maxPreviewBytes?: number;
-  rateLimitCodes?: string[];
+  maxPreviewEvents?: number
+  maxPreviewBytes?: number
+  rateLimitCodes?: string[]
 }
 
-export function inspectVendorSseError(config: VendorSseErrorConfig, chunk: unknown): { status: number; body: unknown } | undefined {
-  const raw = extractRaw(chunk);
-  if (!raw) return undefined;
-  const data = extractSseData(raw);
-  if (!data || data === '[DONE]') return undefined;
-  let parsed: any;
+export function inspectVendorSseError(
+  config: VendorSseErrorConfig,
+  chunk: unknown,
+): { status: number; body: unknown } | undefined {
+  const raw = extractRaw(chunk)
+  if (!raw) return undefined
+  const data = extractSseData(raw)
+  if (!data || data === '[DONE]') return undefined
+  let parsed: any
   try {
-    parsed = JSON.parse(data);
+    parsed = JSON.parse(data)
   } catch {
-    return undefined;
+    return undefined
   }
-  const error = parsed.error;
-  if (!error || typeof error !== 'object') return undefined;
-  const codes = config.rateLimitCodes ?? ['rate_limit', 'too_many_requests', 'rate_limit_error'];
-  if (!codes.includes(error.code) && !codes.includes(error.type)) return undefined;
+  const error = parsed.error
+  if (!error || typeof error !== 'object') return undefined
+  const codes = config.rateLimitCodes ?? ['rate_limit', 'too_many_requests', 'rate_limit_error']
+  if (!codes.includes(error.code) && !codes.includes(error.type)) return undefined
   return {
     status: 429,
     body: {
@@ -1652,22 +1880,28 @@ export function inspectVendorSseError(config: VendorSseErrorConfig, chunk: unkno
         type: safeString(error.type),
       },
     },
-  };
+  }
 }
 
 function extractRaw(chunk: unknown): string | undefined {
-  if (typeof chunk === 'string') return chunk;
-  if (chunk && typeof chunk === 'object' && 'rawValue' in chunk && typeof (chunk as any).rawValue === 'string') return (chunk as any).rawValue;
-  return undefined;
+  if (typeof chunk === 'string') return chunk
+  if (
+    chunk &&
+    typeof chunk === 'object' &&
+    'rawValue' in chunk &&
+    typeof (chunk as any).rawValue === 'string'
+  )
+    return (chunk as any).rawValue
+  return undefined
 }
 
 function extractSseData(raw: string): string | undefined {
-  const lines = raw.split(/\r?\n/).filter((line) => line.startsWith('data:'));
-  return lines.length ? lines.map((line) => line.slice(5).trim()).join('\n') : raw;
+  const lines = raw.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+  return lines.length ? lines.map((line) => line.slice(5).trim()).join('\n') : raw
 }
 
 function safeString(value: unknown): string | null {
-  return typeof value === 'string' ? value.slice(0, 128) : null;
+  return typeof value === 'string' ? value.slice(0, 128) : null
 }
 ```
 
@@ -1676,20 +1910,20 @@ function safeString(value: unknown): string | null {
 Modify `apps/server/src/plugins/registry.ts` only if `vendor_sse_error` is not already in `BUILT_IN_PLUGIN_NAMES`. It must contain:
 
 ```ts
-export const BUILT_IN_PLUGIN_NAMES = new Set(['vendor_sse_error']);
+export const BUILT_IN_PLUGIN_NAMES = new Set(['vendor_sse_error'])
 ```
 
 Modify `apps/server/src/app.ts` to add request IDs before routes:
 
 ```ts
-import { requestId } from './logging.js';
+import { requestId } from './logging.js'
 
 app.use('*', async (c, next) => {
-  const id = requestId();
-  c.set('requestId', id);
-  await next();
-  c.header('x-request-id', id);
-});
+  const id = requestId()
+  c.set('requestId', id)
+  await next()
+  c.header('x-request-id', id)
+})
 ```
 
 - [ ] **Step 6: Load settings in server entrypoint**
@@ -1697,25 +1931,29 @@ app.use('*', async (c, next) => {
 Modify `apps/server/src/server.ts`:
 
 ```ts
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { serve } from '@hono/node-server';
-import { createApp } from './app.js';
-import { loadSettingsFromFile, settingsSchema } from './config.js';
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { serve } from '@hono/node-server'
+import { createApp } from './app.js'
+import { loadSettingsFromFile, settingsSchema } from './config.js'
 
-const settingsPath = resolve(process.env.LLM_PROXY_SETTINGS_FILE ?? 'apps/server/config/settings.jsonc');
-const settings = existsSync(settingsPath) ? await loadSettingsFromFile(settingsPath) : settingsSchema.parse({});
-const app = createApp({ settings });
+const settingsPath = resolve(
+  process.env.LLM_PROXY_SETTINGS_FILE ?? 'apps/server/config/settings.jsonc',
+)
+const settings = existsSync(settingsPath)
+  ? await loadSettingsFromFile(settingsPath)
+  : settingsSchema.parse({})
+const app = createApp({ settings })
 
-serve({ fetch: app.fetch, hostname: settings.service.host, port: settings.service.port });
-console.log(`llm-proxy listening on http://${settings.service.host}:${settings.service.port}`);
+serve({ fetch: app.fetch, hostname: settings.service.host, port: settings.service.port })
+console.log(`llm-proxy listening on http://${settings.service.host}:${settings.service.port}`)
 ```
 
 - [ ] **Step 7: Update README**
 
 Modify `README.md` to include:
 
-```md
+````md
 ## TypeScript Implementation
 
 This repository is a pnpm monorepo. The first app is `apps/server`, a Hono service that exposes OpenAI Chat Completions compatible APIs and calls upstream providers through Vercel AI SDK.
@@ -1726,6 +1964,7 @@ This repository is a pnpm monorepo. The first app is `apps/server`, a Hono servi
 pnpm install
 pnpm generate:schema
 ```
+````
 
 ### Run
 
@@ -1741,7 +1980,8 @@ The default settings file is `apps/server/config/settings.jsonc`. Copy `apps/ser
 pnpm test
 pnpm typecheck
 ```
-```
+
+````
 
 - [ ] **Step 8: Run security/plugin tests**
 
@@ -1768,7 +2008,7 @@ Expected: `apps/server/config/settings.schema.json` is regenerated from Zod sche
 ```bash
 git add apps/server/src/logging.ts apps/server/src/plugins/vendor-sse-error.ts apps/server/src/plugins/registry.ts apps/server/src/app.ts apps/server/src/server.ts apps/server/test/security-and-plugins.test.ts README.md apps/server/config/settings.schema.json
 git commit -m "feat: add logging and vendor stream plugin"
-```
+````
 
 ## Plan Self-Review
 

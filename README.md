@@ -15,18 +15,18 @@ pnpm dev serve
 
 ## API
 
-| 端点 | 说明 |
-|---|---|
-| `GET /health` | 服务状态和 provider 数量 |
-| `POST /v1/chat/completions` | OpenAI Chat（非流式 + `stream: true` SSE） |
-| `POST /v1/responses` | OpenAI Responses（命名事件 SSE） |
-| `POST /v1/messages` | Anthropic Messages（非流式 + SSE） |
-| `GET /v1/models` | 可用模型列表 |
-| `GET /v1/models/*` | 单模型详情 |
-| `POST /codex/v1/responses` | Codex CLI 兼容端点（复用 OpenAI Responses 协议） |
-| `GET /codex/v1/models` | Codex bundled catalog 格式模型列表 |
-| `GET /oauth/login/:provider` | OAuth 登录入口（仅配置 oauth 时挂载） |
-| `GET /oauth/callback` | OAuth 授权码回调（仅配置 oauth 时挂载） |
+| 端点                         | 说明                                             |
+| ---------------------------- | ------------------------------------------------ |
+| `GET /health`                | 服务状态和 provider 数量                         |
+| `POST /v1/chat/completions`  | OpenAI Chat（非流式 + `stream: true` SSE）       |
+| `POST /v1/responses`         | OpenAI Responses（命名事件 SSE）                 |
+| `POST /v1/messages`          | Anthropic Messages（非流式 + SSE）               |
+| `GET /v1/models`             | 可用模型列表                                     |
+| `GET /v1/models/*`           | 单模型详情                                       |
+| `POST /codex/v1/responses`   | Codex CLI 兼容端点（复用 OpenAI Responses 协议） |
+| `GET /codex/v1/models`       | Codex bundled catalog 格式模型列表               |
+| `GET /oauth/login/:provider` | OAuth 登录入口（仅配置 oauth 时挂载）            |
+| `GET /oauth/callback`        | OAuth 授权码回调（仅配置 oauth 时挂载）          |
 
 请求格式兼容对应上游 API，支持 messages、tools、tool_choice 等字段。未知字段作为 `providerOptions` 透传给上游。
 
@@ -34,19 +34,19 @@ pnpm dev serve
 
 基于 Commander.js，通过 `pnpm dev <command>` 调用：
 
-| 命令 | 用途 |
-|---|---|
-| `pnpm dev serve` | 启动开发服务器（默认 tsx watch 热重载） |
-| `pnpm dev serve --no-watch` | 启动服务器（无热重载） |
-| `pnpm dev models sync` | 交互式同步上游模型到配置文件 |
-| `pnpm dev models sync -p <name>` | 同步指定 provider |
-| `pnpm dev models sync --dry-run` | 预览变更，不写入 |
-| `pnpm dev models list` | 列出已配置模型 |
-| `pnpm dev codex install` | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
-| `pnpm test` | 运行全部测试 |
-| `pnpm test test/xxx.test.ts` | 运行单个测试 |
-| `pnpm typecheck` | 类型检查 |
-| `pnpm generate:schema` | 从 Zod schema 生成 `config/settings.schema.json` |
+| 命令                             | 用途                                                   |
+| -------------------------------- | ------------------------------------------------------ |
+| `pnpm dev serve`                 | 启动开发服务器（默认 tsx watch 热重载）                |
+| `pnpm dev serve --no-watch`      | 启动服务器（无热重载）                                 |
+| `pnpm dev models sync`           | 交互式同步上游模型到配置文件                           |
+| `pnpm dev models sync -p <name>` | 同步指定 provider                                      |
+| `pnpm dev models sync --dry-run` | 预览变更，不写入                                       |
+| `pnpm dev models list`           | 列出已配置模型                                         |
+| `pnpm dev codex install`         | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
+| `pnpm test`                      | 运行全部测试                                           |
+| `pnpm test test/xxx.test.ts`     | 运行单个测试                                           |
+| `pnpm typecheck`                 | 类型检查                                               |
+| `pnpm generate:schema`           | 从 Zod schema 生成 `config/settings.schema.json`       |
 
 ## 配置
 

@@ -14,8 +14,12 @@ function isProxyPluginWithInspect(plugin: Plugin): plugin is ProxyPlugin {
 }
 
 function isPluginResponse(value: unknown): value is PluginResponse {
-  return value !== null && typeof value === 'object' && 'status' in value
-    && typeof (value as PluginResponse).status === 'number'
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    'status' in value &&
+    typeof (value as PluginResponse).status === 'number'
+  )
 }
 
 export async function inspectFirstStreamChunk(

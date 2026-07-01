@@ -124,8 +124,18 @@ describe('collectStreamResult', () => {
 
   it('preserves providerExecuted on tool-call for hosted tools', async () => {
     async function* stream() {
-      yield { type: 'tool-call', toolCallId: 'ws_1', toolName: 'web_search', input: '{}', providerExecuted: true } as ProxyStreamPart
-      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 1, outputTokens: 1 } } as ProxyStreamPart
+      yield {
+        type: 'tool-call',
+        toolCallId: 'ws_1',
+        toolName: 'web_search',
+        input: '{}',
+        providerExecuted: true,
+      } as ProxyStreamPart
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: { inputTokens: 1, outputTokens: 1 },
+      } as ProxyStreamPart
     }
     const result = await collectStreamResult(stream())
     expect(result.toolCalls).toEqual([

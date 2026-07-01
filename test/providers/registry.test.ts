@@ -82,7 +82,14 @@ describe('provider registry', () => {
   })
 
   it('creates openai-compatible language models and filters auth header overrides', async () => {
-    const registry = await createProviderRegistry(settings, undefined, mockLogger, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     const result = registry.languageModel('openrouter', 'openrouter/chat', {
       AUTHORIZATION: 'Bearer also-wrong',
       'X-API-Key': 'also-wrong',
@@ -191,7 +198,14 @@ describe('shared ProxyAgent singleton', () => {
       .mockReturnValue(sharedFetch)
 
     // createProviderRegistry 内部调用 createProxyFetch 一次构建 sharedProxyFetch
-    const registry = await createProviderRegistry(settings, undefined, mockLogger, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
+    )
 
     // 多次 languageModel 调用,不应再触发 createProxyFetch
     registry.languageModel('openrouter', 'openrouter/chat', {})
@@ -217,11 +231,20 @@ describe('shared ProxyAgent singleton', () => {
         apiKey: 'secret',
         headers: {},
         plugins: [],
-        models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
+        models: {
+          chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
+        },
       },
     })
 
-    const registry = await createProviderRegistry(noProxySettings, undefined, mockLogger, undefined, undefined, stubFactory)
+    const registry = await createProviderRegistry(
+      noProxySettings,
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      stubFactory,
+    )
     registry.languageModel('openrouter', 'openrouter/chat', {})
 
     expect(createProxyFetchSpy).not.toHaveBeenCalled()

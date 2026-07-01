@@ -1,7 +1,11 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { z } from 'zod/v3'
-import { codexModelInfoSchema, type CodexModelInfo, type CodexModelOverride } from './codex-types.js'
+import {
+  codexModelInfoSchema,
+  type CodexModelInfo,
+  type CodexModelOverride,
+} from './codex-types.js'
 import type { Settings } from './config.js'
 import { enumerateModelEntries, type ModelEntry } from './providers/model-types.js'
 
@@ -53,7 +57,10 @@ export class CodexCatalogCache {
   }
 }
 
-function applyOverride(base: CodexModelInfo, override: NonNullable<CodexModelOverride>): CodexModelInfo {
+function applyOverride(
+  base: CodexModelInfo,
+  override: NonNullable<CodexModelOverride>,
+): CodexModelInfo {
   const filtered = Object.fromEntries(
     Object.entries(override).filter(
       ([k, v]) =>

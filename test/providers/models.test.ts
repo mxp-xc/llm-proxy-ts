@@ -2,14 +2,25 @@ import { describe, expect, it } from 'vitest'
 import { getModel, listModels } from '../../src/providers/models.js'
 import type { AliasEntry, ModelRouteConfig, Settings } from '../../src/config.js'
 
-function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLookup = false): Settings {
+function makeSettings(
+  providers: Settings['providers'] = {},
+  enableFlatModelLookup = false,
+): Settings {
   return {
     service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup },
     plugins: [],
-    codex: { models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 }, install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false, checkForUpdateOnStartup: false } },
+    codex: {
+      models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 },
+      install: {
+        providerId: 'llm-proxy',
+        providerName: 'LLM Proxy',
+        requiresOpenaiAuth: false,
+        checkForUpdateOnStartup: false,
+      },
+    },
     providers,
   }
 }
@@ -43,7 +54,13 @@ describe('listModels', () => {
 
     const result = listModels(settings)
     expect(result.data).toEqual([
-      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: { context: 128000, output: 4096 } },
+      {
+        id: 'openrouter/chat',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: { context: 128000, output: 4096 },
+      },
       { id: 'openrouter/basic', object: 'model', created: 0, owned_by: 'openrouter' },
     ])
   })
@@ -99,9 +116,21 @@ describe('listModels', () => {
     const result = listModels(settings)
     const expectedLimit = { context: 200000, input: 200000, output: 8192 }
     expect(result.data).toEqual([
-      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      {
+        id: 'openrouter/chat',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: expectedLimit,
+      },
       { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
-      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      {
+        id: 'openrouter/default',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: expectedLimit,
+      },
       { id: 'default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
     ])
   })

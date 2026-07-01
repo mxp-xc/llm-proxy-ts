@@ -24,7 +24,8 @@ async function main(): Promise<void> {
   const settingsPath = resolveSettingsPath({ rootDir })
   const settings = existsSync(settingsPath)
     ? await loadSettingsFromFile(settingsPath)
-    : (logger.warn({ settingsPath }, 'Settings file not found — starting with empty defaults...'), settingsSchema.parse({}))
+    : (logger.warn({ settingsPath }, 'Settings file not found — starting with empty defaults...'),
+      settingsSchema.parse({}))
 
   // Auth 文件路径：与 settings.jsonc 同目录
   const authFilePath = join(dirname(settingsPath), 'auth.json')
@@ -84,10 +85,7 @@ async function main(): Promise<void> {
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      fatalAndExit(
-        err,
-        `Port ${settings.service.port} is already in use`,
-      )
+      fatalAndExit(err, `Port ${settings.service.port} is already in use`)
     } else {
       fatalAndExit(err, 'Server failed to start')
     }

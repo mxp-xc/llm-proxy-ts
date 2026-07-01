@@ -137,7 +137,11 @@ describe('OpenAI chat protocol mapping', () => {
           role: 'assistant',
           content: null,
           tool_calls: [
-            { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"NYC"}' } },
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+            },
           ],
         },
       ],
@@ -146,7 +150,12 @@ describe('OpenAI chat protocol mapping', () => {
       {
         role: 'assistant',
         content: [
-          { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'NYC' } },
+          {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'get_weather',
+            input: { city: 'NYC' },
+          },
         ],
       },
     ])
@@ -161,7 +170,11 @@ describe('OpenAI chat protocol mapping', () => {
           role: 'assistant',
           content: null,
           tool_calls: [
-            { id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"NYC"}' } },
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'get_weather', arguments: '{"city":"NYC"}' },
+            },
           ],
         },
         { role: 'tool', tool_call_id: 'call_1', content: 'sunny' },
@@ -226,7 +239,13 @@ describe('OpenAI chat protocol mapping', () => {
     })
     const jsonInput = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
-      messages: [{ role: 'tool', tool_call_id: 'call_2', content: [{ temp: 72 } as Record<string, unknown>] }],
+      messages: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_2',
+          content: [{ temp: 72 } as Record<string, unknown>],
+        },
+      ],
     })
 
     expect(textInput.messages[0]).toEqual({
@@ -256,15 +275,13 @@ describe('OpenAI chat protocol mapping', () => {
   })
 
   it('maps provider-specific fields into providerOptions.openaiCompatible', () => {
-    const input = mapOpenAIChatRequestToAISDKInput(
-      {
-        model: 'openrouter/chat',
-        messages: [{ role: 'user', content: 'hello' }],
-        parallel_tool_calls: false,
-        reasoning: { effort: 'high' },
-        extra_body: { include_reasoning: true },
-      },
-    )
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openrouter/chat',
+      messages: [{ role: 'user', content: 'hello' }],
+      parallel_tool_calls: false,
+      reasoning: { effort: 'high' },
+      extra_body: { include_reasoning: true },
+    })
 
     expect(input.providerOptions).toEqual({
       openaiCompatible: {
@@ -345,10 +362,7 @@ describe('OpenAI chat protocol mapping', () => {
   it('ignores system messages with empty or undefined content', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
-      messages: [
-        { role: 'system' },
-        { role: 'user', content: 'hello' },
-      ],
+      messages: [{ role: 'system' }, { role: 'user', content: 'hello' }],
     })
 
     expect(input.system).toBeUndefined()

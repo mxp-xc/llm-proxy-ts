@@ -78,12 +78,14 @@ export type { SimpleAuthCredentials } from './plugins/helpers.js'
 export { createPluginStore } from './plugins/store-adapter.js'
 
 // Protocol type exports
-export type { OpenAIModel, OpenAIModelList, ModelLimit, ModelEntry } from './providers/model-types.js'
-export { enumerateModelEntries } from './providers/model-types.js'
 export type {
-  AnthropicStopReason,
-  AnthropicMessageResponse,
-} from './providers/anthropic/types.js'
+  OpenAIModel,
+  OpenAIModelList,
+  ModelLimit,
+  ModelEntry,
+} from './providers/model-types.js'
+export { enumerateModelEntries } from './providers/model-types.js'
+export type { AnthropicStopReason, AnthropicMessageResponse } from './providers/anthropic/types.js'
 
 // Protocol exports — OpenAI Compatible (Chat Completions)
 export type { OpenAIChatRequest, AISDKInput } from './providers/openai-compatible/protocol.js'
@@ -109,4 +111,9 @@ export type { RouteMatch } from './routing.js'
 
 // Provider registry exports
 export { createProviderRegistry, createOAuthFetch } from './providers/registry.js'
-export type { ProviderRegistry, KeySelection, LanguageModelResult, ProviderFactory } from './providers/registry.js'
+export type {
+  ProviderRegistry,
+  KeySelection,
+  LanguageModelResult,
+  ProviderFactory,
+} from './providers/registry.js'

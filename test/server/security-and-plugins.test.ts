@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import { createApp, type ModelGateway } from '../../src/server/app.js'
 import type { Settings } from '../../src/index.js'
-import { loadEnvironmentFiles, resolveSettingsPath, inspectVendorSseError } from '../../src/index.js'
+import {
+  loadEnvironmentFiles,
+  resolveSettingsPath,
+  inspectVendorSseError,
+} from '../../src/index.js'
 import { redact, safeProxyHost } from '../../src/server/logging.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeSettings } from '../helpers/settings.js'

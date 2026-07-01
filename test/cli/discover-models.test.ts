@@ -316,9 +316,7 @@ describe('openAIToDiscoveredModels', () => {
   })
 
   it('extracts only context_length when max_output_tokens is absent', () => {
-    const openaiModels = [
-      { id: 'model-a', object: 'model', context_length: 128000 },
-    ]
+    const openaiModels = [{ id: 'model-a', object: 'model', context_length: 128000 }]
     const result = openAIToDiscoveredModels(openaiModels)
     expect(result.models[0]).toEqual({
       id: 'model-a',
@@ -327,9 +325,7 @@ describe('openAIToDiscoveredModels', () => {
   })
 
   it('extracts only max_output_tokens when context_length is absent', () => {
-    const openaiModels = [
-      { id: 'model-b', object: 'model', max_output_tokens: 4096 },
-    ]
+    const openaiModels = [{ id: 'model-b', object: 'model', max_output_tokens: 4096 }]
     const result = openAIToDiscoveredModels(openaiModels)
     expect(result.models[0]).toEqual({
       id: 'model-b',

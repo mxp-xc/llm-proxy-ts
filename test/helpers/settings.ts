@@ -8,7 +8,12 @@ export const baseSettings: Settings = {
   plugins: [],
   codex: {
     models_catalog: { context_window: 200000 },
-    install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false, checkForUpdateOnStartup: false },
+    install: {
+      providerId: 'llm-proxy',
+      providerName: 'LLM Proxy',
+      requiresOpenaiAuth: false,
+      checkForUpdateOnStartup: false,
+    },
   },
   providers: {},
 }

@@ -181,12 +181,8 @@ export function createApp({
   app.post('/v1/chat/completions', (c) =>
     handleProtocolRequest(c, openaiCompatibleStrategy, protocolCtx),
   )
-  app.post('/v1/messages', (c) =>
-    handleProtocolRequest(c, anthropicStrategy, protocolCtx),
-  )
-  app.post('/v1/responses', (c) =>
-    handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx),
-  )
+  app.post('/v1/messages', (c) => handleProtocolRequest(c, anthropicStrategy, protocolCtx))
+  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
 
   // 进程级共享 cache(等价原模块级单例),在 createApp 作用域 new 一次,绝不在 per-request 路径 new
   const catalogCache = codexCatalogCache ?? new CodexCatalogCache()

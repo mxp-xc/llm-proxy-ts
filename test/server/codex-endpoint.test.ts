@@ -34,8 +34,7 @@ const FULL_MODEL = {
   experimental_supported_tools: [],
 }
 
-const codexFetcher: CodexCatalogFetcher = async () =>
-  JSON.stringify({ models: [FULL_MODEL] })
+const codexFetcher: CodexCatalogFetcher = async () => JSON.stringify({ models: [FULL_MODEL] })
 
 describe('GET /codex/v1/models', () => {
   it('returns codex ModelsResponse with one entry per listModels id', async () => {
@@ -210,7 +209,12 @@ describe('POST /codex/v1/responses', () => {
       input: 'hi',
       tools: [
         { type: 'function', name: 'shell_command', parameters: { type: 'object' } },
-        { type: 'custom', name: 'apply_patch', description: 'apply patch', format: { type: 'grammar' } },
+        {
+          type: 'custom',
+          name: 'apply_patch',
+          description: 'apply patch',
+          format: { type: 'grammar' },
+        },
         { type: 'namespace', name: 'mcp__node_repl', description: 'node repl' },
         { type: 'tool_search', execution: 'client' },
         { type: 'web_search', search_content_types: ['text'] },
@@ -248,8 +252,17 @@ describe('POST /codex/v1/responses', () => {
     const gateway = makeGateway({
       stream() {
         return (async function* () {
-          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify('*** Begin Patch\n*** End Patch') }
-          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'apply_patch',
+            input: JSON.stringify('*** Begin Patch\n*** End Patch'),
+          }
+          yield {
+            type: 'finish',
+            finishReason: 'tool-calls',
+            totalUsage: { inputTokens: 5, outputTokens: 5 },
+          }
         })() as AsyncIterable<ProxyStreamPart>
       },
     })
@@ -258,7 +271,13 @@ describe('POST /codex/v1/responses', () => {
       model: 'openai/chat',
       input: 'hi',
       stream: true,
-      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+      tools: [
+        {
+          type: 'custom',
+          name: 'apply_patch',
+          format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
+        },
+      ],
     })
     const res = await app.request('/codex/v1/responses', {
       method: 'POST',
@@ -287,8 +306,17 @@ describe('POST /codex/v1/responses', () => {
     const gateway = makeGateway({
       stream() {
         return (async function* () {
-          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'my_grammar_tool', input: JSON.stringify('payload') }
-          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'my_grammar_tool',
+            input: JSON.stringify('payload'),
+          }
+          yield {
+            type: 'finish',
+            finishReason: 'tool-calls',
+            totalUsage: { inputTokens: 5, outputTokens: 5 },
+          }
         })() as AsyncIterable<ProxyStreamPart>
       },
     })
@@ -297,7 +325,13 @@ describe('POST /codex/v1/responses', () => {
       model: 'openai/chat',
       input: 'hi',
       stream: true,
-      tools: [{ type: 'custom', name: 'my_grammar_tool', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+      tools: [
+        {
+          type: 'custom',
+          name: 'my_grammar_tool',
+          format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
+        },
+      ],
     })
     const res = await app.request('/codex/v1/responses', {
       method: 'POST',
@@ -313,26 +347,48 @@ describe('POST /codex/v1/responses', () => {
   it('renders web_search_call for openai provider hosted tool', async () => {
     const settings = makeSettings({
       openai: {
-        type: 'openai', apiKey: 'secret', headers: {}, plugins: [],
+        type: 'openai',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
         models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
       },
     })
     const gateway = makeGateway({
       stream() {
         return (async function* () {
-          yield { type: 'tool-call', toolCallId: 'ws_1', toolName: 'web_search', input: '{}', providerExecuted: true }
-          yield { type: 'tool-result', toolCallId: 'ws_1', toolName: 'web_search', output: { action: { type: 'search', query: 'test' } } }
-          yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'ws_1',
+            toolName: 'web_search',
+            input: '{}',
+            providerExecuted: true,
+          }
+          yield {
+            type: 'tool-result',
+            toolCallId: 'ws_1',
+            toolName: 'web_search',
+            output: { action: { type: 'search', query: 'test' } },
+          }
+          yield {
+            type: 'finish',
+            finishReason: 'stop',
+            totalUsage: { inputTokens: 5, outputTokens: 5 },
+          }
         })() as AsyncIterable<ProxyStreamPart>
       },
     })
     const app = createApp({ settings, gateway, providerRegistry: stubRegistry })
     const body = JSON.stringify({
-      model: 'openai/chat', input: 'hi', stream: true,
+      model: 'openai/chat',
+      input: 'hi',
+      stream: true,
       tools: [{ type: 'web_search', external_web_access: true }],
     })
     const res = await app.request('/codex/v1/responses', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body,
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
     })
     expect(res.status).toBe(200)
     const text = await res.text()
@@ -364,8 +420,17 @@ describe('POST /codex/v1/responses', () => {
     const gateway = makeGateway({
       stream() {
         return (async function* () {
-          yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'apply_patch', input: JSON.stringify({ input: '*** Begin Patch\n*** End Patch' }) }
-          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'apply_patch',
+            input: JSON.stringify({ input: '*** Begin Patch\n*** End Patch' }),
+          }
+          yield {
+            type: 'finish',
+            finishReason: 'tool-calls',
+            totalUsage: { inputTokens: 5, outputTokens: 5 },
+          }
         })() as AsyncIterable<ProxyStreamPart>
       },
     })
@@ -374,7 +439,13 @@ describe('POST /codex/v1/responses', () => {
       model: 'openrouter/chat',
       input: 'hi',
       stream: true,
-      tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar', syntax: 'lark', definition: 'start:' } }],
+      tools: [
+        {
+          type: 'custom',
+          name: 'apply_patch',
+          format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
+        },
+      ],
     })
     const res = await app.request('/codex/v1/responses', {
       method: 'POST',
@@ -392,8 +463,17 @@ describe('POST /codex/v1/responses', () => {
     const gateway = makeGateway({
       stream() {
         return (async function* () {
-          yield { type: 'tool-call', toolCallId: 'ts_1', toolName: 'tool_search', input: { query: 'browser', limit: 5 } }
-          yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 5, outputTokens: 5 } }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'ts_1',
+            toolName: 'tool_search',
+            input: { query: 'browser', limit: 5 },
+          }
+          yield {
+            type: 'finish',
+            finishReason: 'tool-calls',
+            totalUsage: { inputTokens: 5, outputTokens: 5 },
+          }
         })() as AsyncIterable<ProxyStreamPart>
       },
     })
@@ -402,7 +482,14 @@ describe('POST /codex/v1/responses', () => {
       model: 'openrouter/chat',
       input: 'hi',
       stream: true,
-      tools: [{ type: 'tool_search', execution: 'client', description: 'Tool discovery', parameters: { type: 'object', properties: { query: { type: 'string' } } } }],
+      tools: [
+        {
+          type: 'tool_search',
+          execution: 'client',
+          description: 'Tool discovery',
+          parameters: { type: 'object', properties: { query: { type: 'string' } } },
+        },
+      ],
     })
     const res = await app.request('/codex/v1/responses', {
       method: 'POST',
@@ -425,7 +512,13 @@ describe('POST /codex/v1/responses', () => {
         return {
           text: '',
           finishReason: 'tool-calls',
-          toolCalls: [{ toolCallId: 'call_1', toolName: 'multi_agent_v1__spawn_agent', input: { message: 'hi' } }],
+          toolCalls: [
+            {
+              toolCallId: 'call_1',
+              toolName: 'multi_agent_v1__spawn_agent',
+              input: { message: 'hi' },
+            },
+          ],
           usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
         } as GenerateTextReturn
       },
@@ -435,10 +528,25 @@ describe('POST /codex/v1/responses', () => {
       model: 'openrouter/chat',
       input: [
         { type: 'tool_search_call', call_id: 'ts_1', arguments: { query: 'agent' } },
-        { type: 'tool_search_output', call_id: 'ts_1', tools: [
-          { type: 'namespace', name: 'multi_agent_v1', description: 'sub-agents',
-            tools: [{ type: 'function', name: 'spawn_agent', description: 'spawn', parameters: { type: 'object', properties: { message: { type: 'string' } } } }] },
-        ] },
+        {
+          type: 'tool_search_output',
+          call_id: 'ts_1',
+          tools: [
+            {
+              type: 'namespace',
+              name: 'multi_agent_v1',
+              description: 'sub-agents',
+              tools: [
+                {
+                  type: 'function',
+                  name: 'spawn_agent',
+                  description: 'spawn',
+                  parameters: { type: 'object', properties: { message: { type: 'string' } } },
+                },
+              ],
+            },
+          ],
+        },
       ],
       stream: false,
     })
@@ -454,7 +562,11 @@ describe('POST /codex/v1/responses', () => {
     const json = await res.json()
     const fc = json.output.find((o: { type: string }) => o.type === 'function_call')
     expect(fc).toBeDefined()
-    expect(fc).toMatchObject({ type: 'function_call', name: 'spawn_agent', namespace: 'multi_agent_v1', call_id: 'call_1' })
+    expect(fc).toMatchObject({
+      type: 'function_call',
+      name: 'spawn_agent',
+      namespace: 'multi_agent_v1',
+      call_id: 'call_1',
+    })
   })
-
 })

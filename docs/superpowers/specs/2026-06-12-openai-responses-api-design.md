@@ -9,6 +9,7 @@
 添加 `POST /v1/responses` 端点，让使用 OpenAI Responses API 格式的客户端（如 OpenAI 官方 SDK）可以无缝切换到本代理。代理将 Responses API 请求转换为 AI SDK 输入，调用已配置的上游 provider，再将结果渲染为 Responses API 响应格式。
 
 **不在 v0 范围内**：
+
 - 内置工具（web_search、file_search、code_interpreter 等）
 - `previous_response_id` / `conversation` 多轮状态
 - `store` / 后台执行
@@ -83,53 +84,60 @@ const functionCallOutputSchema = z.object({
 
 const inputItemSchema = z.union([inputMessageSchema, functionCallOutputSchema])
 
-const openAIResponsesRequestSchema = z.object({
-  model: z.string().min(1),
-  input: z.union([z.string(), z.array(inputItemSchema)]),
-  instructions: z.string().optional(),
-  stream: z.boolean().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  top_p: z.number().min(0).max(1).optional(),
-  max_output_tokens: z.number().int().positive().optional(),
-  tools: z.array(functionToolSchema).optional(),
-  tool_choice: z.union([
-    z.enum(['auto', 'none', 'required']),
-    z.object({ type: z.literal('function'), name: z.string().min(1) }),
-  ]).optional(),
-  parallel_tool_calls: z.boolean().optional(),
-}).passthrough()
+const openAIResponsesRequestSchema = z
+  .object({
+    model: z.string().min(1),
+    input: z.union([z.string(), z.array(inputItemSchema)]),
+    instructions: z.string().optional(),
+    stream: z.boolean().optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
+    max_output_tokens: z.number().int().positive().optional(),
+    tools: z.array(functionToolSchema).optional(),
+    tool_choice: z
+      .union([
+        z.enum(['auto', 'none', 'required']),
+        z.object({ type: z.literal('function'), name: z.string().min(1) }),
+      ])
+      .optional(),
+    parallel_tool_calls: z.boolean().optional(),
+  })
+  .passthrough()
 ```
 
 ### 字段映射
 
-| Responses API 字段 | 映射到 AI SDK | 说明 |
-|---|---|---|
-| `model` | 路由选择 | 必须字段 |
-| `input: string` | `messages: [{ role: "user", content }]` | 简写形式 |
-| `input: [{ role: "user", content }]` | `messages: [{ role, content }]` | message item |
-| `input: [{ type: "function_call_output", call_id, output }]` | `messages: [{ role: "tool", toolCallId: call_id, content: [tool-result] }]` | 工具结果 |
-| `instructions` | `messages` 前置 `{ role: "system", content }` | 系统/开发者指令 |
-| `temperature` | `temperature` | 直接映射 |
-| `top_p` | `topP` | 驼峰转换 |
-| `max_output_tokens` | `maxOutputTokens` | 直接映射 |
-| `tools` (FunctionTool) | `tools` (ToolSet) | 扁平→嵌套转换（见下） |
-| `tool_choice: 'auto'/'none'/'required'` | `toolChoice` | 直接映射 |
-| `tool_choice: { type: 'function', name }` | `toolChoice: { type: 'tool', toolName: name }` | 类型名转换 |
-| `parallel_tool_calls` | passthrough via `providerOptions` | 透传 |
+| Responses API 字段                                           | 映射到 AI SDK                                                               | 说明                  |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------- | --------------------- |
+| `model`                                                      | 路由选择                                                                    | 必须字段              |
+| `input: string`                                              | `messages: [{ role: "user", content }]`                                     | 简写形式              |
+| `input: [{ role: "user", content }]`                         | `messages: [{ role, content }]`                                             | message item          |
+| `input: [{ type: "function_call_output", call_id, output }]` | `messages: [{ role: "tool", toolCallId: call_id, content: [tool-result] }]` | 工具结果              |
+| `instructions`                                               | `messages` 前置 `{ role: "system", content }`                               | 系统/开发者指令       |
+| `temperature`                                                | `temperature`                                                               | 直接映射              |
+| `top_p`                                                      | `topP`                                                                      | 驼峰转换              |
+| `max_output_tokens`                                          | `maxOutputTokens`                                                           | 直接映射              |
+| `tools` (FunctionTool)                                       | `tools` (ToolSet)                                                           | 扁平→嵌套转换（见下） |
+| `tool_choice: 'auto'/'none'/'required'`                      | `toolChoice`                                                                | 直接映射              |
+| `tool_choice: { type: 'function', name }`                    | `toolChoice: { type: 'tool', toolName: name }`                              | 类型名转换            |
+| `parallel_tool_calls`                                        | passthrough via `providerOptions`                                           | 透传                  |
 
 ### Tool 定义映射（关键差异）
 
 Responses API 的 FunctionTool 是**扁平结构**（内部标记）：
+
 ```json
 { "type": "function", "name": "get_weather", "parameters": {...}, "description": "..." }
 ```
 
 Chat Completions 是**二层嵌套**（外部标记）：
+
 ```json
 { "type": "function", "function": { "name": "get_weather", "parameters": {...}, "description": "..." } }
 ```
 
 映射时从扁平结构提取 `name`/`parameters`/`description` → AI SDK `ToolSet`：
+
 ```typescript
 // Responses FunctionTool → AI SDK ToolSet
 function mapResponsesFunctionTool(tool): ToolSet[string] {
@@ -213,13 +221,13 @@ interface ResponseUsage {
 ### Status 映射
 
 | AI SDK finishReason | Response status |
-|---|---|
-| `'stop'` | `'completed'` |
-| `'length'` | `'incomplete'` |
-| `'tool-calls'` | `'incomplete'` |
-| `'content-filter'` | `'incomplete'` |
-| 有 toolCalls | `'incomplete'` |
-| 其他 | `'completed'` |
+| ------------------- | --------------- |
+| `'stop'`            | `'completed'`   |
+| `'length'`          | `'incomplete'`  |
+| `'tool-calls'`      | `'incomplete'`  |
+| `'content-filter'`  | `'incomplete'`  |
+| 有 toolCalls        | `'incomplete'`  |
+| 其他                | `'completed'`   |
 
 ### 渲染逻辑
 
@@ -237,6 +245,7 @@ renderOpenAIResponse(input: RenderResultInput) → OpenAIResponse:
 ### 事件类型
 
 每个 SSE 事件格式：
+
 ```
 event: <event_type>
 data: <json>
@@ -294,12 +303,12 @@ response.output_item.done        → 完整 function_call item
 
 `renderOpenAIResponseSSE` 接收 AI SDK `StreamTextResult` 的异步迭代器，根据 `StreamTextResult` 的事件类型映射为 Responses API 的 SSE 事件：
 
-| AI SDK 事件 | Responses SSE 事件 |
-|---|---|
-| `text-delta` | `response.output_text.delta` |
-| `tool-call` | `response.output_item.added` + `response.function_call_arguments.done` |
-| `tool-call-delta` | `response.function_call_arguments.delta` |
-| `finish` | `response.output_item.done` + `response.completed` |
+| AI SDK 事件       | Responses SSE 事件                                                     |
+| ----------------- | ---------------------------------------------------------------------- |
+| `text-delta`      | `response.output_text.delta`                                           |
+| `tool-call`       | `response.output_item.added` + `response.function_call_arguments.done` |
+| `tool-call-delta` | `response.function_call_arguments.delta`                               |
+| `finish`          | `response.output_item.done` + `response.completed`                     |
 
 ## 6. 路由处理器
 
@@ -314,7 +323,11 @@ app.post('/v1/responses', async (c) => {
   // 3. 映射到 AI SDK 输入
   const callInput = mapResponsesRequestToAISDKInput(request, route.providerName)
   // 4. 获取模型
-  const model = resolvedRegistry.languageModel(route.providerName, route.upstreamModel, route.headers)
+  const model = resolvedRegistry.languageModel(
+    route.providerName,
+    route.upstreamModel,
+    route.headers,
+  )
   // 5. 调用（stream 或 generate）
   // 6. 渲染响应
   // 7. 错误处理（同 Chat Completions 模式）
@@ -322,6 +335,7 @@ app.post('/v1/responses', async (c) => {
 ```
 
 错误响应格式遵循 OpenAI 风格：
+
 - 验证失败 → `{ error: { type: "invalid_request_error", code: "invalid_request", message } }`，400
 - 路由失败 → `{ error: { type: "invalid_request_error", code: "unknown_model", message } }`，404
 - OAuth 需要登录 → `{ error: { type: "auth_required", code: "oauth_login_needed", message, loginUrl } }`，503
@@ -353,8 +367,8 @@ app.post('/v1/responses', async (c) => {
 
 ### SSE 渲染测试
 
-- 纯文本流式：created → in_progress → output_item.added → content_part.added → text.delta* → text.done → content_part.done → output_item.done → completed
-- 函数调用流式：output_item.added → arguments.delta* → arguments.done → output_item.done
+- 纯文本流式：created → in_progress → output_item.added → content_part.added → text.delta\* → text.done → content_part.done → output_item.done → completed
+- 函数调用流式：output_item.added → arguments.delta\* → arguments.done → output_item.done
 - 事件格式正确性（event 行 + data 行）
 - sequence_number 递增
 

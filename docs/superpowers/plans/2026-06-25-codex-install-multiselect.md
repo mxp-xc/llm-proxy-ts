@@ -24,9 +24,9 @@
 
 ## File Structure
 
-| 文件 | 动作 | 职责 |
-|---|---|---|
-| `src/cli/codex-install.ts` | Modify | `CodexInstallPrompts` 接口；`defaultPrompts`（autocomplete + 搜索）；`runCodexInstall` 选择段重排；新增导出 `matchModel` 纯函数 |
+| 文件                             | 动作   | 职责                                                                                                                                                 |
+| -------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/cli/codex-install.ts`       | Modify | `CodexInstallPrompts` 接口；`defaultPrompts`（autocomplete + 搜索）；`runCodexInstall` 选择段重排；新增导出 `matchModel` 纯函数                      |
 | `test/cli/codex-install.test.ts` | Modify | 改注入为 `selectModels`+`selectDefaultModel`；新增 `matchModel` 测试与多选/搜索/跳过/取消/守卫用例；删旧的"cancel 时 catalog 已写入"断言（行为已变） |
 
 复用现有：`codex-types.ts` 的 `CodexModelInfo`；`config.ts` 的 `Settings`/`loadSettingsFromFile`；`codex-home.ts` 的 `resolveCodexHome`/`resolveCodexConfigPath`/`resolveCodexCatalogPath`/`DEFAULT_CATALOG_FILENAME`；`codex-toml.ts` 的 `applyCodexConfigEdits`；`@clack/prompts` 1.5.1 的 `autocomplete`/`autocompleteMultiselect`/`isCancel`/`cancel`。无新依赖。
@@ -36,10 +36,12 @@
 ### Task 1: `matchModel` 纯函数 + 测试
 
 **Files:**
+
 - Modify: `src/cli/codex-install.ts`（新增 `matchModel` 导出，插在 `defaultPrompts` 之前）
 - Test: `test/cli/codex-install.test.ts`（新增 `describe('matchModel')`）
 
 **Interfaces:**
+
 - Consumes: 无（纯函数）
 - Produces: `matchModel(search: string, model: { slug: string; display_name: string }): boolean`（供 Task 2 的 `defaultPrompts` filter 使用）
 
@@ -48,7 +50,12 @@
 在 import 行（第 6 行）改为：
 
 ```typescript
-import { buildCodexBaseUrl, fetchCodexModelsResponse, runCodexInstall, matchModel } from '../../src/cli/codex-install.js'
+import {
+  buildCodexBaseUrl,
+  fetchCodexModelsResponse,
+  runCodexInstall,
+  matchModel,
+} from '../../src/cli/codex-install.js'
 ```
 
 在 `makeModel` 函数之后（`describe('buildCodexBaseUrl')` 之前）插入：
@@ -108,10 +115,12 @@ git commit -m "feat(cli): add matchModel pure filter for codex model search"
 ### Task 2: 多选 + 搜索选择流程（接口 + defaultPrompts + runCodexInstall + 测试）
 
 **Files:**
+
 - Modify: `src/cli/codex-install.ts:87-118`（`CodexInstallPrompts` 接口 + `defaultPrompts`）、`src/cli/codex-install.ts:175-235`（`runCodexInstall` 选择与写入段）
 - Test: `test/cli/codex-install.test.ts`（重写 `runCodexInstall` describe 块）
 
 **Interfaces:**
+
 - Consumes: Task 1 的 `matchModel`
 - Produces: `CodexInstallPrompts.selectModels(models): Promise<string[] | null>`、`CodexInstallPrompts.selectDefaultModel(models): Promise<string | null>`；`runCodexInstall` 新选择流程
 
@@ -126,12 +135,14 @@ describe('runCodexInstall', () => {
 
   beforeEach(async () => {
     tmp = await createTempDir('codex-install-')
-    settings = await writeTempSettings(JSON.stringify({
-      service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
-      providers: {},
-      routing: { enableFlatModelLookup: true },
-      codex: { templateSlug: 'gpt-5.5', context_window: 204800 },
-    }))
+    settings = await writeTempSettings(
+      JSON.stringify({
+        service: { name: 'llm-proxy', host: '127.0.0.1', port: 8056 },
+        providers: {},
+        routing: { enableFlatModelLookup: true },
+        codex: { templateSlug: 'gpt-5.5', context_window: 204800 },
+      }),
+    )
   })
   afterEach(async () => {
     await tmp.cleanup()
@@ -143,7 +154,12 @@ describe('runCodexInstall', () => {
     const writeFileSpy = vi.fn()
     const selectModels = vi.fn().mockResolvedValue(['a'])
     const selectDefaultModel = vi.fn().mockResolvedValue('a')
-    const fs = wrapFs({ writeFile: writeFileSpy, access: async () => { throw new Error('enoent') } })
+    const fs = wrapFs({
+      writeFile: writeFileSpy,
+      access: async () => {
+        throw new Error('enoent')
+      },
+    })
     await runCodexInstall({
       settingsPath: settings.path,
       fetchImpl: fetchImpl as unknown as typeof fetch,
@@ -193,7 +209,9 @@ describe('runCodexInstall', () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ models: [makeModel('zhipu/glm-5.2', 'GLM-5.2'), makeModel('gpt-5', 'GPT-5')] }),
+      json: async () => ({
+        models: [makeModel('zhipu/glm-5.2', 'GLM-5.2'), makeModel('gpt-5', 'GPT-5')],
+      }),
     }) as unknown as typeof fetch
     let writtenConfig = ''
     let writtenCatalog = ''
@@ -269,7 +287,9 @@ describe('runCodexInstall', () => {
     let writtenConfig = ''
     const fs: CodexInstallFs = {
       readFile: async (p) => readFile(p, 'utf8'),
-      writeFile: async (p, d) => { if (p.endsWith('config.toml')) writtenConfig = d },
+      writeFile: async (p, d) => {
+        if (p.endsWith('config.toml')) writtenConfig = d
+      },
       mkdir: (p, o) => mkdir(p, o).then(() => undefined),
       access: async () => {},
     }
@@ -402,7 +422,10 @@ describe('runCodexInstall', () => {
       fetchImpl,
       fs: wrapFs({ writeFile: writeFileSpy, access: async () => {} }),
       codexHome: tmp.dir,
-      prompts: { selectModels: async () => ['a', 'b'], selectDefaultModel: async () => 'nonexistent' },
+      prompts: {
+        selectModels: async () => ['a', 'b'],
+        selectDefaultModel: async () => 'nonexistent',
+      },
     })
     expect(writeFileSpy).not.toHaveBeenCalled()
   })
@@ -477,101 +500,107 @@ function defaultPrompts(): CodexInstallPrompts {
 将 `runCodexInstall` 内从 `// 5. Write catalog file.` 注释起、到函数末尾 `clack.outro('Done. Restart codex to load the new catalog and provider.')` 止的整段（当前 175-235 行）替换为：
 
 ```typescript
-  // 5. Select models to install (skip the prompt when the catalog has a single model).
-  let subsetSlugs: string[] | null
-  if (modelsRes.models.length === 1) {
-    subsetSlugs = [modelsRes.models[0]!.slug]
-  } else {
-    try {
-      subsetSlugs = await prompts.selectModels(modelsRes.models)
-    } catch (err) {
-      clack.log.error(`Model selection failed: ${err instanceof Error ? err.message : String(err)}`)
-      clack.outro('Aborted')
-      return
-    }
+// 5. Select models to install (skip the prompt when the catalog has a single model).
+let subsetSlugs: string[] | null
+if (modelsRes.models.length === 1) {
+  subsetSlugs = [modelsRes.models[0]!.slug]
+} else {
+  try {
+    subsetSlugs = await prompts.selectModels(modelsRes.models)
+  } catch (err) {
+    clack.log.error(`Model selection failed: ${err instanceof Error ? err.message : String(err)}`)
+    clack.outro('Aborted')
+    return
   }
-  if (subsetSlugs === null) {
+}
+if (subsetSlugs === null) {
+  clack.cancel('Operation cancelled')
+  return
+}
+// Guard the prompt-injection seam: subset must be non-empty and every slug must be in the catalog.
+if (
+  subsetSlugs.length === 0 ||
+  !subsetSlugs.every((s) => modelsRes.models.some((m) => m.slug === s))
+) {
+  clack.log.error('Invalid model selection')
+  clack.outro('Aborted')
+  return
+}
+const slugs: string[] = subsetSlugs
+const subset = modelsRes.models.filter((m) => slugs.includes(m.slug))
+
+// 6. Select default model (skip the prompt when the subset has a single model).
+let defaultSlug: string
+if (subset.length === 1) {
+  defaultSlug = subset[0]!.slug
+} else {
+  let picked: string | null
+  try {
+    picked = await prompts.selectDefaultModel(subset)
+  } catch (err) {
+    clack.log.error(
+      `Default model selection failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
+    clack.outro('Aborted')
+    return
+  }
+  if (picked === null) {
     clack.cancel('Operation cancelled')
     return
   }
-  // Guard the prompt-injection seam: subset must be non-empty and every slug must be in the catalog.
-  if (
-    subsetSlugs.length === 0 ||
-    !subsetSlugs.every((s) => modelsRes.models.some((m) => m.slug === s))
-  ) {
-    clack.log.error('Invalid model selection')
+  // Guard the prompt-injection seam: the default must be one of the selected models.
+  if (!subset.some((m) => m.slug === picked)) {
+    clack.log.error(`Selected default model "${picked}" is not in the selection`)
     clack.outro('Aborted')
     return
   }
-  const slugs: string[] = subsetSlugs
-  const subset = modelsRes.models.filter((m) => slugs.includes(m.slug))
+  defaultSlug = picked
+}
 
-  // 6. Select default model (skip the prompt when the subset has a single model).
-  let defaultSlug: string
-  if (subset.length === 1) {
-    defaultSlug = subset[0]!.slug
-  } else {
-    let picked: string | null
-    try {
-      picked = await prompts.selectDefaultModel(subset)
-    } catch (err) {
-      clack.log.error(`Default model selection failed: ${err instanceof Error ? err.message : String(err)}`)
-      clack.outro('Aborted')
-      return
-    }
-    if (picked === null) {
-      clack.cancel('Operation cancelled')
-      return
-    }
-    // Guard the prompt-injection seam: the default must be one of the selected models.
-    if (!subset.some((m) => m.slug === picked)) {
-      clack.log.error(`Selected default model "${picked}" is not in the selection`)
-      clack.outro('Aborted')
-      return
-    }
-    defaultSlug = picked
-  }
+// 7. Write catalog file (only the selected subset).
+try {
+  await fs.mkdir(codexHome, { recursive: true })
+  await fs.writeFile(catalogPath, JSON.stringify({ models: subset }, null, 2))
+} catch (err) {
+  clack.log.error(`Failed to write catalog: ${err instanceof Error ? err.message : String(err)}`)
+  clack.outro('Aborted')
+  return
+}
+clack.log.step(
+  `Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`,
+)
 
-  // 7. Write catalog file (only the selected subset).
-  try {
-    await fs.mkdir(codexHome, { recursive: true })
-    await fs.writeFile(catalogPath, JSON.stringify({ models: subset }, null, 2))
-  } catch (err) {
-    clack.log.error(`Failed to write catalog: ${err instanceof Error ? err.message : String(err)}`)
-    clack.outro('Aborted')
-    return
-  }
-  clack.log.step(`Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`)
-
-  // 8. Edit config.toml.
-  let rawConfig: string
-  try {
-    rawConfig = await fs.readFile(configPath)
-  } catch (err) {
-    clack.log.error(`Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`)
-    clack.outro('Aborted')
-    return
-  }
-  const { content: newConfig, overwritten } = applyCodexConfigEdits(rawConfig, {
-    catalogFilename: DEFAULT_CATALOG_FILENAME,
-    providerId: 'llm-proxy',
-    providerName: 'LLM Proxy',
-    baseUrl,
-    wireApi: 'responses',
-    modelSlug: defaultSlug,
-  })
-  for (const report of overwritten) {
-    clack.log.warn(`Overwrote ${report.key}: ${report.oldValue} → ${report.newValue}`)
-  }
-  try {
-    await fs.writeFile(configPath, newConfig)
-  } catch (err) {
-    clack.log.error(`Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`)
-    clack.outro('Aborted')
-    return
-  }
-  clack.log.success(`Updated ${configPath}`)
-  clack.outro('Done. Restart codex to load the new catalog and provider.')
+// 8. Edit config.toml.
+let rawConfig: string
+try {
+  rawConfig = await fs.readFile(configPath)
+} catch (err) {
+  clack.log.error(`Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`)
+  clack.outro('Aborted')
+  return
+}
+const { content: newConfig, overwritten } = applyCodexConfigEdits(rawConfig, {
+  catalogFilename: DEFAULT_CATALOG_FILENAME,
+  providerId: 'llm-proxy',
+  providerName: 'LLM Proxy',
+  baseUrl,
+  wireApi: 'responses',
+  modelSlug: defaultSlug,
+})
+for (const report of overwritten) {
+  clack.log.warn(`Overwrote ${report.key}: ${report.oldValue} → ${report.newValue}`)
+}
+try {
+  await fs.writeFile(configPath, newConfig)
+} catch (err) {
+  clack.log.error(
+    `Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`,
+  )
+  clack.outro('Aborted')
+  return
+}
+clack.log.success(`Updated ${configPath}`)
+clack.outro('Done. Restart codex to load the new catalog and provider.')
 ```
 
 - [ ] **Step 6: 运行测试确认通过**

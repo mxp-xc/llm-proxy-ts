@@ -24,9 +24,7 @@ export async function* normalizeStream(
     }
 
     if (part.type === 'finish') {
-      yield lastStepResponse
-        ? { ...part, response: lastStepResponse }
-        : part
+      yield lastStepResponse ? { ...part, response: lastStepResponse } : part
     } else {
       yield part
     }

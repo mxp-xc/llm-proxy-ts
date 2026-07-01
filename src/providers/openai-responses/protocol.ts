@@ -1,6 +1,11 @@
 import { type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
-import type { AISDKInput, MappingContext, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
+import type {
+  AISDKInput,
+  MappingContext,
+  ProtocolMessage,
+  ProtocolMessagePart,
+} from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 import { isRecord, type NamespaceFlatMap } from '../protocol-types.js'
 import { z } from 'zod/v3'
@@ -49,33 +54,41 @@ const reasoningItemSchema = z.object({ type: z.literal('reasoning') }).passthrou
 
 // custom_tool_call / custom_tool_call_output：Codex apply_patch 等 freeform custom tool 的
 // 调用与结果回传（多轮）。input 是裸 patch 文本（非 JSON）。
-const customToolCallSchema = z.object({
-  type: z.literal('custom_tool_call'),
-  call_id: z.string().min(1),
-  name: z.string().min(1),
-  input: z.union([z.string(), z.record(z.string(), z.unknown())]),
-}).passthrough()
+const customToolCallSchema = z
+  .object({
+    type: z.literal('custom_tool_call'),
+    call_id: z.string().min(1),
+    name: z.string().min(1),
+    input: z.union([z.string(), z.record(z.string(), z.unknown())]),
+  })
+  .passthrough()
 
-const customToolCallOutputSchema = z.object({
-  type: z.literal('custom_tool_call_output'),
-  call_id: z.string().min(1),
-  output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
-}).passthrough()
+const customToolCallOutputSchema = z
+  .object({
+    type: z.literal('custom_tool_call_output'),
+    call_id: z.string().min(1),
+    output: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
+  })
+  .passthrough()
 
-const toolSearchCallSchema = z.object({
-  type: z.literal('tool_search_call'),
-  call_id: z.string().min(1).optional(),
-  id: z.string().min(1).optional(),
-  execution: z.string().optional(),
-  arguments: z.unknown().optional(),
-}).passthrough()
+const toolSearchCallSchema = z
+  .object({
+    type: z.literal('tool_search_call'),
+    call_id: z.string().min(1).optional(),
+    id: z.string().min(1).optional(),
+    execution: z.string().optional(),
+    arguments: z.unknown().optional(),
+  })
+  .passthrough()
 
-const toolSearchOutputSchema = z.object({
-  type: z.literal('tool_search_output'),
-  call_id: z.string().min(1).optional(),
-  id: z.string().min(1).optional(),
-  tools: z.array(z.record(z.string(), z.unknown())).optional(),
-}).passthrough()
+const toolSearchOutputSchema = z
+  .object({
+    type: z.literal('tool_search_output'),
+    call_id: z.string().min(1).optional(),
+    id: z.string().min(1).optional(),
+    tools: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .passthrough()
 
 const inputItemSchema = z.union([
   easyInputMessageSchema,
@@ -127,7 +140,9 @@ export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesR
 /** Collect names of declared custom grammar tools (type:'custom') from the request.
  *  Used by the renderer to discriminate custom_tool_call vs function_call, since
  *  AI SDK @3.0.71 does not expose a toolCallType signal on custom_tool_call parts. */
-export function getResponsesCustomToolNames(request: OpenAIResponsesRequest): Set<string> | undefined {
+export function getResponsesCustomToolNames(
+  request: OpenAIResponsesRequest,
+): Set<string> | undefined {
   if (!request.tools) return undefined
   const names = new Set<string>()
   for (const tool of request.tools) {
@@ -209,7 +224,9 @@ export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): Namesp
 }
 
 /** collectNamespaceFlatMap 的可选包装：无 namespace 工具时返回 undefined（复用 getCustomToolNames 模式）。 */
-export function getResponsesNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap | undefined {
+export function getResponsesNamespaceFlatMap(
+  request: OpenAIResponsesRequest,
+): NamespaceFlatMap | undefined {
   const map = collectNamespaceFlatMap(request)
   return map.size > 0 ? map : undefined
 }
@@ -227,9 +244,7 @@ function extractTextFromContent(content: EasyInputContent): string {
     .join('\n')
 }
 
-function mapEasyInputContent(
-  content: EasyInputContent,
-): string | ProtocolMessagePart[] {
+function mapEasyInputContent(content: EasyInputContent): string | ProtocolMessagePart[] {
   if (typeof content === 'string') return content
   return content.map((item): ProtocolMessagePart => {
     if (item.type === 'input_text' || item.type === 'output_text') {
@@ -240,11 +255,14 @@ function mapEasyInputContent(
     // multimodal content is not fully supported through the gateway yet.
     if (item.type === 'input_image') {
       const imageUrl = item.image_url
-      const resolved = typeof imageUrl === 'string'
-        ? imageUrl
-        : isRecord(imageUrl) && typeof imageUrl.url === 'string'
-          ? imageUrl.url as string
-          : typeof item.url === 'string' ? item.url : ''
+      const resolved =
+        typeof imageUrl === 'string'
+          ? imageUrl
+          : isRecord(imageUrl) && typeof imageUrl.url === 'string'
+            ? (imageUrl.url as string)
+            : typeof item.url === 'string'
+              ? item.url
+              : ''
       return { type: 'text', text: resolved }
     }
     // Fallback for unrecognized content parts: map to text
@@ -270,9 +288,11 @@ function buildShimmedCustomToolDescription(
   return parts.length > 0 ? parts.join('\n\n') : undefined
 }
 
-function shimCustomToolAsFunction(
-  tool: { name?: string; description?: string; format?: unknown },
-): ToolSet[string] {
+function shimCustomToolAsFunction(tool: {
+  name?: string
+  description?: string
+  format?: unknown
+}): ToolSet[string] {
   const desc = buildShimmedCustomToolDescription(tool.description, tool.format)
   const def: ToolSet[string] = {
     inputSchema: jsonSchema({
@@ -290,10 +310,22 @@ function shimCustomToolAsFunction(
 // ─── Mapping ────────────────────────────────────────────────
 
 const mappedResponsesRequestKeys = new Set([
-  'model', 'input', 'instructions', 'stream', 'temperature', 'top_p',
-  'max_output_tokens', 'tools', 'tool_choice', 'parallel_tool_calls',
+  'model',
+  'input',
+  'instructions',
+  'stream',
+  'temperature',
+  'top_p',
+  'max_output_tokens',
+  'tools',
+  'tool_choice',
+  'parallel_tool_calls',
   // 以下字段由显式 camelCase 映射处理（AI SDK zod 只认 camelCase），不从 passthrough 透传
-  'reasoning', 'text', 'store', 'prompt_cache_key', 'client_metadata',
+  'reasoning',
+  'text',
+  'store',
+  'prompt_cache_key',
+  'client_metadata',
 ])
 
 export function mapResponsesRequestToAISDKInput(
@@ -333,57 +365,65 @@ export function mapResponsesRequestToAISDKInput(
         }
         messages.push({
           role: 'assistant',
-          content: [{
-            type: 'tool-call',
-            toolCallId: fc.call_id,
-            toolName: flattenToolName(fc.name, fc.namespace),
-            input: args,
-          }],
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: fc.call_id,
+              toolName: flattenToolName(fc.name, fc.namespace),
+              input: args,
+            },
+          ],
         })
       } else if ('type' in item && item.type === 'function_call_output') {
-        const output = typeof item.output === 'string'
-          ? item.output
-          : JSON.stringify(item.output)
+        const output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
         messages.push({
           role: 'tool',
-          content: [{
-            type: 'tool-result',
-            toolCallId: item.call_id,
-            toolName: callIdToName.get(item.call_id) ?? item.call_id,
-            output: { type: 'text', value: output },
-          }],
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: item.call_id,
+              toolName: callIdToName.get(item.call_id) ?? item.call_id,
+              output: { type: 'text', value: output },
+            },
+          ],
         })
       } else if ('type' in item && item.type === 'custom_tool_call') {
         // custom_tool_call（apply_patch 等 freeform tool 的上轮调用）→ assistant tool-call
-        const ctc = item as { call_id: string; name: string; namespace?: string; input: string | Record<string, unknown> }
+        const ctc = item as {
+          call_id: string
+          name: string
+          namespace?: string
+          input: string | Record<string, unknown>
+        }
         callIdToName.set(ctc.call_id, flattenToolName(ctc.name, ctc.namespace))
         const isShimmed = ctx?.providerType !== 'openai'
         const rawInput = ctc.input
-        const mappedInput = isShimmed && typeof rawInput === 'string'
-          ? { input: rawInput }
-          : rawInput
+        const mappedInput =
+          isShimmed && typeof rawInput === 'string' ? { input: rawInput } : rawInput
         messages.push({
           role: 'assistant',
-          content: [{
-            type: 'tool-call',
-            toolCallId: ctc.call_id,
-            toolName: flattenToolName(ctc.name, ctc.namespace),
-            input: mappedInput,
-          }],
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: ctc.call_id,
+              toolName: flattenToolName(ctc.name, ctc.namespace),
+              input: mappedInput,
+            },
+          ],
         })
       } else if ('type' in item && item.type === 'custom_tool_call_output') {
         // custom_tool_call_output → tool-result（复用 function_call_output 逻辑）
-        const output = typeof item.output === 'string'
-          ? item.output
-          : JSON.stringify(item.output)
+        const output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
         messages.push({
           role: 'tool',
-          content: [{
-            type: 'tool-result',
-            toolCallId: item.call_id,
-            toolName: callIdToName.get(item.call_id) ?? item.call_id,
-            output: { type: 'text', value: output },
-          }],
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: item.call_id,
+              toolName: callIdToName.get(item.call_id) ?? item.call_id,
+              output: { type: 'text', value: output },
+            },
+          ],
         })
       } else if ('type' in item && item.type === 'tool_search_call') {
         const tsCall = item as { call_id?: string; id?: string; arguments?: unknown }
@@ -392,7 +432,9 @@ export function mapResponsesRequestToAISDKInput(
         const tsInput = (tsCall.arguments ?? {}) as Record<string, unknown>
         messages.push({
           role: 'assistant',
-          content: [{ type: 'tool-call', toolCallId: callId, toolName: 'tool_search', input: tsInput }],
+          content: [
+            { type: 'tool-call', toolCallId: callId, toolName: 'tool_search', input: tsInput },
+          ],
         })
       } else if ('type' in item && item.type === 'tool_search_output') {
         const tsOut = item as { call_id?: string; id?: string; tools?: unknown[] }
@@ -401,7 +443,14 @@ export function mapResponsesRequestToAISDKInput(
         const output = JSON.stringify(tsOut.tools ?? [])
         messages.push({
           role: 'tool',
-          content: [{ type: 'tool-result', toolCallId: callId, toolName, output: { type: 'text', value: output } }],
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: callId,
+              toolName,
+              output: { type: 'text', value: output },
+            },
+          ],
         })
       } else if ('type' in item && item.type === 'reasoning') {
         // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content
@@ -416,11 +465,19 @@ export function mapResponsesRequestToAISDKInput(
         }
         const encryptedContent = reasoningItem.encrypted_content ?? undefined
         const summaryText = Array.isArray(reasoningItem.summary)
-          ? reasoningItem.summary.map((s) => s?.text ?? '').filter(Boolean).join('\n')
+          ? reasoningItem.summary
+              .map((s) => s?.text ?? '')
+              .filter(Boolean)
+              .join('\n')
           : ''
-        const reasoningPart: ProtocolMessagePart = encryptedContent !== undefined
-          ? { type: 'reasoning', text: summaryText, providerOptions: { openai: { reasoningEncryptedContent: encryptedContent } } }
-          : { type: 'reasoning', text: summaryText }
+        const reasoningPart: ProtocolMessagePart =
+          encryptedContent !== undefined
+            ? {
+                type: 'reasoning',
+                text: summaryText,
+                providerOptions: { openai: { reasoningEncryptedContent: encryptedContent } },
+              }
+            : { type: 'reasoning', text: summaryText }
         messages.push({ role: 'assistant', content: [reasoningPart] })
       } else {
         // EasyInputMessage
@@ -465,7 +522,10 @@ export function mapResponsesRequestToAISDKInput(
           const args: Parameters<typeof openai.tools.customTool>[0] = { name: customTool.name }
           if (customTool.description !== undefined) args.description = customTool.description
           if (customTool.format !== undefined) {
-            args.format = customTool.format as Exclude<Parameters<typeof openai.tools.customTool>[0]['format'], undefined>
+            args.format = customTool.format as Exclude<
+              Parameters<typeof openai.tools.customTool>[0]['format'],
+              undefined
+            >
           }
           toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
           selectableToolNames.add(customTool.name)
@@ -502,12 +562,20 @@ export function mapResponsesRequestToAISDKInput(
           external_web_access?: boolean
           search_context_size?: 'low' | 'medium' | 'high'
           filters?: { allowed_domains?: string[] }
-          user_location?: { type?: string; country?: string; region?: string; city?: string; timezone?: string }
+          user_location?: {
+            type?: string
+            country?: string
+            region?: string
+            city?: string
+            timezone?: string
+          }
         }
         type WebSearchArgs = NonNullable<Parameters<typeof openai.tools.webSearch>[0]>
         const args: WebSearchArgs = {}
-        if (wsTool.external_web_access !== undefined) args.externalWebAccess = wsTool.external_web_access
-        if (wsTool.search_context_size !== undefined) args.searchContextSize = wsTool.search_context_size
+        if (wsTool.external_web_access !== undefined)
+          args.externalWebAccess = wsTool.external_web_access
+        if (wsTool.search_context_size !== undefined)
+          args.searchContextSize = wsTool.search_context_size
         if (wsTool.filters !== undefined) {
           const allowedDomains = wsTool.filters.allowed_domains
           const filters: NonNullable<WebSearchArgs['filters']> = {}
@@ -536,12 +604,17 @@ export function mapResponsesRequestToAISDKInput(
         }
         type ToolSearchArgs = NonNullable<Parameters<typeof openai.tools.toolSearch>[0]>
         const args: ToolSearchArgs = {}
-        if (tsTool.execution === 'server' || tsTool.execution === 'client') args.execution = tsTool.execution
+        if (tsTool.execution === 'server' || tsTool.execution === 'client')
+          args.execution = tsTool.execution
         if (tsTool.description !== undefined) args.description = tsTool.description
         if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
         toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
       } else if (ctx?.providerType !== 'openai' && tool.type === 'tool_search') {
-        const tsTool = tool as { execution?: string; description?: string; parameters?: Record<string, unknown> }
+        const tsTool = tool as {
+          execution?: string
+          description?: string
+          parameters?: Record<string, unknown>
+        }
         if (tsTool.execution === 'client') {
           toolSet['tool_search'] = mapToolToAISDK(
             tsTool.parameters ?? { type: 'object', properties: {} },
@@ -568,11 +641,12 @@ export function mapResponsesRequestToAISDKInput(
           for (const sub of t.tools) {
             if (!sub.name || sub.type !== 'function') continue
             const flatName = flattenToolName(sub.name, t.name)
-            if (flatName in toolSet) continue  // 幂等
+            if (flatName in toolSet) continue // 幂等
             // 显式构型 type:'function'（sub 来自 passthrough record，type 非 'function' 字面量，
             // spread 不保留字面量 → 需显式声明以满足 mapResponsesFunctionTool 的 ResponsesFunctionTool 类型）
             toolSet[flatName] = mapResponsesFunctionTool({
-              type: 'function', name: flatName,
+              type: 'function',
+              name: flatName,
               ...(sub.description !== undefined && { description: sub.description }),
               ...(sub.parameters !== undefined && { parameters: sub.parameters }),
             })
@@ -580,9 +654,10 @@ export function mapResponsesRequestToAISDKInput(
           }
         } else if (t.type === 'function') {
           if (!t.name) continue
-          if (t.name in toolSet) continue  // 幂等
+          if (t.name in toolSet) continue // 幂等
           toolSet[t.name] = mapResponsesFunctionTool({
-            type: 'function', name: t.name,
+            type: 'function',
+            name: t.name,
             ...(t.description !== undefined && { description: t.description }),
             ...(t.parameters !== undefined && { parameters: t.parameters }),
           })
@@ -654,7 +729,10 @@ export function mapResponsesRequestToAISDKInput(
   return input
 }
 
-type ResponsesFunctionTool = Extract<NonNullable<OpenAIResponsesRequest['tools']>[number], { type: 'function' }>
+type ResponsesFunctionTool = Extract<
+  NonNullable<OpenAIResponsesRequest['tools']>[number],
+  { type: 'function' }
+>
 
 function mapResponsesFunctionTool(tool: ResponsesFunctionTool): ToolSet[string] {
   return mapToolToAISDK(tool.parameters ?? { type: 'object', properties: {} }, tool.description)

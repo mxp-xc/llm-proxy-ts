@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { OAuthError } from '../../src/oauth/index.js'
 import { discoverProviderModels } from '../../src/cli/models/discovery.js'
 import { makeSettings } from '../helpers/settings.js'
-import type { Settings, OpenAICompatibleProviderConfig, AnthropicProviderConfig } from '../../src/config.js'
+import type {
+  Settings,
+  OpenAICompatibleProviderConfig,
+  AnthropicProviderConfig,
+} from '../../src/config.js'
 import type { UpstreamModelResponse } from '../../src/cli/models/discover.js'
 import type { DiscoveredModelList } from '../../src/plugins/types.js'
 import type { PluginRegistry } from '../../src/plugins/registry.js'
@@ -51,7 +55,9 @@ function fetchUpstreamMock(models: UpstreamModelResponse[] = upstreamModels) {
 }
 
 /** Construct a minimal PluginRegistry-shaped mock. */
-function pluginRegistryMock(discover: (providerId: string) => Promise<DiscoveredModelList | undefined>) {
+function pluginRegistryMock(
+  discover: (providerId: string) => Promise<DiscoveredModelList | undefined>,
+) {
   return {
     discoverModels: vi.fn(discover),
   } as unknown as PluginRegistry
@@ -208,7 +214,9 @@ describe('discoverProviderModels', () => {
   })
 
   it('returns ok via HTTP fallback with injected fetchUpstream', async () => {
-    const existingModels = { old: { upstreamModel: 'gpt-4o', aliases: [], headers: {}, plugins: [] } }
+    const existingModels = {
+      old: { upstreamModel: 'gpt-4o', aliases: [], headers: {}, plugins: [] },
+    }
     const provider = openaiCompatibleProvider({ models: existingModels })
     const settings = makeSettings({ myprov: provider })
     const fetchUpstream = fetchUpstreamMock()

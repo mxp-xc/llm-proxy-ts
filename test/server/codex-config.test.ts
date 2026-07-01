@@ -123,7 +123,9 @@ describe('reasoning_effort config', () => {
           type: 'openai-compatible',
           baseURL: 'https://x',
           apiKey: 'k',
-          options: { reasoning_effort: { default: 'medium', supported: ['low', 'medium', 'high'] } },
+          options: {
+            reasoning_effort: { default: 'medium', supported: ['low', 'medium', 'high'] },
+          },
           models: {
             'glm-5.1': {
               upstreamModel: 'glm-5.1',
@@ -134,7 +136,11 @@ describe('reasoning_effort config', () => {
       },
     })
     expect(settings.providers.zhipu?.options?.reasoning_effort?.default).toBe('medium')
-    expect(settings.providers.zhipu?.options?.reasoning_effort?.supported).toEqual(['low', 'medium', 'high'])
+    expect(settings.providers.zhipu?.options?.reasoning_effort?.supported).toEqual([
+      'low',
+      'medium',
+      'high',
+    ])
     expect(settings.providers.zhipu?.models['glm-5.1']?.reasoning_effort?.default).toBe('high')
   })
 
@@ -146,7 +152,9 @@ describe('reasoning_effort config', () => {
             type: 'openai-compatible',
             baseURL: 'https://x',
             apiKey: 'k',
-            models: { 'glm-5.1': { upstreamModel: 'glm-5.1', reasoning_effort: { level: 'high' } } },
+            models: {
+              'glm-5.1': { upstreamModel: 'glm-5.1', reasoning_effort: { level: 'high' } },
+            },
           },
         },
       }),

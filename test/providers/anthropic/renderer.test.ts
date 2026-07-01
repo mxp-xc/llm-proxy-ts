@@ -8,7 +8,10 @@ import type {
   AnthropicSSEContentBlockDelta,
   AnthropicSSEMessageDelta,
 } from '../../../src/providers/anthropic/types.js'
-import { renderAnthropicMessage, renderAnthropicMessageSSE } from '../../../src/providers/anthropic/renderer.js'
+import {
+  renderAnthropicMessage,
+  renderAnthropicMessageSSE,
+} from '../../../src/providers/anthropic/renderer.js'
 import { collectSSEFrames } from '../../helpers/sse.js'
 
 describe('Anthropic Messages renderer', () => {
@@ -80,10 +83,17 @@ describe('Anthropic Messages renderer', () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hel' }
       yield { type: 'text-delta', text: 'lo' }
-      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 10, outputTokens: 5 } }
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: { inputTokens: 10, outputTokens: 5 },
+      }
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Verify event sequence
@@ -126,9 +136,13 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'finish', finishReason: 'stop' }
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
-    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    const messageDelta = events.find((e) => e.event === 'message_delta')!
+      .data as AnthropicSSEMessageDelta
     expect(messageDelta.delta.stop_reason).toBe('end_turn')
     expect(messageDelta.usage).toBeUndefined()
   })
@@ -139,9 +153,13 @@ describe('Anthropic Messages renderer', () => {
       // no finish part — stream just ends
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
-    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    const messageDelta = events.find((e) => e.event === 'message_delta')!
+      .data as AnthropicSSEMessageDelta
     expect(messageDelta.delta.stop_reason).toBe('end_turn')
     expect(messageDelta.usage).toBeUndefined()
   })
@@ -151,15 +169,24 @@ describe('Anthropic Messages renderer', () => {
       yield { type: 'tool-input-start', id: 'toolu_1', toolName: 'get_weather' }
       yield { type: 'tool-input-delta', id: 'toolu_1', delta: '{"city"' }
       yield { type: 'tool-input-delta', id: 'toolu_1', delta: ':"NYC"}' }
-      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 20, outputTokens: 10 } }
+      yield {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        totalUsage: { inputTokens: 20, outputTokens: 10 },
+      }
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Verify tool_use block start
     const blockStart = events.find(
-      (e) => e.event === 'content_block_start' && (e.data as AnthropicSSEContentBlockStart).content_block?.type === 'tool_use',
+      (e) =>
+        e.event === 'content_block_start' &&
+        (e.data as AnthropicSSEContentBlockStart).content_block?.type === 'tool_use',
     )!
     expect((blockStart.data as AnthropicSSEContentBlockStart).content_block).toMatchObject({
       type: 'tool_use',
@@ -170,41 +197,77 @@ describe('Anthropic Messages renderer', () => {
 
     // Verify input_json_delta events
     const deltas = events.filter(
-      (e) => e.event === 'content_block_delta' && (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
+      (e) =>
+        e.event === 'content_block_delta' &&
+        (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
     )
-    expect(deltas.map((d) => (d.data as AnthropicSSEContentBlockDelta & { delta: { type: 'input_json_delta'; partial_json: string } }).delta.partial_json)).toEqual(['{"city"', ':"NYC"}'])
+    expect(
+      deltas.map(
+        (d) =>
+          (
+            d.data as AnthropicSSEContentBlockDelta & {
+              delta: { type: 'input_json_delta'; partial_json: string }
+            }
+          ).delta.partial_json,
+      ),
+    ).toEqual(['{"city"', ':"NYC"}'])
 
     // Verify stop reason
-    const messageDelta = events.find((e) => e.event === 'message_delta')!.data as AnthropicSSEMessageDelta
+    const messageDelta = events.find((e) => e.event === 'message_delta')!
+      .data as AnthropicSSEMessageDelta
     expect(messageDelta.delta.stop_reason).toBe('tool_use')
   })
 
   it('renders complete tool-call events (non-streaming input)', async () => {
     async function* parts() {
-      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'get_weather', input: { city: 'NYC' } }
-      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 15, outputTokens: 8 } }
+      yield {
+        type: 'tool-call',
+        toolCallId: 'toolu_1',
+        toolName: 'get_weather',
+        input: { city: 'NYC' },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        totalUsage: { inputTokens: 15, outputTokens: 8 },
+      }
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
 
     // Should have content_block_start with tool_use, then input_json_delta, then stop
-    const blockStart = events.find((e) => e.event === 'content_block_start')!.data as AnthropicSSEContentBlockStart
+    const blockStart = events.find((e) => e.event === 'content_block_start')!
+      .data as AnthropicSSEContentBlockStart
     expect(blockStart.content_block.type).toBe('tool_use')
 
     const jsonDelta = events.find(
-      (e) => e.event === 'content_block_delta' && (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
-    )!.data as AnthropicSSEContentBlockDelta & { delta: { type: 'input_json_delta'; partial_json: string } }
+      (e) =>
+        e.event === 'content_block_delta' &&
+        (e.data as AnthropicSSEContentBlockDelta).delta?.type === 'input_json_delta',
+    )!.data as AnthropicSSEContentBlockDelta & {
+      delta: { type: 'input_json_delta'; partial_json: string }
+    }
     expect(jsonDelta.delta.partial_json).toBe('{"city":"NYC"}')
   })
 
   it('uses named SSE events format', async () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hi' }
-      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 1 } }
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: { inputTokens: 5, outputTokens: 1 },
+      }
     }
 
-    const stream = renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })
+    const stream = renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
     const eventTypes = events.map((e) => e.event)
 
@@ -224,7 +287,10 @@ describe('Anthropic Messages renderer', () => {
     }
 
     const outputs = []
-    for await (const chunk of renderAnthropicMessageSSE({ model: 'm', stream: parts() as AsyncIterable<ProxyStreamPart> })) {
+    for await (const chunk of renderAnthropicMessageSSE({
+      model: 'm',
+      stream: parts() as AsyncIterable<ProxyStreamPart>,
+    })) {
       outputs.push(chunk)
     }
 

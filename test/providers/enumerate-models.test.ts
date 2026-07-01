@@ -2,14 +2,25 @@ import { describe, expect, it } from 'vitest'
 import { enumerateModelEntries } from '../../src/providers/model-types.js'
 import type { AliasEntry, ModelRouteConfig, Settings } from '../../src/config.js'
 
-function makeSettings(providers: Settings['providers'] = {}, enableFlatModelLookup = false): Settings {
+function makeSettings(
+  providers: Settings['providers'] = {},
+  enableFlatModelLookup = false,
+): Settings {
   return {
     service: { name: 'llm-proxy', host: '127.0.0.1', port: 8000 },
     requestTimeoutMs: 30000,
     proxy: null,
     routing: { enableFlatModelLookup },
     plugins: [],
-    codex: { models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 }, install: { providerId: 'llm-proxy', providerName: 'LLM Proxy', requiresOpenaiAuth: false, checkForUpdateOnStartup: false } },
+    codex: {
+      models_catalog: { templateSlug: 'gpt-5.4', context_window: 200000 },
+      install: {
+        providerId: 'llm-proxy',
+        providerName: 'LLM Proxy',
+        requiresOpenaiAuth: false,
+        checkForUpdateOnStartup: false,
+      },
+    },
     providers,
   }
 }
@@ -72,7 +83,10 @@ describe('enumerateModelEntries', () => {
           models: {
             chat: {
               upstreamModel: 'openrouter/auto',
-              aliases: [{ name: 'default', flat: false }, { name: 'fast', flat: false }],
+              aliases: [
+                { name: 'default', flat: false },
+                { name: 'fast', flat: false },
+              ],
               headers: {},
               plugins: [],
               limit: { context: 200000 },
@@ -108,7 +122,12 @@ describe('enumerateModelEntries', () => {
         plugins: [],
         options: { enableFlatModelLookup: true },
         models: {
-          chat: { upstreamModel: 'u', aliases: [{ name: 'a1', flat: false }], headers: {}, plugins: [] },
+          chat: {
+            upstreamModel: 'u',
+            aliases: [{ name: 'a1', flat: false }],
+            headers: {},
+            plugins: [],
+          },
         },
       },
       deepseek: {
@@ -119,7 +138,12 @@ describe('enumerateModelEntries', () => {
         plugins: [],
         // no override, global off → flat false
         models: {
-          coder: { upstreamModel: 'd', aliases: [{ name: 'a2', flat: false }], headers: {}, plugins: [] },
+          coder: {
+            upstreamModel: 'd',
+            aliases: [{ name: 'a2', flat: false }],
+            headers: {},
+            plugins: [],
+          },
         },
       },
     })
@@ -186,12 +210,23 @@ describe('enumerateModelEntries', () => {
         headers: {},
         plugins: [],
         models: {
-          m: { upstreamModel: 'u', aliases: [{ name: 'x', flat: false }, { name: 'y', flat: false }], headers: {}, plugins: [] },
+          m: {
+            upstreamModel: 'u',
+            aliases: [
+              { name: 'x', flat: false },
+              { name: 'y', flat: false },
+            ],
+            headers: {},
+            plugins: [],
+          },
         },
       },
     })
     const entry = enumerateModelEntries(settings)[0]!
-    expect(entry.aliases).toEqual([{ name: 'x', flat: false }, { name: 'y', flat: false }])
+    expect(entry.aliases).toEqual([
+      { name: 'x', flat: false },
+      { name: 'y', flat: false },
+    ])
     expect(entry.aliases).not.toBe(settings.providers.p!.models.m!.aliases) // defensive copy
   })
 })
@@ -223,7 +258,15 @@ describe('enumerateModelEntries ids (new semantics)', () => {
 
   it('flat on + 2 string alias → [p/m, m, p/a1, a1, p/a2, a2]', () => {
     const s = makeSettings({
-      p: P({ m: M('up', [{ name: 'a1', flat: false }, { name: 'a2', flat: false }]) }, true),
+      p: P(
+        {
+          m: M('up', [
+            { name: 'a1', flat: false },
+            { name: 'a2', flat: false },
+          ]),
+        },
+        true,
+      ),
     })
     const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!
     expect(e.ids).toEqual(['p/m', 'm', 'p/a1', 'a1', 'p/a2', 'a2'])

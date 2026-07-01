@@ -83,7 +83,10 @@ describe('token-store', () => {
       const path = join(tempDir, 'auth.json')
 
       await saveAuthFile(path, mergeTokenStore({}, { a: makeToken({ accessToken: 'first' }) }))
-      await saveAuthFile(path, mergeTokenStore(await loadAuthFile(path), { b: makeToken({ accessToken: 'second' }) }))
+      await saveAuthFile(
+        path,
+        mergeTokenStore(await loadAuthFile(path), { b: makeToken({ accessToken: 'second' }) }),
+      )
 
       const data = await loadAuthFile(path)
       const store = extractTokenStore(data)

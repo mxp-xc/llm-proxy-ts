@@ -1,5 +1,5 @@
 ---
-paths: ["**/*.ts"]
+paths: ['**/*.ts']
 ---
 
 # 限制 `unknown` 类型

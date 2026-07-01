@@ -134,9 +134,9 @@ interface DecodedState {
 }
 
 function isDecodedState(value: unknown): value is DecodedState {
-  return isRecord(value) &&
-    typeof value['provider'] === 'string' &&
-    typeof value['nonce'] === 'string'
+  return (
+    isRecord(value) && typeof value['provider'] === 'string' && typeof value['nonce'] === 'string'
+  )
 }
 
 /**

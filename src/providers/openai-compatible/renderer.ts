@@ -35,7 +35,9 @@ export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChat
     const completionTokens = input.usage.outputTokens
     const totalTokens =
       input.usage.totalTokens ??
-      (promptTokens != null && completionTokens != null ? promptTokens + completionTokens : undefined)
+      (promptTokens != null && completionTokens != null
+        ? promptTokens + completionTokens
+        : undefined)
 
     body.usage = {}
     if (promptTokens !== undefined) body.usage.prompt_tokens = promptTokens
@@ -168,7 +170,7 @@ export async function* renderOpenAIChatCompletionSSE(input: {
         finishChunk.usage = {
           prompt_tokens: promptTokens,
           completion_tokens: completionTokens,
-          total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
+          total_tokens: usage.totalTokens ?? promptTokens + completionTokens,
         }
       }
       yield { data: finishChunk }
@@ -201,7 +203,6 @@ function mapFinishReason(reason?: FinishReason | unknown, toolCalls?: unknown[])
   if (reason === 'stop' || reason === 'length') return reason
   return null
 }
-
 
 function toolIndex(indexes: Map<string, number>, toolCallId: string): number {
   const existing = indexes.get(toolCallId)

@@ -13,6 +13,7 @@
 - 两步选择均支持**搜索过滤**（模型多时可键入过滤）
 
 **不在范围内**:
+
 - 不改 `config.toml` 的 4 处编辑逻辑（`applyCodexConfigEdits` 仍写 `model_catalog_json` / `model_provider` / `model` / `[model_providers.llm-proxy]`，`modelSlug` 仍是单个默认模型）
 - 不改 `buildCodexBaseUrl` / `fetchCodexModelsResponse` / `codex-home` / `toml-editor`
 - 不加非交互 flags（`--model` / `--all` 等），保持纯交互
@@ -81,7 +82,11 @@ function defaultPrompts(): CodexInstallPrompts {
         initialValues: slugs,
         required: true,
         placeholder: 'Type to filter models…',
-        filter: (search, option) => matchModel(search, { slug: String(option.value), display_name: option.label ?? String(option.value) }),
+        filter: (search, option) =>
+          matchModel(search, {
+            slug: String(option.value),
+            display_name: option.label ?? String(option.value),
+          }),
       })
       if (clack.isCancel(selected)) return null
       return selected as string[]
@@ -92,7 +97,11 @@ function defaultPrompts(): CodexInstallPrompts {
         options: models.map((m) => ({ value: m.slug, label: m.display_name, hint: m.slug })),
         initialValue: models[0]!.slug,
         placeholder: 'Type to filter models…',
-        filter: (search, option) => matchModel(search, { slug: String(option.value), display_name: option.label ?? String(option.value) }),
+        filter: (search, option) =>
+          matchModel(search, {
+            slug: String(option.value),
+            display_name: option.label ?? String(option.value),
+          }),
       })
       if (clack.isCancel(selected)) return null
       return selected as string
@@ -121,9 +130,15 @@ if (modelsRes.models.length === 1) {
     return
   }
 }
-if (subsetSlugs === null) { clack.cancel('Operation cancelled'); return }
+if (subsetSlugs === null) {
+  clack.cancel('Operation cancelled')
+  return
+}
 // 注入 seam 守卫：子集非空 + slugs ⊆ catalog。
-if (subsetSlugs.length === 0 || !subsetSlugs.every((s) => modelsRes.models.some((m) => m.slug === s))) {
+if (
+  subsetSlugs.length === 0 ||
+  !subsetSlugs.every((s) => modelsRes.models.some((m) => m.slug === s))
+) {
   clack.log.error('Invalid model selection')
   clack.outro('Aborted')
   return
@@ -140,11 +155,16 @@ if (subset.length === 1) {
   try {
     picked = await prompts.selectDefaultModel(subset)
   } catch (err) {
-    clack.log.error(`Default model selection failed: ${err instanceof Error ? err.message : String(err)}`)
+    clack.log.error(
+      `Default model selection failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
     clack.outro('Aborted')
     return
   }
-  if (picked === null) { clack.cancel('Operation cancelled'); return }
+  if (picked === null) {
+    clack.cancel('Operation cancelled')
+    return
+  }
   if (!subset.some((m) => m.slug === picked)) {
     clack.log.error(`Selected default model "${picked}" is not in the selection`)
     clack.outro('Aborted')

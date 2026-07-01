@@ -205,7 +205,10 @@ export async function* renderAnthropicMessageSSE(input: {
           delta: { stop_reason: stopReason, stop_sequence: null },
         }
         if (usage && hasUsageData(usage)) {
-          messageDelta.usage = { input_tokens: usage.inputTokens ?? 0, output_tokens: usage.outputTokens ?? 0 }
+          messageDelta.usage = {
+            input_tokens: usage.inputTokens ?? 0,
+            output_tokens: usage.outputTokens ?? 0,
+          }
         }
 
         yield { event: 'message_delta', data: messageDelta }

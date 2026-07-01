@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { extractUsageFromFinishPart, hasUsageData, flattenUsage } from '../../../src/providers/shared/renderer-utils.js'
+import {
+  extractUsageFromFinishPart,
+  hasUsageData,
+  flattenUsage,
+} from '../../../src/providers/shared/renderer-utils.js'
 import type { ProxyStreamPart } from '../../../src/providers/shared/aisdk-types.js'
 import type { LanguageModelUsage } from 'ai'
 
@@ -23,7 +27,9 @@ function usage(overrides: Partial<LanguageModelUsage> = {}): LanguageModelUsage 
 }
 
 /** Helper: 创建最小合法的 finish part（只含必填字段） */
-function finishPart(totalUsage: LanguageModelUsage = usage()): Extract<ProxyStreamPart, { type: 'finish' }> {
+function finishPart(
+  totalUsage: LanguageModelUsage = usage(),
+): Extract<ProxyStreamPart, { type: 'finish' }> {
   return {
     type: 'finish',
     finishReason: 'stop',
@@ -36,14 +42,17 @@ describe('extractUsageFromFinishPart', () => {
   it('returns undefined when totalUsage is null', () => {
     // null totalUsage cannot happen with strict typing, but test defensive behavior
     const part = finishPart()
-    const result = extractUsageFromFinishPart({ ...part, totalUsage: null as unknown as LanguageModelUsage })
+    const result = extractUsageFromFinishPart({
+      ...part,
+      totalUsage: null as unknown as LanguageModelUsage,
+    })
     expect(result).toBeUndefined()
   })
 
   it('extracts inputTokens and outputTokens', () => {
-    const result = extractUsageFromFinishPart(finishPart(
-      usage({ inputTokens: 10, outputTokens: 5 }),
-    ))
+    const result = extractUsageFromFinishPart(
+      finishPart(usage({ inputTokens: 10, outputTokens: 5 })),
+    )
     expect(result).toEqual({
       inputTokens: 10,
       outputTokens: 5,
@@ -54,45 +63,49 @@ describe('extractUsageFromFinishPart', () => {
   })
 
   it('extracts totalTokens', () => {
-    const result = extractUsageFromFinishPart(finishPart(
-      usage({ inputTokens: 10, outputTokens: 5, totalTokens: 20 }),
-    ))
+    const result = extractUsageFromFinishPart(
+      finishPart(usage({ inputTokens: 10, outputTokens: 5, totalTokens: 20 })),
+    )
     expect(result!.totalTokens).toBe(20)
   })
 
   it('extracts cacheReadTokens from inputTokenDetails', () => {
-    const result = extractUsageFromFinishPart(finishPart(
-      usage({
-        inputTokens: 10,
-        outputTokens: 5,
-        inputTokenDetails: {
-          noCacheTokens: undefined,
-          cacheReadTokens: 3,
-          cacheWriteTokens: undefined,
-        },
-      }),
-    ))
+    const result = extractUsageFromFinishPart(
+      finishPart(
+        usage({
+          inputTokens: 10,
+          outputTokens: 5,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: 3,
+            cacheWriteTokens: undefined,
+          },
+        }),
+      ),
+    )
     expect(result!.cacheReadTokens).toBe(3)
   })
 
   it('extracts reasoningTokens from outputTokenDetails', () => {
-    const result = extractUsageFromFinishPart(finishPart(
-      usage({
-        inputTokens: 10,
-        outputTokens: 5,
-        outputTokenDetails: {
-          textTokens: undefined,
-          reasoningTokens: 7,
-        },
-      }),
-    ))
+    const result = extractUsageFromFinishPart(
+      finishPart(
+        usage({
+          inputTokens: 10,
+          outputTokens: 5,
+          outputTokenDetails: {
+            textTokens: undefined,
+            reasoningTokens: 7,
+          },
+        }),
+      ),
+    )
     expect(result!.reasoningTokens).toBe(7)
   })
 
   it('returns undefined for fields that are undefined', () => {
-    const result = extractUsageFromFinishPart(finishPart(
-      usage({ inputTokens: undefined, outputTokens: undefined }),
-    ))
+    const result = extractUsageFromFinishPart(
+      finishPart(usage({ inputTokens: undefined, outputTokens: undefined })),
+    )
     expect(result!.inputTokens).toBeUndefined()
     expect(result!.outputTokens).toBeUndefined()
   })
@@ -108,7 +121,12 @@ describe('hasUsageData', () => {
   })
 
   it('returns false when both tokens are undefined', () => {
-    expect(hasUsageData({ inputTokens: undefined as number | undefined, outputTokens: undefined as number | undefined })).toBe(false)
+    expect(
+      hasUsageData({
+        inputTokens: undefined as number | undefined,
+        outputTokens: undefined as number | undefined,
+      }),
+    ).toBe(false)
   })
 
   it('returns true when inputTokens > 0', () => {

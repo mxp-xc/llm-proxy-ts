@@ -6,10 +6,7 @@ export interface LoadEnvironmentFilesOptions {
 }
 
 export function loadEnvironmentFiles({ rootDir }: LoadEnvironmentFilesOptions): void {
-  for (const filePath of [
-    join(rootDir, '.env'),
-    join(rootDir, '.env.local'),
-  ]) {
+  for (const filePath of [join(rootDir, '.env'), join(rootDir, '.env.local')]) {
     loadDotenv({ path: filePath, quiet: true, override: true })
   }
 }

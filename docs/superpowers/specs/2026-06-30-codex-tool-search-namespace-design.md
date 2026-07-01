@@ -2,33 +2,38 @@
 
 ## 概述
 
-codex 通过 llm-proxy 转发到 openai-compatible 上游（GLM）时，`tool_search` 能搜到工具（前序 bug 已修），但搜到后 GLM 无法调用 `spawn_agent` 等命名空间工具。根因：codex 不把 `tool_search` 动态发现的工具放进顶层 `tools[]`（依赖 OpenAI 服务端从 `tool_search_output` 历史注册），llm-proxy 只 flatten 顶层 `tools[]`、不扫 `tool_search_output` 历史，导致 GLM `tools[]` 永远不含这些工具。同时发现现有 namespace 命名回路（mcp__/codex_app）在 codex master 下也 broken。
+codex 通过 llm-proxy 转发到 openai-compatible 上游（GLM）时，`tool_search` 能搜到工具（前序 bug 已修），但搜到后 GLM 无法调用 `spawn_agent` 等命名空间工具。根因：codex 不把 `tool_search` 动态发现的工具放进顶层 `tools[]`（依赖 OpenAI 服务端从 `tool_search_output` 历史注册），llm-proxy 只 flatten 顶层 `tools[]`、不扫 `tool_search_output` 历史，导致 GLM `tools[]` 永远不含这些工具。同时发现现有 namespace 命名回路（mcp\_\_/codex_app）在 codex master 下也 broken。
 
-方案：llm-proxy 承担 codex PR #26234 的 un-flatten 角色——请求侧把 `tool_search_output` 发现的 namespace 工具拍平加入 GLM `tools[]`，响应侧把 GLM 返回的拍平名拆回 `{name, namespace}` 分离字段给 codex。一并修复现有 mcp__/codex_app 路径。
+方案：llm-proxy 承担 codex PR #26234 的 un-flatten 角色——请求侧把 `tool_search_output` 发现的 namespace 工具拍平加入 GLM `tools[]`，响应侧把 GLM 返回的拍平名拆回 `{name, namespace}` 分离字段给 codex。一并修复现有 mcp\_\_/codex_app 路径。
 
 ## 背景
 
 ### bug 根因
+
 - codex `tool_search`（`execution:'client'`）本地 BM25 搜索 deferred 工具，返回 `tool_search_output`（含 namespace 工具如 `multi_agent_v1`/`spawn_agent`）。codex **不**把这些工具放进顶层 `tools[]`——它依赖 OpenAI 服务端从 `tool_search_output` 历史读取工具使其可调用（hosted 行为）。
 - llm-proxy 只 flatten 顶层 `request.tools[]` 的 namespace（`protocol.ts:407-423`），**不扫 input 历史的 `tool_search_output`**。GLM 无 hosted 机制，`tools[]` 始终只有初始 16 个工具，`spawn_agent` 不在白名单。
 - GLM 在 `tool_search_output` 文本里"读到"了 `spawn_agent` 描述，甚至说"现在调用 spawn_agent"，但 function calling 的 `tools` 数组是可调用白名单，模型不对未声明工具生成 `tool_call` → 反复 `tool_search` 死循环（subagent2 实测 14 次 tool_search、0 次 spawn_agent）。
 
 ### codex 期望的 function_call 格式（决定性）
+
 - codex `function_call` **必须带 `namespace` 分离字段**：`{name:'spawn_agent', namespace:'multi_agent_v1', arguments:'<JSON字符串>', call_id}`。
 - codex master **不支持扁平名** `ns__subtool`：`ToolName { name, namespace }` 无 split 逻辑，路由 HashMap 严格相等，扁平名 → `unsupported call`。PR #26234（un-flatten）未合并。
 - namespace 值：MCP = `mcp__{server}`（如 `mcp__codegraph`）；`multi_agent_v1`；`codex_app`。内置工具 namespace=None（省略字段）。
 
 ### 现有命名回路 gap（Agent 6 确认）
+
 - renderer.ts 全文无 `namespace` 引用，`function_call` 只输出扁平 `name`。
 - 请求侧历史映射 `protocol.ts:250` 只取 `item.name`，忽略 `namespace` 字段。
 - `functionCallSchema` 是普通 `z.object`（非 passthrough），zod 默认 strip 未声明字段，`namespace` 被丢弃 → 需显式加 `namespace: z.string().optional()`（Task 3 已修）。
-- 现有 mcp__/codex_app 路径同样 broken（codex master 不认扁平名）。
+- 现有 mcp\_\_/codex_app 路径同样 broken（codex master 不认扁平名）。
 
 ### 缓存事实
+
 - GLM-4.5+ 支持隐式 prompt caching，`tools` 在前缀最前，tools 任何变化（增删/重排/字段顺序）→ 整个前缀失效。
 - 方案要求：拍平加入的 namespace 工具**幂等（只增不减）+ 追加末尾 + 固定字段顺序/结构**，使每次新增 namespace 只失效 system+messages 一次（实测 subagent2 仅 2 个 distinct namespace = 2 次失效）。
 
 ### 规模
+
 - 典型重度用户 7-15 namespace，但模型实际 tool_search 发现的远少于配置总量（subagent2 实测 2 个）。`tool_search` 一次最多返回 8。skills 不走 tool_search。
 
 ## 方案设计
@@ -80,11 +85,13 @@ llm-proxy 承担 codex #26234 的 un-flatten 角色：请求侧拍平给 GLM（G
 - 普通工具（exec_command、apply_patch、tool_search shimmed）不命中映射，行为不变。
 
 ### 命名回路规则
+
 - 拍平：`${namespace}__${name}`。例：`mcp__codegraph__codegraph_search`、`multi_agent_v1__spawn_agent`、`codex_app__load_workspace_dependencies`。
 - 拆回：用映射查表（不用 split，避免误拆普通工具名）。映射构建时，从 namespace 元素的 `{name, tools:[{name}]}` 生成 `flatName → {namespace: ns.name, name: subtool.name}`。
 - namespace 值原样使用（MCP 的 `mcp__{server}` 本身含 `mcp__` 前缀，不要二次处理）。
 
 ### 缓存策略
+
 - 拍平加入的工具：幂等 + 追加末尾 + 固定字段顺序（`mapResponsesFunctionTool` 输出顺序稳定）。
 - 不按请求上下文重排或精简 tools schema。
 - 缓存命中可观测：`usage.prompt_tokens_details.cached_tokens`（已透传）。
@@ -92,19 +99,22 @@ llm-proxy 承担 codex #26234 的 un-flatten 角色：请求侧拍平给 GLM（G
 ## 修复范围
 
 本次一并修复：
+
 1. `tool_search_output` 动态发现的 namespace 工具加入 GLM `tools[]`（核心 bug）。
 2. 历史 `function_call` 的 namespace 字段处理（请求侧）。
 3. renderer 渲染 `function_call` 输出 `{name, namespace}` 分离字段（响应侧）。
-4. 现有 mcp__/codex_app 路径（同一映射机制覆盖，响应侧拆回 namespace）。
+4. 现有 mcp\_\_/codex_app 路径（同一映射机制覆盖，响应侧拆回 namespace）。
 
 ## 测试
 
 `test/providers/openai-responses/protocol.test.ts`：
+
 - `tool_search_output` 含 namespace 工具 → 拍平 `ns__subtool` 加入 `tools[]`；幂等（重复 tool_search_output 不重复加）；追加末尾不破坏初始 tools 顺序。
 - 历史 `function_call{name:'spawn_agent', namespace:'multi_agent_v1'}` → 映射为 `toolName:'multi_agent_v1__spawn_agent'`；`function_call_output` 的 toolName 匹配。
 - `getNamespaceFlatMap` 返回正确映射（含 request.tools namespace + tool_search_output namespace）。
 
 `test/providers/openai-responses/renderer.test.ts`：
+
 - GLM tool-call `toolName:'multi_agent_v1__spawn_agent'` + 映射 → 渲染 `{name:'spawn_agent', namespace:'multi_agent_v1', arguments}`（streaming + non-streaming）。
 - GLM tool-call `toolName:'mcp__codegraph__codegraph_search'` + 映射 → 渲染 `{name:'codegraph_search', namespace:'mcp__codegraph'}`。
 - 普通工具 `exec_command` 不受影响（无 namespace 字段）。

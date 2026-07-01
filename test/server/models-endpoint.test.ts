@@ -342,7 +342,13 @@ describe('GET /v1/models — limit', () => {
     expect(response.status).toBe(200)
     const body = await response.json()
     expect(body.data).toEqual([
-      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: { context: 128000, output: 4096 } },
+      {
+        id: 'openrouter/chat',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: { context: 128000, output: 4096 },
+      },
       { id: 'openrouter/basic', object: 'model', created: 0, owned_by: 'openrouter' },
     ])
   })
@@ -367,16 +373,31 @@ describe('GET /v1/models — limit', () => {
         },
       },
     }
-    const app = createApp({ settings: makeSettingsWithFlatLookup(providers, true), providerRegistry: stubRegistry })
+    const app = createApp({
+      settings: makeSettingsWithFlatLookup(providers, true),
+      providerRegistry: stubRegistry,
+    })
     const response = await app.request('/v1/models')
 
     expect(response.status).toBe(200)
     const body = await response.json()
     const expectedLimit = { context: 200000, input: 200000, output: 8192 }
     expect(body.data).toEqual([
-      { id: 'openrouter/chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      {
+        id: 'openrouter/chat',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: expectedLimit,
+      },
       { id: 'chat', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
-      { id: 'openrouter/default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
+      {
+        id: 'openrouter/default',
+        object: 'model',
+        created: 0,
+        owned_by: 'openrouter',
+        limit: expectedLimit,
+      },
       { id: 'default', object: 'model', created: 0, owned_by: 'openrouter', limit: expectedLimit },
     ])
   })
@@ -435,7 +456,10 @@ describe('GET /v1/models/:id — limit', () => {
         },
       },
     }
-    const app = createApp({ settings: makeSettingsWithFlatLookup(providers, true), providerRegistry: stubRegistry })
+    const app = createApp({
+      settings: makeSettingsWithFlatLookup(providers, true),
+      providerRegistry: stubRegistry,
+    })
     const response = await app.request('/v1/models/default')
 
     expect(response.status).toBe(200)

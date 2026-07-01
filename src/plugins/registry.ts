@@ -174,7 +174,12 @@ export class PluginRegistry {
                     ...(modulePath !== undefined ? { modulePath } : {}),
                   }
                   log.info(
-                    { plugin: plugin.name, module: modulePath, provider: providerId, model: modelKey },
+                    {
+                      plugin: plugin.name,
+                      module: modulePath,
+                      provider: providerId,
+                      model: modelKey,
+                    },
                     'model plugin loaded',
                   )
                   return rp
@@ -330,7 +335,8 @@ export class PluginRegistry {
     // 全局级只包含 ProxyPlugin
     const globalLevel = this.globalPlugins.filter((rp) => isProxyPlugin(rp.plugin))
     const providerLevel = this.providerPlugins.get(providerId) ?? []
-    const modelLevel = (modelKey ? this.modelPlugins.get(providerId)?.get(modelKey) : undefined) ?? []
+    const modelLevel =
+      (modelKey ? this.modelPlugins.get(providerId)?.get(modelKey) : undefined) ?? []
 
     // Merge: global → provider → model, Map.set overwrites so model wins for same-name
     const mergeMap = new Map<string, ResolvedPlugin>()
@@ -407,9 +413,13 @@ function filterInitable(
 /** 筛选带 `afterServerStart` 的插件，将元素类型收窄为带 `NonNullable<afterServerStart>` 的 ResolvedPlugin。 */
 function filterAfterStart(
   rps: ResolvedPlugin[],
-): Array<ResolvedPlugin & { plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> } }> {
+): Array<
+  ResolvedPlugin & { plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> } }
+> {
   return rps.filter(
-    (rp): rp is ResolvedPlugin & {
+    (
+      rp,
+    ): rp is ResolvedPlugin & {
       plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> }
     } => rp.plugin.afterServerStart !== undefined,
   )

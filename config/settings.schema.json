@@ -47,9 +47,7 @@
               "default": true
             }
           },
-          "required": [
-            "url"
-          ],
+          "required": ["url"],
           "additionalProperties": false
         },
         {
@@ -125,16 +123,10 @@
               "type": "string"
             },
             "description": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "default_reasoning_level": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "supported_reasoning_levels": {
               "type": "array",
@@ -148,9 +140,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "effort"
-                ],
+                "required": ["effort"],
                 "additionalProperties": true
               }
             },
@@ -180,10 +170,7 @@
               }
             },
             "default_service_tier": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "availability_nux": {
               "anyOf": [
@@ -231,16 +218,11 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "personality_default"
-                      ],
+                      "required": ["personality_default"],
                       "additionalProperties": true
                     }
                   },
-                  "required": [
-                    "instructions_template",
-                    "instructions_variables"
-                  ],
+                  "required": ["instructions_template", "instructions_variables"],
                   "additionalProperties": true
                 },
                 {
@@ -258,16 +240,10 @@
               "type": "boolean"
             },
             "default_verbosity": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "apply_patch_tool_type": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "web_search_tool_type": {
               "type": "string"
@@ -282,10 +258,7 @@
                   "type": "number"
                 }
               },
-              "required": [
-                "mode",
-                "limit"
-              ],
+              "required": ["mode", "limit"],
               "additionalProperties": true
             },
             "supports_parallel_tool_calls": {
@@ -300,22 +273,13 @@
               "default": 200000
             },
             "max_context_window": {
-              "type": [
-                "number",
-                "null"
-              ]
+              "type": ["number", "null"]
             },
             "auto_compact_token_limit": {
-              "type": [
-                "number",
-                "null"
-              ]
+              "type": ["number", "null"]
             },
             "comp_hash": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "effective_context_window_percent": {
               "type": "number"
@@ -340,22 +304,13 @@
               "type": "boolean"
             },
             "auto_review_model_override": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "tool_mode": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "multi_agent_version": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": ["string", "null"]
             },
             "templateSlug": {
               "type": "string",
@@ -514,9 +469,7 @@
                                 "default": false
                               }
                             },
-                            "required": [
-                              "name"
-                            ],
+                            "required": ["name"],
                             "additionalProperties": false
                           }
                         ]
@@ -604,13 +557,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -624,13 +571,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
-                                "enum": [
-                                  "low",
-                                  "medium",
-                                  "high",
-                                  "xhigh",
-                                  "max"
-                                ]
+                                "enum": ["low", "medium", "high", "xhigh", "max"]
                               },
                               {
                                 "type": "string",
@@ -649,16 +590,10 @@
                           "type": "string"
                         },
                         "description": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "default_reasoning_level": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "supported_reasoning_levels": {
                           "type": "array",
@@ -672,9 +607,7 @@
                                 "type": "string"
                               }
                             },
-                            "required": [
-                              "effort"
-                            ],
+                            "required": ["effort"],
                             "additionalProperties": true
                           }
                         },
@@ -704,10 +637,7 @@
                           }
                         },
                         "default_service_tier": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "availability_nux": {
                           "anyOf": [
@@ -755,16 +685,11 @@
                                       "type": "string"
                                     }
                                   },
-                                  "required": [
-                                    "personality_default"
-                                  ],
+                                  "required": ["personality_default"],
                                   "additionalProperties": true
                                 }
                               },
-                              "required": [
-                                "instructions_template",
-                                "instructions_variables"
-                              ],
+                              "required": ["instructions_template", "instructions_variables"],
                               "additionalProperties": true
                             },
                             {
@@ -782,16 +707,10 @@
                           "type": "boolean"
                         },
                         "default_verbosity": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "apply_patch_tool_type": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "web_search_tool_type": {
                           "type": "string"
@@ -806,10 +725,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "mode",
-                            "limit"
-                          ],
+                          "required": ["mode", "limit"],
                           "additionalProperties": true
                         },
                         "supports_parallel_tool_calls": {
@@ -830,22 +746,13 @@
                           ]
                         },
                         "max_context_window": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "auto_compact_token_limit": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "comp_hash": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "effective_context_window_percent": {
                           "type": "number"
@@ -870,22 +777,13 @@
                           "type": "boolean"
                         },
                         "auto_review_model_override": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "tool_mode": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "multi_agent_version": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "templateSlug": {
                           "type": "string",
@@ -895,9 +793,7 @@
                       "additionalProperties": false
                     }
                   },
-                  "required": [
-                    "upstreamModel"
-                  ],
+                  "required": ["upstreamModel"],
                   "additionalProperties": false
                 },
                 "default": {}
@@ -907,10 +803,7 @@
                 "properties": {
                   "flow": {
                     "type": "string",
-                    "enum": [
-                      "authorization_code",
-                      "client_credentials"
-                    ]
+                    "enum": ["authorization_code", "client_credentials"]
                   },
                   "clientId": {
                     "type": "string",
@@ -944,12 +837,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "flow",
-                  "clientId",
-                  "clientSecret",
-                  "tokenUrl"
-                ],
+                "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
                 "additionalProperties": false
               },
               "options": {
@@ -968,13 +856,7 @@
                         "anyOf": [
                           {
                             "type": "string",
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high",
-                              "xhigh",
-                              "max"
-                            ]
+                            "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
                           {
                             "type": "string",
@@ -988,13 +870,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -1013,16 +889,10 @@
                         "type": "string"
                       },
                       "description": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "default_reasoning_level": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "supported_reasoning_levels": {
                         "type": "array",
@@ -1036,9 +906,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "effort"
-                          ],
+                          "required": ["effort"],
                           "additionalProperties": true
                         }
                       },
@@ -1068,10 +936,7 @@
                         }
                       },
                       "default_service_tier": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "availability_nux": {
                         "anyOf": [
@@ -1119,16 +984,11 @@
                                     "type": "string"
                                   }
                                 },
-                                "required": [
-                                  "personality_default"
-                                ],
+                                "required": ["personality_default"],
                                 "additionalProperties": true
                               }
                             },
-                            "required": [
-                              "instructions_template",
-                              "instructions_variables"
-                            ],
+                            "required": ["instructions_template", "instructions_variables"],
                             "additionalProperties": true
                           },
                           {
@@ -1146,16 +1006,10 @@
                         "type": "boolean"
                       },
                       "default_verbosity": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "apply_patch_tool_type": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "web_search_tool_type": {
                         "type": "string"
@@ -1170,10 +1024,7 @@
                             "type": "number"
                           }
                         },
-                        "required": [
-                          "mode",
-                          "limit"
-                        ],
+                        "required": ["mode", "limit"],
                         "additionalProperties": true
                       },
                       "supports_parallel_tool_calls": {
@@ -1194,22 +1045,13 @@
                         ]
                       },
                       "max_context_window": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "auto_compact_token_limit": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "comp_hash": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "effective_context_window_percent": {
                         "type": "number"
@@ -1234,22 +1076,13 @@
                         "type": "boolean"
                       },
                       "auto_review_model_override": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "tool_mode": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "multi_agent_version": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "templateSlug": {
                         "type": "string",
@@ -1269,10 +1102,7 @@
                 "additionalProperties": false
               }
             },
-            "required": [
-              "type",
-              "baseURL"
-            ],
+            "required": ["type", "baseURL"],
             "additionalProperties": false
           },
           {
@@ -1391,9 +1221,7 @@
                                 "default": false
                               }
                             },
-                            "required": [
-                              "name"
-                            ],
+                            "required": ["name"],
                             "additionalProperties": false
                           }
                         ]
@@ -1481,13 +1309,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -1501,13 +1323,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
-                                "enum": [
-                                  "low",
-                                  "medium",
-                                  "high",
-                                  "xhigh",
-                                  "max"
-                                ]
+                                "enum": ["low", "medium", "high", "xhigh", "max"]
                               },
                               {
                                 "type": "string",
@@ -1526,16 +1342,10 @@
                           "type": "string"
                         },
                         "description": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "default_reasoning_level": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "supported_reasoning_levels": {
                           "type": "array",
@@ -1549,9 +1359,7 @@
                                 "type": "string"
                               }
                             },
-                            "required": [
-                              "effort"
-                            ],
+                            "required": ["effort"],
                             "additionalProperties": true
                           }
                         },
@@ -1581,10 +1389,7 @@
                           }
                         },
                         "default_service_tier": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "availability_nux": {
                           "anyOf": [
@@ -1632,16 +1437,11 @@
                                       "type": "string"
                                     }
                                   },
-                                  "required": [
-                                    "personality_default"
-                                  ],
+                                  "required": ["personality_default"],
                                   "additionalProperties": true
                                 }
                               },
-                              "required": [
-                                "instructions_template",
-                                "instructions_variables"
-                              ],
+                              "required": ["instructions_template", "instructions_variables"],
                               "additionalProperties": true
                             },
                             {
@@ -1659,16 +1459,10 @@
                           "type": "boolean"
                         },
                         "default_verbosity": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "apply_patch_tool_type": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "web_search_tool_type": {
                           "type": "string"
@@ -1683,10 +1477,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "mode",
-                            "limit"
-                          ],
+                          "required": ["mode", "limit"],
                           "additionalProperties": true
                         },
                         "supports_parallel_tool_calls": {
@@ -1707,22 +1498,13 @@
                           ]
                         },
                         "max_context_window": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "auto_compact_token_limit": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "comp_hash": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "effective_context_window_percent": {
                           "type": "number"
@@ -1747,22 +1529,13 @@
                           "type": "boolean"
                         },
                         "auto_review_model_override": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "tool_mode": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "multi_agent_version": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "templateSlug": {
                           "type": "string",
@@ -1772,9 +1545,7 @@
                       "additionalProperties": false
                     }
                   },
-                  "required": [
-                    "upstreamModel"
-                  ],
+                  "required": ["upstreamModel"],
                   "additionalProperties": false
                 },
                 "default": {}
@@ -1784,10 +1555,7 @@
                 "properties": {
                   "flow": {
                     "type": "string",
-                    "enum": [
-                      "authorization_code",
-                      "client_credentials"
-                    ]
+                    "enum": ["authorization_code", "client_credentials"]
                   },
                   "clientId": {
                     "type": "string",
@@ -1821,12 +1589,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "flow",
-                  "clientId",
-                  "clientSecret",
-                  "tokenUrl"
-                ],
+                "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
                 "additionalProperties": false
               },
               "options": {
@@ -1845,13 +1608,7 @@
                         "anyOf": [
                           {
                             "type": "string",
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high",
-                              "xhigh",
-                              "max"
-                            ]
+                            "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
                           {
                             "type": "string",
@@ -1865,13 +1622,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -1890,16 +1641,10 @@
                         "type": "string"
                       },
                       "description": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "default_reasoning_level": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "supported_reasoning_levels": {
                         "type": "array",
@@ -1913,9 +1658,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "effort"
-                          ],
+                          "required": ["effort"],
                           "additionalProperties": true
                         }
                       },
@@ -1945,10 +1688,7 @@
                         }
                       },
                       "default_service_tier": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "availability_nux": {
                         "anyOf": [
@@ -1996,16 +1736,11 @@
                                     "type": "string"
                                   }
                                 },
-                                "required": [
-                                  "personality_default"
-                                ],
+                                "required": ["personality_default"],
                                 "additionalProperties": true
                               }
                             },
-                            "required": [
-                              "instructions_template",
-                              "instructions_variables"
-                            ],
+                            "required": ["instructions_template", "instructions_variables"],
                             "additionalProperties": true
                           },
                           {
@@ -2023,16 +1758,10 @@
                         "type": "boolean"
                       },
                       "default_verbosity": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "apply_patch_tool_type": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "web_search_tool_type": {
                         "type": "string"
@@ -2047,10 +1776,7 @@
                             "type": "number"
                           }
                         },
-                        "required": [
-                          "mode",
-                          "limit"
-                        ],
+                        "required": ["mode", "limit"],
                         "additionalProperties": true
                       },
                       "supports_parallel_tool_calls": {
@@ -2071,22 +1797,13 @@
                         ]
                       },
                       "max_context_window": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "auto_compact_token_limit": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "comp_hash": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "effective_context_window_percent": {
                         "type": "number"
@@ -2111,22 +1828,13 @@
                         "type": "boolean"
                       },
                       "auto_review_model_override": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "tool_mode": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "multi_agent_version": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "templateSlug": {
                         "type": "string",
@@ -2143,9 +1851,7 @@
                 "additionalProperties": false
               }
             },
-            "required": [
-              "type"
-            ],
+            "required": ["type"],
             "additionalProperties": false
           },
           {
@@ -2264,9 +1970,7 @@
                                 "default": false
                               }
                             },
-                            "required": [
-                              "name"
-                            ],
+                            "required": ["name"],
                             "additionalProperties": false
                           }
                         ]
@@ -2354,13 +2058,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -2374,13 +2072,7 @@
                             "anyOf": [
                               {
                                 "type": "string",
-                                "enum": [
-                                  "low",
-                                  "medium",
-                                  "high",
-                                  "xhigh",
-                                  "max"
-                                ]
+                                "enum": ["low", "medium", "high", "xhigh", "max"]
                               },
                               {
                                 "type": "string",
@@ -2399,16 +2091,10 @@
                           "type": "string"
                         },
                         "description": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "default_reasoning_level": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "supported_reasoning_levels": {
                           "type": "array",
@@ -2422,9 +2108,7 @@
                                 "type": "string"
                               }
                             },
-                            "required": [
-                              "effort"
-                            ],
+                            "required": ["effort"],
                             "additionalProperties": true
                           }
                         },
@@ -2454,10 +2138,7 @@
                           }
                         },
                         "default_service_tier": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "availability_nux": {
                           "anyOf": [
@@ -2505,16 +2186,11 @@
                                       "type": "string"
                                     }
                                   },
-                                  "required": [
-                                    "personality_default"
-                                  ],
+                                  "required": ["personality_default"],
                                   "additionalProperties": true
                                 }
                               },
-                              "required": [
-                                "instructions_template",
-                                "instructions_variables"
-                              ],
+                              "required": ["instructions_template", "instructions_variables"],
                               "additionalProperties": true
                             },
                             {
@@ -2532,16 +2208,10 @@
                           "type": "boolean"
                         },
                         "default_verbosity": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "apply_patch_tool_type": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "web_search_tool_type": {
                           "type": "string"
@@ -2556,10 +2226,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "mode",
-                            "limit"
-                          ],
+                          "required": ["mode", "limit"],
                           "additionalProperties": true
                         },
                         "supports_parallel_tool_calls": {
@@ -2580,22 +2247,13 @@
                           ]
                         },
                         "max_context_window": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "auto_compact_token_limit": {
-                          "type": [
-                            "number",
-                            "null"
-                          ]
+                          "type": ["number", "null"]
                         },
                         "comp_hash": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "effective_context_window_percent": {
                           "type": "number"
@@ -2620,22 +2278,13 @@
                           "type": "boolean"
                         },
                         "auto_review_model_override": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "tool_mode": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "multi_agent_version": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
+                          "type": ["string", "null"]
                         },
                         "templateSlug": {
                           "type": "string",
@@ -2645,9 +2294,7 @@
                       "additionalProperties": false
                     }
                   },
-                  "required": [
-                    "upstreamModel"
-                  ],
+                  "required": ["upstreamModel"],
                   "additionalProperties": false
                 },
                 "default": {}
@@ -2657,10 +2304,7 @@
                 "properties": {
                   "flow": {
                     "type": "string",
-                    "enum": [
-                      "authorization_code",
-                      "client_credentials"
-                    ]
+                    "enum": ["authorization_code", "client_credentials"]
                   },
                   "clientId": {
                     "type": "string",
@@ -2694,12 +2338,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "flow",
-                  "clientId",
-                  "clientSecret",
-                  "tokenUrl"
-                ],
+                "required": ["flow", "clientId", "clientSecret", "tokenUrl"],
                 "additionalProperties": false
               },
               "options": {
@@ -2718,13 +2357,7 @@
                         "anyOf": [
                           {
                             "type": "string",
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high",
-                              "xhigh",
-                              "max"
-                            ]
+                            "enum": ["low", "medium", "high", "xhigh", "max"]
                           },
                           {
                             "type": "string",
@@ -2738,13 +2371,7 @@
                           "anyOf": [
                             {
                               "type": "string",
-                              "enum": [
-                                "low",
-                                "medium",
-                                "high",
-                                "xhigh",
-                                "max"
-                              ]
+                              "enum": ["low", "medium", "high", "xhigh", "max"]
                             },
                             {
                               "type": "string",
@@ -2763,16 +2390,10 @@
                         "type": "string"
                       },
                       "description": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "default_reasoning_level": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "supported_reasoning_levels": {
                         "type": "array",
@@ -2786,9 +2407,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "effort"
-                          ],
+                          "required": ["effort"],
                           "additionalProperties": true
                         }
                       },
@@ -2818,10 +2437,7 @@
                         }
                       },
                       "default_service_tier": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "availability_nux": {
                         "anyOf": [
@@ -2869,16 +2485,11 @@
                                     "type": "string"
                                   }
                                 },
-                                "required": [
-                                  "personality_default"
-                                ],
+                                "required": ["personality_default"],
                                 "additionalProperties": true
                               }
                             },
-                            "required": [
-                              "instructions_template",
-                              "instructions_variables"
-                            ],
+                            "required": ["instructions_template", "instructions_variables"],
                             "additionalProperties": true
                           },
                           {
@@ -2896,16 +2507,10 @@
                         "type": "boolean"
                       },
                       "default_verbosity": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "apply_patch_tool_type": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "web_search_tool_type": {
                         "type": "string"
@@ -2920,10 +2525,7 @@
                             "type": "number"
                           }
                         },
-                        "required": [
-                          "mode",
-                          "limit"
-                        ],
+                        "required": ["mode", "limit"],
                         "additionalProperties": true
                       },
                       "supports_parallel_tool_calls": {
@@ -2944,22 +2546,13 @@
                         ]
                       },
                       "max_context_window": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "auto_compact_token_limit": {
-                        "type": [
-                          "number",
-                          "null"
-                        ]
+                        "type": ["number", "null"]
                       },
                       "comp_hash": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "effective_context_window_percent": {
                         "type": "number"
@@ -2984,22 +2577,13 @@
                         "type": "boolean"
                       },
                       "auto_review_model_override": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "tool_mode": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "multi_agent_version": {
-                        "type": [
-                          "string",
-                          "null"
-                        ]
+                        "type": ["string", "null"]
                       },
                       "templateSlug": {
                         "type": "string",
@@ -3020,9 +2604,7 @@
                 "additionalProperties": false
               }
             },
-            "required": [
-              "type"
-            ],
+            "required": ["type"],
             "additionalProperties": false
           }
         ]

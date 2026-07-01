@@ -4,18 +4,26 @@ import { noopLogger, type Logger } from '../../src/types.js'
 export { noopLogger }
 
 export const stubRegistry: ProviderRegistry = {
-  languageModel() { return { model: {} as never } },
-  debugProviderConfig() { return {} as never },
+  languageModel() {
+    return { model: {} as never }
+  },
+  debugProviderConfig() {
+    return {} as never
+  },
 }
 
 export function createCapturingLogger() {
   const capturedLogs: unknown[] = []
   const logger: Logger = {
-    info(payload: unknown) { capturedLogs.push(payload) },
+    info(payload: unknown) {
+      capturedLogs.push(payload)
+    },
     warn() {},
     error() {},
     fatal() {},
-    child() { return logger },
+    child() {
+      return logger
+    },
   }
   return { logger, capturedLogs }
 }

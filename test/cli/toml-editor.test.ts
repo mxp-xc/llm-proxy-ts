@@ -32,10 +32,14 @@ describe('formatTomlBool', () => {
 
 describe('formatTableHeaderPath', () => {
   it('bare keys joined by dot', () => {
-    expect(formatTableHeaderPath(['model_providers', 'llm-proxy'])).toBe('model_providers.llm-proxy')
+    expect(formatTableHeaderPath(['model_providers', 'llm-proxy'])).toBe(
+      'model_providers.llm-proxy',
+    )
   })
   it('non-bare key quoted', () => {
-    expect(formatTableHeaderPath(['model_providers', 'weird id'])).toBe('model_providers."weird id"')
+    expect(formatTableHeaderPath(['model_providers', 'weird id'])).toBe(
+      'model_providers."weird id"',
+    )
   })
 })
 
@@ -45,8 +49,9 @@ describe('setTopLevelKey', () => {
   })
   it('replaces existing root key, preserves leading comment', () => {
     const content = '# my model\nmodel = "gpt-5"\n'
-    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2')))
-      .toBe('# my model\nmodel = "glm-5.2"\n')
+    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe(
+      '# my model\nmodel = "glm-5.2"\n',
+    )
   })
   it('inserts before first table with blank separator', () => {
     const content = '[model_providers.openai]\nname = "OpenAI"\n'
@@ -65,12 +70,18 @@ describe('setTopLevelKey', () => {
   })
   it('preserves CRLF line endings', () => {
     const content = 'model = "gpt-5"\r\n'
-    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe('model = "glm-5.2"\r\n')
+    expect(setTopLevelKey(content, 'model', formatTomlString('glm-5.2'))).toBe(
+      'model = "glm-5.2"\r\n',
+    )
   })
 })
 
 describe('setProviderTable', () => {
-  const fields = { name: 'LLM Proxy', base_url: 'http://127.0.0.1:8056/codex/v1', wire_api: 'responses' }
+  const fields = {
+    name: 'LLM Proxy',
+    base_url: 'http://127.0.0.1:8056/codex/v1',
+    wire_api: 'responses',
+  }
   it('appends new table at EOF with leading blank line', () => {
     const content = 'model = "glm-5.2"\n'
     const out = setProviderTable(content, 'llm-proxy', fields)
@@ -87,7 +98,8 @@ describe('setProviderTable', () => {
     expect(out).not.toContain('env_key')
   })
   it('stops at next table header', () => {
-    const content = '[model_providers.llm-proxy]\nname = "old"\n[model_providers.openai]\nname = "OpenAI"\n'
+    const content =
+      '[model_providers.llm-proxy]\nname = "old"\n[model_providers.openai]\nname = "OpenAI"\n'
     const out = setProviderTable(content, 'llm-proxy', fields)
     expect(out).toContain('[model_providers.openai]\nname = "OpenAI"')
     expect(out).not.toContain('name = "old"')
@@ -145,7 +157,8 @@ describe('readTopLevelKey', () => {
 
 describe('readProviderTableField', () => {
   it('reads field from target table', () => {
-    const content = '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://x/codex/v1"\n'
+    const content =
+      '[model_providers.llm-proxy]\nname = "LLM Proxy"\nbase_url = "http://x/codex/v1"\n'
     expect(readProviderTableField(content, 'llm-proxy', 'base_url')).toBe('http://x/codex/v1')
   })
   it('returns undefined when table missing', () => {

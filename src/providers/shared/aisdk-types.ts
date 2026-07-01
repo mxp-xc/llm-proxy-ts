@@ -4,11 +4,20 @@ import type { ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from
 export type ProtocolMessagePart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string; providerOptions?: Record<string, Record<string, unknown>> }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: Record<string, unknown> | string }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; output:
-      | { type: 'text'; value: string }
-      | { type: 'error-text'; value: string }
-      | { type: 'json'; value: unknown }   // json value 本质任意，属工具结果例外
+  | {
+      type: 'tool-call'
+      toolCallId: string
+      toolName: string
+      input: Record<string, unknown> | string
+    }
+  | {
+      type: 'tool-result'
+      toolCallId: string
+      toolName: string
+      output:
+        | { type: 'text'; value: string }
+        | { type: 'error-text'; value: string }
+        | { type: 'json'; value: unknown } // json value 本质任意，属工具结果例外
     }
 
 /** 协议映射器产生的消息 — 统一三种协议的消息表达 */
@@ -57,20 +66,81 @@ export type ProxyStreamPart =
   | { type: 'reasoning-start'; id: string; providerMetadata?: ProviderMetadata }
   | { type: 'reasoning-delta'; id: string; providerMetadata?: ProviderMetadata; text: string }
   | { type: 'reasoning-end'; id: string; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-input-start'; id: string; toolName: string; providerMetadata?: ProviderMetadata; providerExecuted?: boolean; dynamic?: boolean; title?: string }
+  | {
+      type: 'tool-input-start'
+      id: string
+      toolName: string
+      providerMetadata?: ProviderMetadata
+      providerExecuted?: boolean
+      dynamic?: boolean
+      title?: string
+    }
   | { type: 'tool-input-end'; id: string; providerMetadata?: ProviderMetadata }
   | { type: 'tool-input-delta'; id: string; delta: string; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown; providerMetadata?: ProviderMetadata; providerExecuted?: boolean; dynamic?: boolean }
-  | { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; providerMetadata?: ProviderMetadata }
-  | { type: 'tool-error'; toolCallId: string; toolName: string; input: unknown; error: unknown; providerMetadata?: ProviderMetadata; dynamic?: boolean }
-  | { type: 'tool-output-denied'; toolCallId: string; toolName: string; providerExecuted?: boolean; dynamic?: boolean }
-  | { type: 'tool-approval-request'; approvalId: string; toolCall: { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }; signature?: string }
-  | { type: 'source'; providerMetadata?: ProviderMetadata; sourceType: string; id?: string; url?: string; title?: string }
+  | {
+      type: 'tool-call'
+      toolCallId: string
+      toolName: string
+      input: unknown
+      providerMetadata?: ProviderMetadata
+      providerExecuted?: boolean
+      dynamic?: boolean
+    }
+  | {
+      type: 'tool-result'
+      toolCallId: string
+      toolName: string
+      output: unknown
+      providerMetadata?: ProviderMetadata
+    }
+  | {
+      type: 'tool-error'
+      toolCallId: string
+      toolName: string
+      input: unknown
+      error: unknown
+      providerMetadata?: ProviderMetadata
+      dynamic?: boolean
+    }
+  | {
+      type: 'tool-output-denied'
+      toolCallId: string
+      toolName: string
+      providerExecuted?: boolean
+      dynamic?: boolean
+    }
+  | {
+      type: 'tool-approval-request'
+      approvalId: string
+      toolCall: { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown }
+      signature?: string
+    }
+  | {
+      type: 'source'
+      providerMetadata?: ProviderMetadata
+      sourceType: string
+      id?: string
+      url?: string
+      title?: string
+    }
   | { type: 'file'; file: unknown; providerMetadata?: ProviderMetadata }
   | { type: 'start-step'; request: unknown; warnings: unknown[] }
-  | { type: 'finish-step'; response: unknown; usage: LanguageModelUsage; finishReason: FinishReason; rawFinishReason: string | undefined; providerMetadata: ProviderMetadata | undefined }
+  | {
+      type: 'finish-step'
+      response: unknown
+      usage: LanguageModelUsage
+      finishReason: FinishReason
+      rawFinishReason: string | undefined
+      providerMetadata: ProviderMetadata | undefined
+    }
   | { type: 'start' }
-  | { type: 'finish'; finishReason: FinishReason; rawFinishReason: string | undefined; totalUsage: LanguageModelUsage; response?: { id?: string; timestamp?: Date } }
+  | {
+      type: 'finish'
+      finishReason: FinishReason
+      rawFinishReason: string | undefined
+      totalUsage: LanguageModelUsage
+      response?: { id?: string; timestamp?: Date }
+    }
   | { type: 'abort'; reason?: string }
   | { type: 'error'; error: unknown }
   | { type: 'raw'; rawValue: unknown }

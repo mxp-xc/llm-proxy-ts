@@ -86,14 +86,19 @@ function resolveNamespacedToolName(
  *  （open_page→openPage、find_in_page→findInPage；search 不变），Codex 期望 snake_case，这里转回。 */
 function mapWebSearchAction(output: unknown): ResponseWebSearchAction | null {
   if (!output || typeof output !== 'object') return null
-  const o = output as { action?: { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string } }
+  const o = output as {
+    action?: { type?: string; query?: string; queries?: string[]; url?: string; pattern?: string }
+  }
   const a = o.action
   if (!a || typeof a.type !== 'string') return null
   const actionType: ResponseWebSearchAction['type'] =
-    a.type === 'openPage' ? 'open_page'
-    : a.type === 'findInPage' ? 'find_in_page'
-    : a.type === 'search' ? 'search'
-    : a.type as ResponseWebSearchAction['type']
+    a.type === 'openPage'
+      ? 'open_page'
+      : a.type === 'findInPage'
+        ? 'find_in_page'
+        : a.type === 'search'
+          ? 'search'
+          : (a.type as ResponseWebSearchAction['type'])
   const action: ResponseWebSearchAction = { type: actionType }
   if (a.query !== undefined) action.query = a.query
   if (a.queries !== undefined) action.queries = a.queries
@@ -161,7 +166,9 @@ export async function* renderOpenAIResponseSSE(input: {
   let fullReasoning = ''
   let reasoningItemId = ''
   let reasoningEncryptedContent: string | undefined
-  const streamedToolCalls: Array<ResponseFunctionToolCall | ResponseCustomToolCall | ResponseToolSearchCall> = []
+  const streamedToolCalls: Array<
+    ResponseFunctionToolCall | ResponseCustomToolCall | ResponseToolSearchCall
+  > = []
   // hosted web_search_call items: tracked separately so they appear in the final
   // output array but do NOT trigger 'incomplete' status (Fix 1). Hosted tools are
   // executed inline by the upstream and do not pause the Codex agent loop.
@@ -187,23 +194,43 @@ export async function* renderOpenAIResponseSSE(input: {
    *  content part is open. Replaces ~4 duplicated close-text blocks. */
   function* closeCurrentTextMessage(): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
     if (!contentPartStarted) return
-    yield { event: 'response.output_text.done', data: {
-      type: 'response.output_text.done',
-      sequence_number: nextSeq(),
-      item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-      text: fullText,
-    } }
-    yield { event: 'response.content_part.done', data: {
-      type: 'response.content_part.done',
-      sequence_number: nextSeq(),
-      item_id: currentMsgId, output_index: outputIndex, content_index: 0,
-      part: { type: 'output_text', text: fullText, annotations: [] },
-    } }
-    yield { event: 'response.output_item.done', data: {
-      type: 'response.output_item.done',
-      sequence_number: nextSeq(), output_index: outputIndex,
-      item: { id: currentMsgId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: fullText, annotations: [] }] },
-    } }
+    yield {
+      event: 'response.output_text.done',
+      data: {
+        type: 'response.output_text.done',
+        sequence_number: nextSeq(),
+        item_id: currentMsgId,
+        output_index: outputIndex,
+        content_index: 0,
+        text: fullText,
+      },
+    }
+    yield {
+      event: 'response.content_part.done',
+      data: {
+        type: 'response.content_part.done',
+        sequence_number: nextSeq(),
+        item_id: currentMsgId,
+        output_index: outputIndex,
+        content_index: 0,
+        part: { type: 'output_text', text: fullText, annotations: [] },
+      },
+    }
+    yield {
+      event: 'response.output_item.done',
+      data: {
+        type: 'response.output_item.done',
+        sequence_number: nextSeq(),
+        output_index: outputIndex,
+        item: {
+          id: currentMsgId,
+          type: 'message',
+          status: 'completed',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: fullText, annotations: [] }],
+        },
+      },
+    }
     outputIndex++
     outputItemStarted = false
     contentPartStarted = false
@@ -214,16 +241,29 @@ export async function* renderOpenAIResponseSSE(input: {
       // Start response on first part
       if (!responseStarted) {
         responseStarted = true
-        yield { event: 'response.created', data: {
-          type: 'response.created',
-          sequence_number: nextSeq(),
-          response: { id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000), model: input.model, status: 'in_progress', output: [] },
-        } }
-        yield { event: 'response.in_progress', data: {
-          type: 'response.in_progress',
-          sequence_number: nextSeq(),
-          response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
-        } }
+        yield {
+          event: 'response.created',
+          data: {
+            type: 'response.created',
+            sequence_number: nextSeq(),
+            response: {
+              id: responseId,
+              object: 'response',
+              created_at: Math.floor(Date.now() / 1000),
+              model: input.model,
+              status: 'in_progress',
+              output: [],
+            },
+          },
+        }
+        yield {
+          event: 'response.in_progress',
+          data: {
+            type: 'response.in_progress',
+            sequence_number: nextSeq(),
+            response: { id: responseId, object: 'response', status: 'in_progress', output: [] },
+          },
+        }
       }
 
       if (part.type === 'text-delta') {
@@ -232,32 +272,47 @@ export async function* renderOpenAIResponseSSE(input: {
         if (!outputItemStarted) {
           outputItemStarted = true
           const msgId = newMsgId()
-          yield { event: 'response.output_item.added', data: {
-            type: 'response.output_item.added',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: { id: msgId, type: 'message', status: 'in_progress', role: 'assistant', content: [] },
-          } }
-          yield { event: 'response.content_part.added', data: {
-            type: 'response.content_part.added',
-            sequence_number: nextSeq(),
-            item_id: msgId,
-            output_index: outputIndex,
-            content_index: 0,
-            part: { type: 'output_text', text: '', annotations: [] },
-          } }
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: msgId,
+                type: 'message',
+                status: 'in_progress',
+                role: 'assistant',
+                content: [],
+              },
+            },
+          }
+          yield {
+            event: 'response.content_part.added',
+            data: {
+              type: 'response.content_part.added',
+              sequence_number: nextSeq(),
+              item_id: msgId,
+              output_index: outputIndex,
+              content_index: 0,
+              part: { type: 'output_text', text: '', annotations: [] },
+            },
+          }
           contentPartStarted = true
         }
 
         fullText += delta
-        yield { event: 'response.output_text.delta', data: {
-          type: 'response.output_text.delta',
-          sequence_number: nextSeq(),
-          item_id: currentMsgId,
-          output_index: outputIndex,
-          content_index: 0,
-          delta,
-        } }
+        yield {
+          event: 'response.output_text.delta',
+          data: {
+            type: 'response.output_text.delta',
+            sequence_number: nextSeq(),
+            item_id: currentMsgId,
+            output_index: outputIndex,
+            content_index: 0,
+            delta,
+          },
+        }
       }
 
       if (part.type === 'reasoning-start') {
@@ -266,12 +321,15 @@ export async function* renderOpenAIResponseSSE(input: {
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield { event: 'response.output_item.added', data: {
-            type: 'response.output_item.added',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-          } }
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: { id: reasoningItemId, type: 'reasoning', summary: [] },
+            },
+          }
         }
       }
 
@@ -283,44 +341,58 @@ export async function* renderOpenAIResponseSSE(input: {
         if (!reasoningItemStarted) {
           reasoningItemStarted = true
           reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield { event: 'response.output_item.added', data: {
-            type: 'response.output_item.added',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-          } }
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: { id: reasoningItemId, type: 'reasoning', summary: [] },
+            },
+          }
         }
 
         fullReasoning += delta
-        yield { event: 'response.reasoning_summary_text.delta', data: {
-          type: 'response.reasoning_summary_text.delta',
-          sequence_number: nextSeq(),
-          item_id: reasoningItemId,
-          output_index: outputIndex,
-          delta,
-        } }
+        yield {
+          event: 'response.reasoning_summary_text.delta',
+          data: {
+            type: 'response.reasoning_summary_text.delta',
+            sequence_number: nextSeq(),
+            item_id: reasoningItemId,
+            output_index: outputIndex,
+            delta,
+          },
+        }
       }
 
       if (part.type === 'reasoning-end') {
         if (reasoningItemStarted) {
-          yield { event: 'response.reasoning_summary_text.done', data: {
-            type: 'response.reasoning_summary_text.done',
-            sequence_number: nextSeq(),
-            item_id: reasoningItemId,
-            output_index: outputIndex,
-            text: fullReasoning,
-          } }
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: {
-              id: reasoningItemId,
-              type: 'reasoning',
-              summary: [{ type: 'summary_text', text: fullReasoning }],
-              ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+          yield {
+            event: 'response.reasoning_summary_text.done',
+            data: {
+              type: 'response.reasoning_summary_text.done',
+              sequence_number: nextSeq(),
+              item_id: reasoningItemId,
+              output_index: outputIndex,
+              text: fullReasoning,
             },
-          } }
+          }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: reasoningItemId,
+                type: 'reasoning',
+                summary: [{ type: 'summary_text', text: fullReasoning }],
+                ...(reasoningEncryptedContent
+                  ? { encrypted_content: reasoningEncryptedContent }
+                  : {}),
+              },
+            },
+          }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
@@ -345,14 +417,40 @@ export async function* renderOpenAIResponseSSE(input: {
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
         const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
         const addedItem = isCustom
-          ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
+          ? {
+              id: fcId,
+              type: 'custom_tool_call' as const,
+              status: 'in_progress' as const,
+              call_id: toolCallId,
+              name: toolName,
+              input: '',
+            }
           : isTsShimmed
-            ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
-            : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, ...nsResolved, arguments: '' }
-        yield { event: 'response.output_item.added', data: {
-          type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
-          item: addedItem,
-        } }
+            ? {
+                id: fcId,
+                type: 'tool_search_call' as const,
+                status: 'in_progress' as const,
+                call_id: toolCallId,
+                execution: 'client' as const,
+                arguments: {},
+              }
+            : {
+                id: fcId,
+                type: 'function_call' as const,
+                status: 'in_progress' as const,
+                call_id: toolCallId,
+                ...nsResolved,
+                arguments: '',
+              }
+        yield {
+          event: 'response.output_item.added',
+          data: {
+            type: 'response.output_item.added',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: addedItem,
+          },
+        }
         toolCallStartEmitted.add(toolCallId)
       }
 
@@ -367,18 +465,31 @@ export async function* renderOpenAIResponseSSE(input: {
         if (toolSearchShimmed && isToolSearchShimmed(toolName, toolSearchShimmed)) continue
 
         toolCallsWithArgumentDeltas.add(toolCallId)
-        const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const fcId =
+          toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
         if (isCustomToolName(toolName, customToolNames)) {
-          yield { event: 'response.custom_tool_call_input.delta', data: {
-            type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
-            item_id: fcId, output_index: outputIndex, delta: argsDelta,
-          } }
+          yield {
+            event: 'response.custom_tool_call_input.delta',
+            data: {
+              type: 'response.custom_tool_call_input.delta',
+              sequence_number: nextSeq(),
+              item_id: fcId,
+              output_index: outputIndex,
+              delta: argsDelta,
+            },
+          }
         } else {
-          yield { event: 'response.function_call_arguments.delta', data: {
-            type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
-            item_id: fcId, output_index: outputIndex, delta: argsDelta,
-          } }
+          yield {
+            event: 'response.function_call_arguments.delta',
+            data: {
+              type: 'response.function_call_arguments.delta',
+              sequence_number: nextSeq(),
+              item_id: fcId,
+              output_index: outputIndex,
+              delta: argsDelta,
+            },
+          }
         }
       }
 
@@ -395,7 +506,8 @@ export async function* renderOpenAIResponseSSE(input: {
           continue
         }
 
-        const fcId = toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const fcId =
+          toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
         const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
@@ -407,66 +519,153 @@ export async function* renderOpenAIResponseSSE(input: {
         // decodeToolSearchInput 单独计算；custom/function 用字符串 args。
         const args = isCustom
           ? decodeCustomToolInput(rawArgs)
-          : (typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs))
+          : typeof rawArgs === 'string'
+            ? rawArgs
+            : JSON.stringify(rawArgs)
 
         if (!toolCallStartEmitted.has(toolCallId)) {
           const addedItem = isCustom
-            ? { id: fcId, type: 'custom_tool_call' as const, status: 'in_progress' as const, call_id: toolCallId, name: toolName, input: '' }
+            ? {
+                id: fcId,
+                type: 'custom_tool_call' as const,
+                status: 'in_progress' as const,
+                call_id: toolCallId,
+                name: toolName,
+                input: '',
+              }
             : isTsShimmed
-              ? { id: fcId, type: 'tool_search_call' as const, status: 'in_progress' as const, call_id: toolCallId, execution: 'client' as const, arguments: {} }
-              : { id: fcId, type: 'function_call' as const, status: 'in_progress' as const, call_id: toolCallId, ...nsResolved, arguments: '' }
-          yield { event: 'response.output_item.added', data: {
-            type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
-            item: addedItem,
-          } }
+              ? {
+                  id: fcId,
+                  type: 'tool_search_call' as const,
+                  status: 'in_progress' as const,
+                  call_id: toolCallId,
+                  execution: 'client' as const,
+                  arguments: {},
+                }
+              : {
+                  id: fcId,
+                  type: 'function_call' as const,
+                  status: 'in_progress' as const,
+                  call_id: toolCallId,
+                  ...nsResolved,
+                  arguments: '',
+                }
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: addedItem,
+            },
+          }
         }
 
         if (!toolCallsWithArgumentDeltas.has(toolCallId)) {
           if (isCustom) {
-            yield { event: 'response.custom_tool_call_input.delta', data: {
-              type: 'response.custom_tool_call_input.delta', sequence_number: nextSeq(),
-              item_id: fcId, output_index: outputIndex, delta: args,
-            } }
+            yield {
+              event: 'response.custom_tool_call_input.delta',
+              data: {
+                type: 'response.custom_tool_call_input.delta',
+                sequence_number: nextSeq(),
+                item_id: fcId,
+                output_index: outputIndex,
+                delta: args,
+              },
+            }
           } else if (!isTsShimmed) {
-            yield { event: 'response.function_call_arguments.delta', data: {
-              type: 'response.function_call_arguments.delta', sequence_number: nextSeq(),
-              item_id: fcId, output_index: outputIndex, delta: args,
-            } }
+            yield {
+              event: 'response.function_call_arguments.delta',
+              data: {
+                type: 'response.function_call_arguments.delta',
+                sequence_number: nextSeq(),
+                item_id: fcId,
+                output_index: outputIndex,
+                delta: args,
+              },
+            }
           }
         }
 
         if (isCustom) {
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: fcId, type: 'custom_tool_call', status: 'completed', call_id: toolCallId, name: toolName, input: args },
-          } }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: fcId,
+                type: 'custom_tool_call',
+                status: 'completed',
+                call_id: toolCallId,
+                name: toolName,
+                input: args,
+              },
+            },
+          }
           streamedToolCalls.push({
-            id: fcId, type: 'custom_tool_call', status: 'completed',
-            call_id: toolCallId, name: toolName, input: args,
+            id: fcId,
+            type: 'custom_tool_call',
+            status: 'completed',
+            call_id: toolCallId,
+            name: toolName,
+            input: args,
           })
         } else if (isTsShimmed) {
           const tsArgs = decodeToolSearchInput(rawArgs)
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-            item: { id: fcId, type: 'tool_search_call', status: 'completed', call_id: toolCallId, execution: 'client', arguments: tsArgs },
-          } }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: fcId,
+                type: 'tool_search_call',
+                status: 'completed',
+                call_id: toolCallId,
+                execution: 'client',
+                arguments: tsArgs,
+              },
+            },
+          }
           streamedToolCalls.push({
-            id: fcId, type: 'tool_search_call', status: 'completed',
-            call_id: toolCallId, execution: 'client', arguments: tsArgs,
+            id: fcId,
+            type: 'tool_search_call',
+            status: 'completed',
+            call_id: toolCallId,
+            execution: 'client',
+            arguments: tsArgs,
           })
         } else {
-          yield { event: 'response.function_call_arguments.done', data: {
-            type: 'response.function_call_arguments.done', sequence_number: nextSeq(),
-            item_id: fcId, output_index: outputIndex, arguments: args,
-          } }
-          const doneFunctionCall = {
-            id: fcId, type: 'function_call' as const, status: 'completed' as const,
-            call_id: toolCallId, ...nsResolved, arguments: args,
+          yield {
+            event: 'response.function_call_arguments.done',
+            data: {
+              type: 'response.function_call_arguments.done',
+              sequence_number: nextSeq(),
+              item_id: fcId,
+              output_index: outputIndex,
+              arguments: args,
+            },
           }
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-            item: doneFunctionCall,
-          } }
+          const doneFunctionCall = {
+            id: fcId,
+            type: 'function_call' as const,
+            status: 'completed' as const,
+            call_id: toolCallId,
+            ...nsResolved,
+            arguments: args,
+          }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: doneFunctionCall,
+            },
+          }
           streamedToolCalls.push(doneFunctionCall)
         }
         outputIndex++
@@ -478,15 +677,35 @@ export async function* renderOpenAIResponseSSE(input: {
         // 先关闭可能 in-progress 的 text message，避免 outputIndex 冲突。
         yield* closeCurrentTextMessage()
         const action = mapWebSearchAction(part.output)
-        yield { event: 'response.output_item.added', data: {
-          type: 'response.output_item.added', sequence_number: nextSeq(), output_index: outputIndex,
-          item: { id: part.toolCallId, type: 'web_search_call', status: 'in_progress', action: null },
-        } }
-        const wsCall: ResponseWebSearchCall = { id: part.toolCallId, type: 'web_search_call', status: 'completed', action }
-        yield { event: 'response.output_item.done', data: {
-          type: 'response.output_item.done', sequence_number: nextSeq(), output_index: outputIndex,
-          item: wsCall,
-        } }
+        yield {
+          event: 'response.output_item.added',
+          data: {
+            type: 'response.output_item.added',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: {
+              id: part.toolCallId,
+              type: 'web_search_call',
+              status: 'in_progress',
+              action: null,
+            },
+          },
+        }
+        const wsCall: ResponseWebSearchCall = {
+          id: part.toolCallId,
+          type: 'web_search_call',
+          status: 'completed',
+          action,
+        }
+        yield {
+          event: 'response.output_item.done',
+          data: {
+            type: 'response.output_item.done',
+            sequence_number: nextSeq(),
+            output_index: outputIndex,
+            item: wsCall,
+          },
+        }
         streamedHostedCalls.push(wsCall)
         outputIndex++
         hostedToolCallIds.delete(part.toolCallId)
@@ -494,24 +713,32 @@ export async function* renderOpenAIResponseSSE(input: {
 
       if (part.type === 'finish') {
         if (reasoningItemStarted) {
-          yield { event: 'response.reasoning_summary_text.done', data: {
-            type: 'response.reasoning_summary_text.done',
-            sequence_number: nextSeq(),
-            item_id: reasoningItemId,
-            output_index: outputIndex,
-            text: fullReasoning,
-          } }
-          yield { event: 'response.output_item.done', data: {
-            type: 'response.output_item.done',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: {
-              id: reasoningItemId,
-              type: 'reasoning',
-              summary: [{ type: 'summary_text', text: fullReasoning }],
-              ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+          yield {
+            event: 'response.reasoning_summary_text.done',
+            data: {
+              type: 'response.reasoning_summary_text.done',
+              sequence_number: nextSeq(),
+              item_id: reasoningItemId,
+              output_index: outputIndex,
+              text: fullReasoning,
             },
-          } }
+          }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: reasoningItemId,
+                type: 'reasoning',
+                summary: [{ type: 'summary_text', text: fullReasoning }],
+                ...(reasoningEncryptedContent
+                  ? { encrypted_content: reasoningEncryptedContent }
+                  : {}),
+              },
+            },
+          }
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
@@ -525,10 +752,18 @@ export async function* renderOpenAIResponseSSE(input: {
         const usage = extractUsageFromFinishPart(part)
         const finishResponse = part.response
 
-        const textOutput: ResponseOutputMessage[] = fullText !== '' ? [{
-          id: currentMsgId, type: 'message', status: 'completed', role: 'assistant',
-          content: [{ type: 'output_text', text: fullText, annotations: [] }],
-        }] : []
+        const textOutput: ResponseOutputMessage[] =
+          fullText !== ''
+            ? [
+                {
+                  id: currentMsgId,
+                  type: 'message',
+                  status: 'completed',
+                  role: 'assistant',
+                  content: [{ type: 'output_text', text: fullText, annotations: [] }],
+                },
+              ]
+            : []
 
         const completedResponse: OpenAIResponse = {
           id: finishResponse?.id ?? responseId,
@@ -553,75 +788,126 @@ export async function* renderOpenAIResponseSSE(input: {
           completedResponse.usage = {
             input_tokens: promptTokens,
             output_tokens: completionTokens,
-            total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
+            total_tokens: usage.totalTokens ?? promptTokens + completionTokens,
             input_tokens_details: { cached_tokens: usage.cacheReadTokens ?? 0 },
             output_tokens_details: { reasoning_tokens: usage.reasoningTokens ?? 0 },
           }
         }
 
-        yield { event: 'response.completed', data: {
-          type: 'response.completed',
-          sequence_number: nextSeq(),
-          response: completedResponse,
-        } }
+        yield {
+          event: 'response.completed',
+          data: {
+            type: 'response.completed',
+            sequence_number: nextSeq(),
+            response: completedResponse,
+          },
+        }
       }
 
       if (part.type === 'error') {
         const errorData = part.error
-        yield { event: 'response.error', data: {
-          type: 'response.error',
-          sequence_number: nextSeq(),
-          error: { type: 'server_error', message: toErrorMessage(errorData) },
-        } }
-        yield { event: 'response.completed', data: {
-          type: 'response.completed',
-          sequence_number: nextSeq(),
-          response: {
-            id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
-            model: input.model, status: 'incomplete', output: [], output_text: '',
-            instructions: null, temperature: null, top_p: null, tool_choice: null,
-            tools: [], parallel_tool_calls: true, truncation: 'disabled',
+        yield {
+          event: 'response.error',
+          data: {
+            type: 'response.error',
+            sequence_number: nextSeq(),
+            error: { type: 'server_error', message: toErrorMessage(errorData) },
           },
-        } }
+        }
+        yield {
+          event: 'response.completed',
+          data: {
+            type: 'response.completed',
+            sequence_number: nextSeq(),
+            response: {
+              id: responseId,
+              object: 'response',
+              created_at: Math.floor(Date.now() / 1000),
+              model: input.model,
+              status: 'incomplete',
+              output: [],
+              output_text: '',
+              instructions: null,
+              temperature: null,
+              top_p: null,
+              tool_choice: null,
+              tools: [],
+              parallel_tool_calls: true,
+              truncation: 'disabled',
+            },
+          },
+        }
         return
       }
 
       if (part.type === 'openai-error') {
         const errorData = part.body
-        yield { event: 'response.error', data: {
-          type: 'response.error',
-          sequence_number: nextSeq(),
-          error: { type: 'server_error', message: toErrorMessage(errorData) },
-        } }
-        yield { event: 'response.completed', data: {
-          type: 'response.completed',
-          sequence_number: nextSeq(),
-          response: {
-            id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
-            model: input.model, status: 'incomplete', output: [], output_text: '',
-            instructions: null, temperature: null, top_p: null, tool_choice: null,
-            tools: [], parallel_tool_calls: true, truncation: 'disabled',
+        yield {
+          event: 'response.error',
+          data: {
+            type: 'response.error',
+            sequence_number: nextSeq(),
+            error: { type: 'server_error', message: toErrorMessage(errorData) },
           },
-        } }
+        }
+        yield {
+          event: 'response.completed',
+          data: {
+            type: 'response.completed',
+            sequence_number: nextSeq(),
+            response: {
+              id: responseId,
+              object: 'response',
+              created_at: Math.floor(Date.now() / 1000),
+              model: input.model,
+              status: 'incomplete',
+              output: [],
+              output_text: '',
+              instructions: null,
+              temperature: null,
+              top_p: null,
+              tool_choice: null,
+              tools: [],
+              parallel_tool_calls: true,
+              truncation: 'disabled',
+            },
+          },
+        }
         return
       }
     }
   } catch (error) {
-    yield { event: 'response.error', data: {
-      type: 'response.error',
-      sequence_number: nextSeq(),
-      error: { type: 'server_error', message: toErrorMessage(error) },
-    } }
-    yield { event: 'response.completed', data: {
-      type: 'response.completed',
-      sequence_number: nextSeq(),
-      response: {
-        id: responseId, object: 'response', created_at: Math.floor(Date.now() / 1000),
-        model: input.model, status: 'incomplete', output: [], output_text: '',
-        instructions: null, temperature: null, top_p: null, tool_choice: null,
-        tools: [], parallel_tool_calls: true, truncation: 'disabled',
+    yield {
+      event: 'response.error',
+      data: {
+        type: 'response.error',
+        sequence_number: nextSeq(),
+        error: { type: 'server_error', message: toErrorMessage(error) },
       },
-    } }
+    }
+    yield {
+      event: 'response.completed',
+      data: {
+        type: 'response.completed',
+        sequence_number: nextSeq(),
+        response: {
+          id: responseId,
+          object: 'response',
+          created_at: Math.floor(Date.now() / 1000),
+          model: input.model,
+          status: 'incomplete',
+          output: [],
+          output_text: '',
+          instructions: null,
+          temperature: null,
+          top_p: null,
+          tool_choice: null,
+          tools: [],
+          parallel_tool_calls: true,
+          truncation: 'disabled',
+        },
+      },
+    }
     return
   }
 }
@@ -652,7 +938,7 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
           id: call.toolCallId,
           type: 'web_search_call',
           status: 'completed',
-          action: null,  // 非流式 generateText 无 tool-result 配对，action 未知
+          action: null, // 非流式 generateText 无 tool-result 配对，action 未知
         })
       } else if (isCustomToolName(call.toolName, customToolNames)) {
         output.push({
@@ -712,7 +998,8 @@ export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
     response.usage = {
       input_tokens: input.usage.inputTokens ?? 0,
       output_tokens: input.usage.outputTokens ?? 0,
-      total_tokens: input.usage.totalTokens ?? (input.usage.inputTokens ?? 0) + (input.usage.outputTokens ?? 0),
+      total_tokens:
+        input.usage.totalTokens ?? (input.usage.inputTokens ?? 0) + (input.usage.outputTokens ?? 0),
       input_tokens_details: { cached_tokens: input.usage.cacheReadTokens ?? 0 },
       output_tokens_details: { reasoning_tokens: input.usage.reasoningTokens ?? 0 },
     }

@@ -150,7 +150,14 @@ describe('buildCodexModelsResponse', () => {
         apiKey: 'k',
         headers: {},
         plugins: [],
-        models: { 'glm-5.1': { upstreamModel: 'glm-5.1', aliases: [{ name: 'g', flat: false }], headers: {}, plugins: [] } },
+        models: {
+          'glm-5.1': {
+            upstreamModel: 'glm-5.1',
+            aliases: [{ name: 'g', flat: false }],
+            headers: {},
+            plugins: [],
+          },
+        },
       },
     })
     const { models } = buildCodexModelsResponse(settings, CATALOG)

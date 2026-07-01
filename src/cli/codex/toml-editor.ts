@@ -28,7 +28,9 @@ export function formatTomlBool(value: boolean): string {
 
 /** Format an array of key segments as a TOML dotted table header path. */
 export function formatTableHeaderPath(segments: string[]): string {
-  return segments.map((s) => (isBareKey(s) ? s : `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)).join('.')
+  return segments
+    .map((s) => (isBareKey(s) ? s : `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`))
+    .join('.')
 }
 
 type FieldValue = string | boolean
@@ -190,7 +192,10 @@ export function setProviderTable(
 /** Strip surrounding TOML quotes/whitespace from a raw value token. */
 function normalizeValue(raw: string): string {
   const trimmed = raw.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
     return trimmed.slice(1, -1)
   }
   return trimmed

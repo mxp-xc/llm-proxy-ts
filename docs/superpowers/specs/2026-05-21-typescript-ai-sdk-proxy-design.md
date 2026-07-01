@@ -119,15 +119,15 @@ OpenAI-compatible client
   "service": {
     "name": "llm-proxy",
     "host": "127.0.0.1",
-    "port": 8000
+    "port": 8000,
   },
   "requestTimeoutMs": 30000,
   "proxy": {
     "url": "http://127.0.0.1:7890",
-    "verify": false
+    "verify": false,
   },
   "routing": {
-    "enableFlatModelLookup": false
+    "enableFlatModelLookup": false,
   },
   "providers": {
     "openrouter": {
@@ -136,7 +136,7 @@ OpenAI-compatible client
       "apiKey": "${OPENROUTER_API_KEY}",
       "headers": {
         "HTTP-Referer": "http://localhost",
-        "X-Title": "llm-proxy"
+        "X-Title": "llm-proxy",
       },
       "plugins": [
         {
@@ -144,26 +144,26 @@ OpenAI-compatible client
           "config": {
             "maxPreviewEvents": 3,
             "maxPreviewBytes": 65536,
-            "rateLimitCodes": ["rate_limit", "too_many_requests"]
-          }
-        }
+            "rateLimitCodes": ["rate_limit", "too_many_requests"],
+          },
+        },
       ],
       "models": {
         "deepseek-r1": {
           "upstreamModel": "deepseek/deepseek-r1",
           "aliases": ["default"],
           "headers": {},
-          "plugins": []
-        }
-      }
+          "plugins": [],
+        },
+      },
     },
     "example-inline-key": {
       "type": "openai-compatible",
       "baseURL": "https://api.example.com/v1",
       "apiKey": "ak-xxx",
-      "models": {}
-    }
-  }
+      "models": {},
+    },
+  },
 }
 ```
 
@@ -319,13 +319,13 @@ OpenAI function tools 是首版核心能力。代理只负责协议转换和模�
 
 ```ts
 interface ProxyPlugin {
-  name: string;
+  name: string
 
-  beforeRequest?(ctx: PluginContext): Promise<void | PluginResponse>;
-  beforeProviderCall?(ctx: PluginContext): Promise<void | ProviderCallPatch>;
-  afterProviderResult?(ctx: PluginContext): Promise<void | ProviderResultPatch>;
-  inspectStreamChunk?(ctx: PluginContext): Promise<void | PluginResponse>;
-  mapProviderError?(ctx: PluginContext): Promise<void | PluginResponse>;
+  beforeRequest?(ctx: PluginContext): Promise<void | PluginResponse>
+  beforeProviderCall?(ctx: PluginContext): Promise<void | ProviderCallPatch>
+  afterProviderResult?(ctx: PluginContext): Promise<void | ProviderResultPatch>
+  inspectStreamChunk?(ctx: PluginContext): Promise<void | PluginResponse>
+  mapProviderError?(ctx: PluginContext): Promise<void | PluginResponse>
 }
 ```
 
