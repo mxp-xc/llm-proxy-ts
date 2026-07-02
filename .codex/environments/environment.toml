@@ -7,4 +7,5 @@ script = '''
 cd "$CODEX_WORKTREE_PATH"
 pnpm install
 node scripts/setup-settings.mjs
+codegraph init -i
 '''
