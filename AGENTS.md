@@ -11,8 +11,8 @@
 | 命令                                | 用途                                                       |
 | ----------------------------------- | ---------------------------------------------------------- |
 | `pnpm install`                      | 安装依赖                                                   |
-| `pnpm dev serve`                    | 启动开发服务器（tsx watch 热重载）                         |
-| `pnpm dev serve --no-watch`         | 启动服务器（无热重载）                                     |
+| `pnpm dev serve`                    | 启动开发服务器（默认无热重载）                             |
+| `pnpm dev serve --watch`            | 启动开发服务器（bun/tsx watch 热重载）                     |
 | `pnpm dev models sync`              | 交互式同步上游模型到配置文件                               |
 | `pnpm dev models sync -p <name>`    | 同步指定 provider（非交互）                                |
 | `pnpm dev models sync --dry-run`    | 预览变更，不写入                                           |
@@ -81,6 +81,12 @@ Client → Hono app
 ## TypeScript
 
 `tsconfig.base.json` 启用 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`noImplicitOverride`、`verbatimModuleSyntax`。**所有本地导入必须用 `.js` 扩展名**（ESM + `NodeNext`）。
+
+## 运行时
+
+- `pnpm dev` 用 **bun** 运行提速；`serve.ts` 优先 bun，未安装回退 tsx。
+- 代码仍以 **Node.js** 为目标：禁止导入 `bun:*`、使用 `Bun` 全局或 bun 内置模块，运行时能力只用 `node:*` 或已声明依赖。
+- `pnpm test` / `pnpm typecheck` 不受影响。
 
 ## 敏感数据
 
