@@ -16,7 +16,10 @@ afterAll(() => {
 })
 
 let dirCounter = 0
-function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOverrides?: Partial<Settings>) {
+function makeAppWithErrors(
+  gateway: ReturnType<typeof makeGateway>,
+  settingsOverrides?: Partial<Settings>,
+) {
   // 每次调用用独立子目录，避免测试间共享错误日志文件导致计数断言失败
   const tmpLogDir = join(tmpLogRoot, `t${dirCounter++}`)
   const settings = makeSettings(
@@ -27,7 +30,9 @@ function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOver
         apiKey: 'secret',
         headers: {},
         plugins: [],
-        models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
+        models: {
+          chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
+        },
       },
     },
     { requestTimeoutMs: 30000, ...settingsOverrides },
@@ -37,7 +42,10 @@ function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOver
     enabled: settings.errorLogging.enabled,
     maxBodyLength: settings.errorLogging.maxBodyLength,
   })
-  return { app: createApp({ settings, gateway, providerRegistry: stubRegistry, errorLogger }), tmpLogDir }
+  return {
+    app: createApp({ settings, gateway, providerRegistry: stubRegistry, errorLogger }),
+    tmpLogDir,
+  }
 }
 
 function readErrors(tmpLogDir: string): any[] {
@@ -135,7 +143,9 @@ describe('error logging integration — streaming', () => {
 
     expect(response.status).toBe(502)
     const records = readErrors(tmpLogDir)
-    const record = records.find((r) => r.phase === 'stream' && r.error.message === 'connection refused')
+    const record = records.find(
+      (r) => r.phase === 'stream' && r.error.message === 'connection refused',
+    )
     expect(record).toBeDefined()
     expect(record!.response).toEqual([])
   })

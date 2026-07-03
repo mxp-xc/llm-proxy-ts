@@ -5,7 +5,7 @@ name = "llm-proxy-ts"
 [setup]
 script = '''
 cd "$CODEX_WORKTREE_PATH"
-pnpm install
-node scripts/setup-settings.mjs
+bun install
+bun scripts/setup-settings.mjs
 codegraph init -i
 '''

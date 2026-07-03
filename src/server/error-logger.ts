@@ -14,8 +14,8 @@ export interface ErrorLogEntry {
   provider: string
   requestedModel: string
   actualModel: string
- error: { name: string; message: string; stack?: string }
- request: unknown
+  error: { name: string; message: string; stack?: string }
+  request: unknown
   response: unknown
 }
 
@@ -84,10 +84,7 @@ export class ErrorLogger {
         ...entry,
         timestamp: formatCNTimestamp(),
         request: truncateBody(entry.request, this.maxBodyLength),
-        response:
-          entry.response === null
-            ? null
-            : truncateBody(entry.response, this.maxBodyLength),
+        response: entry.response === null ? null : truncateBody(entry.response, this.maxBodyLength),
       }
       const line = JSON.stringify(record)
       mkdirSync(resolve(this.logDir), { recursive: true })

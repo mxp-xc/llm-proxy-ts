@@ -37,9 +37,7 @@ export interface AnthropicToolResultBlock {
 }
 
 export type AnthropicContentBlock =
-  | AnthropicTextBlock
-  | AnthropicToolUseBlock
-  | AnthropicToolResultBlock
+  AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock
 
 // ─── System Prompt ─────────────────────────────────────────────
 
@@ -77,19 +75,12 @@ export type AnthropicToolChoice =
 // ─── Thinking ──────────────────────────────────────────────────
 
 export type AnthropicThinking =
-  | { type: 'enabled'; budget_tokens: number }
-  | { type: 'adaptive' }
-  | { type: 'disabled' }
+  { type: 'enabled'; budget_tokens: number } | { type: 'adaptive' } | { type: 'disabled' }
 
 // ─── Stop Reason ───────────────────────────────────────────────
 
 export type AnthropicStopReason =
-  | 'end_turn'
-  | 'max_tokens'
-  | 'stop_sequence'
-  | 'tool_use'
-  | 'pause_turn'
-  | 'refusal'
+  'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | 'pause_turn' | 'refusal'
 
 // ─── Response（非流式）────────────────────────────────────────────
 
@@ -106,8 +97,7 @@ export interface AnthropicToolUseResponseBlock {
 }
 
 export type AnthropicResponseContentBlock =
-  | AnthropicTextResponseBlock
-  | AnthropicToolUseResponseBlock
+  AnthropicTextResponseBlock | AnthropicToolUseResponseBlock
 
 export interface AnthropicMessageResponse {
   id: string
@@ -184,8 +174,7 @@ export interface AnthropicSSEContentBlockDeltaJson {
 }
 
 export type AnthropicSSEContentBlockDelta =
-  | AnthropicSSEContentBlockDeltaText
-  | AnthropicSSEContentBlockDeltaJson
+  AnthropicSSEContentBlockDeltaText | AnthropicSSEContentBlockDeltaJson
 
 export interface AnthropicSSEContentBlockStop {
   type: 'content_block_stop'

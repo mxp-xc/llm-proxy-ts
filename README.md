@@ -5,13 +5,13 @@
 ## 快速开始
 
 ```bash
-pnpm install
+bun install
 cp config/settings.example.jsonc config/settings.jsonc
 # 编辑 config/settings.jsonc，填入上游 baseURL 和 apiKey
-pnpm dev serve
+bun dev serve
 ```
 
-自定义配置路径：`LLM_PROXY_SETTINGS_FILE=path/to/settings.jsonc pnpm dev serve`
+自定义配置路径：`LLM_PROXY_SETTINGS_FILE=path/to/settings.jsonc bun dev serve`
 
 ## API
 
@@ -32,21 +32,21 @@ pnpm dev serve
 
 ## CLI
 
-基于 Commander.js，通过 `pnpm dev <command>` 调用：
+基于 Commander.js，通过 `bun dev <command>` 调用：
 
-| 命令                             | 用途                                                   |
-| -------------------------------- | ------------------------------------------------------ |
-| `pnpm dev serve`                 | 启动开发服务器（默认 tsx watch 热重载）                |
-| `pnpm dev serve --no-watch`      | 启动服务器（无热重载）                                 |
-| `pnpm dev models sync`           | 交互式同步上游模型到配置文件                           |
-| `pnpm dev models sync -p <name>` | 同步指定 provider                                      |
-| `pnpm dev models sync --dry-run` | 预览变更，不写入                                       |
-| `pnpm dev models list`           | 列出已配置模型                                         |
-| `pnpm dev codex install`         | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
-| `pnpm test`                      | 运行全部测试                                           |
-| `pnpm test test/xxx.test.ts`     | 运行单个测试                                           |
-| `pnpm typecheck`                 | 类型检查                                               |
-| `pnpm generate:schema`           | 从 Zod schema 生成 `config/settings.schema.json`       |
+| 命令                            | 用途                                                   |
+| ------------------------------- | ------------------------------------------------------ |
+| `bun dev serve`                 | 启动开发服务器（默认 bun --watch 热重载）              |
+| `bun dev serve --no-watch`      | 启动服务器（无热重载）                                 |
+| `bun dev models sync`           | 交互式同步上游模型到配置文件                           |
+| `bun dev models sync -p <name>` | 同步指定 provider                                      |
+| `bun dev models sync --dry-run` | 预览变更，不写入                                       |
+| `bun dev models list`           | 列出已配置模型                                         |
+| `bun dev codex install`         | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
+| `bun run test`                  | 运行全部测试                                           |
+| `bun run test test/xxx.test.ts` | 运行单个测试                                           |
+| `bun run typecheck`             | 类型检查                                               |
+| `bun run generate:schema`       | 从 Zod schema 生成 `config/settings.schema.json`       |
 
 ## 配置
 

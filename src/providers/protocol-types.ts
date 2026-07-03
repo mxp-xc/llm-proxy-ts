@@ -3,13 +3,7 @@
  */
 
 export type FinishReason =
-  | 'stop'
-  | 'length'
-  | 'content-filter'
-  | 'tool-calls'
-  | 'error'
-  | 'other'
-  | undefined
+  'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other' | undefined
 
 /** namespace 工具拍平名 → 原始 {namespace, name} 映射条目。
  *  namespace 为 undefined 表示顶层 function（无 namespace 包裹）。 */

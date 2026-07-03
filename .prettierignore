@@ -1,4 +1,5 @@
 node_modules
 dist
 *.min.js
-pnpm-lock.yaml
+bun.lock
+docs/superpowers/

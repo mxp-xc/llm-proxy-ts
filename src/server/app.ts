@@ -74,11 +74,13 @@ export function createApp({
     settings,
     gateway,
     resolveModel,
-    errorLogger: errorLogger ?? new ErrorLogger({
-      logDir: LOG_DIR,
-      enabled: settings.errorLogging.enabled,
-      maxBodyLength: settings.errorLogging.maxBodyLength,
-    }),
+    errorLogger:
+      errorLogger ??
+      new ErrorLogger({
+        logDir: LOG_DIR,
+        enabled: settings.errorLogging.enabled,
+        maxBodyLength: settings.errorLogging.maxBodyLength,
+      }),
   }
 
   // settings 不可变(无 hot-reload),listModels 结果仅依赖 settings。

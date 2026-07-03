@@ -30,7 +30,7 @@
       // Template slug from codex bundled catalog (fallback: first supported_in_api entry).
       // "templateSlug": "gpt-5.4",
     },
-    // Codex install config (pnpm dev codex install → ~/.codex/config.toml):
+    // Codex install config (bun dev codex install → ~/.codex/config.toml):
     "install": {
       // Provider id in [model_providers.<id>] table; also written as model_provider.
       // "providerId": "llm-proxy",

@@ -7,9 +7,6 @@ build/
 coverage/
 *.tsbuildinfo
 
-# Package manager files
-.pnpm-store/
-
 # Local configuration and secrets
 .env
 .env.*
@@ -25,9 +22,6 @@ config/auth.json
 logs/
 *.pid
 npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # Test and tool caches
 .vitest/

@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { settingsSchema } from '../../src/config.js'
-import { ErrorLogger, getErrorLogFileName, type ErrorLogEntry } from '../../src/server/error-logger.js'
+import {
+  ErrorLogger,
+  getErrorLogFileName,
+  type ErrorLogEntry,
+} from '../../src/server/error-logger.js'
 import { cleanOldLogs } from '../../src/server/logging.js'
 
 let tmpLogDir: string

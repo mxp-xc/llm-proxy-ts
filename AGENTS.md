@@ -8,21 +8,21 @@
 
 ## 命令
 
-| 命令                                | 用途                                                       |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `pnpm install`                      | 安装依赖                                                   |
-| `pnpm dev serve`                    | 启动开发服务器（默认无热重载）                             |
-| `pnpm dev serve --watch`            | 启动开发服务器（bun/tsx watch 热重载）                     |
-| `pnpm dev models sync`              | 交互式同步上游模型到配置文件                               |
-| `pnpm dev models sync -p <name>`    | 同步指定 provider（非交互）                                |
-| `pnpm dev models sync --dry-run`    | 预览变更，不写入                                           |
-| `pnpm dev models list`              | 列出已配置模型                                             |
-| `pnpm dev codex install`            | 配置 Codex CLI（写 `~/.codex/config.toml`，多选+搜索模型） |
-| `pnpm test`                         | 全部测试（Vitest，无网络）                                 |
-| `pnpm test test/xxx.test.ts`        | 运行单个测试                                               |
-| `pnpm typecheck`                    | `tsc --noEmit`                                             |
-| `pnpm generate:schema`              | 从 Zod schema 生成 `config/settings.schema.json`           |
-| `pnpm format` / `pnpm format:check` | Prettier 格式化 / 检查                                     |
+| 命令                                      | 用途                                                       |
+| ----------------------------------------- | ---------------------------------------------------------- |
+| `bun install`                             | 安装依赖                                                   |
+| `bun dev serve`                           | 启动开发服务器（默认无热重载）                             |
+| `bun dev serve --watch`                   | 启动开发服务器（bun --watch 热重载）                       |
+| `bun dev models sync`                     | 交互式同步上游模型到配置文件                               |
+| `bun dev models sync -p <name>`           | 同步指定 provider（非交互）                                |
+| `bun dev models sync --dry-run`           | 预览变更，不写入                                           |
+| `bun dev models list`                     | 列出已配置模型                                             |
+| `bun dev codex install`                   | 配置 Codex CLI（写 `~/.codex/config.toml`，多选+搜索模型） |
+| `bun run test`                            | 全部测试（Vitest，无网络）                                 |
+| `bun run test test/xxx.test.ts`           | 运行单个测试                                               |
+| `bun run typecheck`                       | `tsc --noEmit`                                             |
+| `bun run generate:schema`                 | 从 Zod schema 生成 `config/settings.schema.json`           |
+| `bun run format` / `bun run format:check` | Prettier 格式化 / 检查                                     |
 
 ## 架构
 
@@ -77,7 +77,7 @@ Client → Hono app
 - **Provider options 透传**：不在 `mappedRequestKeys` 内的未知字段作为 `providerOptions.{sdkType}` 转发，key 为 SDK 协议标识符（`openaiCompatible`、`anthropic`、`openai`），非用户配置的 provider 名称。openai-compatible 策略额外写一份 `providerOptions.openai`，使 `/v1/chat/completions` 路由到 openai-type provider 时 `@ai-sdk/openai` 能读到；部分已知字段（`parallel_tool_calls`、`reasoning` 等）显式做 snake_case→camelCase 转换后塞入。
 - **Logger DI**：`createProviderRegistry` 依赖注入 `Logger`，不耦合实现。
 - **Codex catalog 4 层覆盖**：`/codex/v1/models` 为每个模型 id 生成一条 ModelInfo——基底取 codex bundled catalog 中 `templateSlug` 对应条目，`slug`/`display_name` 固定为 id，再按 `settings.codex.models_catalog` → `provider.options.codex` → `model.codex` 三层 catalog override 覆盖。`templateSlug` 缺失时逐层 fallback，全缺省则动态取 catalog 首个 `supported_in_api` slug；`context_window` 缺失时按 `model.limit.context` → 各层 `codex.context_window` → `settings.codex.models_catalog.context_window`（默认 200000）fallback。`reasoning_effort`（模型属性，2 层 model + provider）在 catalog override 之前应用，映射到 `default_reasoning_level` / `supported_reasoning_levels`；raw catalog override 作为 escape hatch 可覆盖。`CodexCatalogCache` 在 `createApp` 作用域单例，禁 per-request new。
-- **Codex install 配置**：`settings.codex.install`（providerId 默认 `llm-proxy`、providerName 默认 `LLM Proxy`、requiresOpenaiAuth 默认 `false`、checkForUpdateOnStartup 默认 `false`）控制 `pnpm dev codex install` 写入 `~/.codex/config.toml` 的 provider table 与顶层 `check_for_update_on_startup`；默认模型的 `default_reasoning_level` 非空时写入 `model_reasoning_effort` 顶层 key。
+- **Codex install 配置**：`settings.codex.install`（providerId 默认 `llm-proxy`、providerName 默认 `LLM Proxy`、requiresOpenaiAuth 默认 `false`、checkForUpdateOnStartup 默认 `false`）控制 `bun dev codex install` 写入 `~/.codex/config.toml` 的 provider table 与顶层 `check_for_update_on_startup`；默认模型的 `default_reasoning_level` 非空时写入 `model_reasoning_effort` 顶层 key。
 - **错误日志**：`settings.errorLogging`（`enabled` 默认 `true`、`maxBodyLength` 默认 256KB）控制上游异常时的完整入参+出参落盘。`executeUpstream` 在流式（含 streamOnly）、非流式三路径的 `handleUpstreamError` 及流消费 `onError` 中触发 `ErrorLogger.log()`，排除 400/404/429/503（OAuthError）。流式路径用内联 IIFE async generator 缓冲 chunk 引用（`enabled` 为 `false` 时跳过，零开销），出错时连同入参写入 `logs/errors-YYYY-MM-DD.ndjson`（中国时区日期，30 天轮转）。`ErrorPhase` 类型与 `normalizeErrorForLog` 函数由 `error-logger.ts` 拥有。`ErrorLogger` 在 `createApp` 作用域单例，通过 `AppDependencies` 注入。
 
 ## TypeScript
@@ -86,9 +86,9 @@ Client → Hono app
 
 ## 运行时
 
-- `pnpm dev` 用 **bun** 运行提速；`serve.ts` 优先 bun，未安装回退 tsx。
-- 代码仍以 **Node.js** 为目标：禁止导入 `bun:*`、使用 `Bun` 全局或 bun 内置模块，运行时能力只用 `node:*` 或已声明依赖。
-- `pnpm test` / `pnpm typecheck` 不受影响。
+- 包管理与运行时统一用 **bun**：`bun install` 装依赖，`bun dev <command>` 跑 CLI，`bun dev serve --watch` 热重载。
+- 代码仍以 Node 兼容 API 为目标（`node:*` 模块、`@hono/node-server`）：禁止导入 `bun:*`、使用 `Bun` 全局或 bun 内置模块，运行时能力只用 `node:*` 或已声明依赖。
+- `bun run test`（vitest）/ `bun run typecheck`（tsc）。
 
 ## 敏感数据
 
