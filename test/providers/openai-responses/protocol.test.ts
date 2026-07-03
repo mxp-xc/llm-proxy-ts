@@ -237,7 +237,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
         tools: [{ type: 'web_search', external_web_access: true }],
         tool_choice: { type: 'function', name: 'web_search' },
       },
-      { providerType: 'openai' },
+      'openai',
     )
     expect(result.toolChoice).toBe('auto')
   })
@@ -526,7 +526,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai' },
+      'openai',
     )
     expect(Object.keys(result.tools!).sort()).toEqual(['apply_patch', 'shell_command'])
   })
@@ -545,7 +545,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeDefined()
     expect(Object.keys(result.tools!)).toEqual(['apply_patch'])
@@ -570,7 +570,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(Object.keys(result.tools!)).toEqual(['my_grammar_tool'])
     expect(result.tools!['my_grammar_tool']!.description).toContain('my tool')
@@ -591,7 +591,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           { type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.messages[0]).toEqual({
       role: 'assistant',
@@ -619,7 +619,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai' },
+      'openai',
     )
     expect(result.messages[0]).toEqual({
       role: 'assistant',
@@ -643,7 +643,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           { type: 'tool_search_output', call_id: 'ts_1', tools: [{ name: 'open_page' }] },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.messages[0]).toEqual({
       role: 'assistant',
@@ -683,7 +683,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai' },
+      'openai',
     )
     expect(Object.keys(result.tools!).sort()).toEqual(['shell_command', 'web_search'])
   })
@@ -695,7 +695,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
         input: 'hi',
         tools: [{ type: 'web_search', external_web_access: true }],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeUndefined()
   })
@@ -714,7 +714,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai' },
+      'openai',
     )
     expect(Object.keys(result.tools!)).toEqual(['tool_search'])
   })
@@ -733,7 +733,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeDefined()
     expect(Object.keys(result.tools!)).toEqual(['tool_search'])
@@ -747,7 +747,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
         input: 'hi',
         tools: [{ type: 'tool_search', execution: 'server' }],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeUndefined()
   })
@@ -930,7 +930,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
             { type: 'function_call_output', call_id: 'call_1', output: '{"agent_id":"a1"}' },
           ],
         },
-        { providerType: 'openai-compatible' },
+        'openai-compatible',
       )
       expect(result.messages[0]).toEqual({
         role: 'assistant',
@@ -965,7 +965,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
             { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
           ],
         },
-        { providerType: 'openai-compatible' },
+        'openai-compatible',
       )
       expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe(
         'exec_command',
@@ -988,7 +988,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
             { type: 'custom_tool_call_output', call_id: 'call_1', output: 'ok' },
           ],
         },
-        { providerType: 'openai-compatible' },
+        'openai-compatible',
       )
       expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe(
         'custom_ns__my_patch',
@@ -1010,7 +1010,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
             { type: 'function_call_output', call_id: 'call_1', output: '{}' },
           ],
         },
-        { providerType: 'openai-compatible' },
+        'openai-compatible',
       )
       expect((result.messages[0]!.content as Array<{ toolName: string }>)[0]!.toolName).toBe(
         'mcp__codegraph__codegraph_search',
@@ -1160,7 +1160,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeDefined()
     expect(Object.keys(result.tools!)).toContain('multi_agent_v1__spawn_agent')
@@ -1196,7 +1196,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(Object.keys(result.tools!).filter((k) => k === 'ns__fn').length).toBe(1)
   })
@@ -1220,7 +1220,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
         ],
         tools: [{ type: 'function', name: 'shell', parameters: { type: 'object' } }],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     // 初始 request.tools 在前，发现的 namespace 工具追加末尾（保缓存前缀稳定）
     expect(Object.keys(result.tools!)).toEqual(['shell', 'multi_agent_v1__spawn_agent'])
@@ -1245,7 +1245,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
           },
         ],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(Object.keys(result.tools!)).toEqual(['multi_agent_v1__spawn_agent'])
   })
@@ -1256,7 +1256,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
         model: 'gpt-5',
         input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [] }],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeUndefined()
   })
@@ -1269,7 +1269,7 @@ describe('tool_search_output discovered tools → tools[]', () => {
         model: 'gpt-5',
         input: [{ type: 'tool_search_output', call_id: 'ts_1', tools: [{ name: 'open_page' }] }],
       },
-      { providerType: 'openai-compatible' },
+      'openai-compatible',
     )
     expect(result.tools).toBeUndefined()
   })

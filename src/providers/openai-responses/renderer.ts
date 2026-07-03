@@ -17,6 +17,7 @@ import type {
   OpenAIResponse,
   OpenAIResponseStreamEvent,
 } from './types.js'
+import type { ResponsesEnrichment } from './types.js'
 
 export type {
   ResponseOutputText,
@@ -140,14 +141,12 @@ function decodeToolSearchInput(raw: unknown): Record<string, unknown> {
 
 // ─── Streaming SSE Renderer ───────────────────────────────────
 
-export async function* renderOpenAIResponseSSE(input: {
-  model: string
-  stream: AsyncIterable<ProxyStreamPart>
-  customToolNames?: Set<string>
-  customToolShimmed?: boolean
-  toolSearchShimmed?: boolean
-  namespaceFlatMap?: NamespaceFlatMap
-}): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
+export async function* renderOpenAIResponseSSE(
+  input: {
+    model: string
+    stream: AsyncIterable<ProxyStreamPart>
+  } & ResponsesEnrichment,
+): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
   const responseId = `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`
   let currentMsgId = `msg_${randomUUID().replace(/-/g, '').slice(0, 24)}`
 
@@ -914,7 +913,9 @@ export async function* renderOpenAIResponseSSE(input: {
 
 // ─── Non-Streaming Renderer ───────────────────────────────────
 
-export function renderOpenAIResponse(input: RenderResultInput): OpenAIResponse {
+export function renderOpenAIResponse(
+  input: RenderResultInput & ResponsesEnrichment,
+): OpenAIResponse {
   const output: ResponseOutputItem[] = []
   const customToolNames = input.customToolNames
   const customToolShimmed = input.customToolShimmed

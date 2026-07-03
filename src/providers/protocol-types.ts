@@ -41,16 +41,6 @@ export interface RenderResultInput {
     input: unknown
     providerExecuted?: boolean
   }>
-  /** 请求侧声明的 custom grammar tool（type:'custom'）名称集合。
-   *  供 openai-responses renderer 判别 custom_tool_call；其他 renderer 忽略。 */
-  customToolNames?: Set<string>
-  /** custom tool 是否被 shimmed 为 function tool（openai-compatible provider）。 */
-  customToolShimmed?: boolean
-  /** tool_search(client) 是否被 shimmed 为 function tool（openai-compatible provider）。 */
-  toolSearchShimmed?: boolean
-  /** namespace 拍平映射：把 GLM 返回的拍平 toolName 拆回 {name, namespace}。
-   *  仅 openai-responses renderer 使用；其他 renderer 忽略。 */
-  namespaceFlatMap?: NamespaceFlatMap
 }
 
 /**

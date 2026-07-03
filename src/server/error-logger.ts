@@ -4,13 +4,13 @@ import { redact, logger as fallbackLogger } from './logging.js'
 
 export const ERROR_LOG_RETENTION_DAYS = 30
 
-/** 错误日志记录的 phase，复用 handle-protocol 的 ErrorPhase */
-export type ErrorLogPhase = 'stream' | 'stream-only' | 'generate'
+/** 错误日志记录的 phase — 由 error-logger 拥有,handle-protocol 导入 */
+export type ErrorPhase = 'stream' | 'stream-only' | 'generate'
 
 export interface ErrorLogEntry {
   timestamp: string
   requestId: string
-  phase: ErrorLogPhase
+  phase: ErrorPhase
   provider: string
   requestedModel: string
   actualModel: string
@@ -96,5 +96,14 @@ export class ErrorLogger {
     } catch (err) {
       fallbackLogger.error({ err }, 'error log write failed')
     }
+  }
+}
+
+/** 将任意错误值安全转换为 ErrorLogEntry.error 形状 */
+export function normalizeErrorForLog(error: unknown): ErrorLogEntry['error'] {
+  return {
+    name: error instanceof Error ? error.name : 'Error',
+    message: error instanceof Error ? error.message : String(error),
+    ...(error instanceof Error && error.stack && { stack: error.stack }),
   }
 }

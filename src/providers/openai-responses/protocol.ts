@@ -1,11 +1,6 @@
 import { type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
-import type {
-  AISDKInput,
-  MappingContext,
-  ProtocolMessage,
-  ProtocolMessagePart,
-} from '../shared/aisdk-types.js'
+import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 import { isRecord, type NamespaceFlatMap } from '../protocol-types.js'
 import { z } from 'zod/v3'
@@ -330,7 +325,7 @@ const mappedResponsesRequestKeys = new Set([
 
 export function mapResponsesRequestToAISDKInput(
   request: OpenAIResponsesRequest,
-  ctx?: MappingContext,
+  providerType?: string,
 ): AISDKInput {
   const messages: ProtocolMessage[] = []
   const systemParts: string[] = []
@@ -396,7 +391,7 @@ export function mapResponsesRequestToAISDKInput(
           input: string | Record<string, unknown>
         }
         callIdToName.set(ctc.call_id, flattenToolName(ctc.name, ctc.namespace))
-        const isShimmed = ctx?.providerType !== 'openai'
+        const isShimmed = providerType !== 'openai'
         const rawInput = ctc.input
         const mappedInput =
           isShimmed && typeof rawInput === 'string' ? { input: rawInput } : rawInput
@@ -513,7 +508,7 @@ export function mapResponsesRequestToAISDKInput(
         const fnTool = tool as ResponsesFunctionTool
         toolSet[fnTool.name] = mapResponsesFunctionTool(fnTool)
         selectableToolNames.add(fnTool.name)
-      } else if (ctx?.providerType === 'openai' && tool.type === 'custom') {
+      } else if (providerType === 'openai' && tool.type === 'custom') {
         // apply_patch 等 custom grammar tool：@ai-sdk/openai customTool 透传（仅 openai provider，
         // openai-compatible 会丢弃 provider tool）。必须保持 type:'custom'，不可降级为 function tool
         // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
@@ -530,7 +525,7 @@ export function mapResponsesRequestToAISDKInput(
           toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
           selectableToolNames.add(customTool.name)
         }
-      } else if (ctx?.providerType !== 'openai' && tool.type === 'custom') {
+      } else if (providerType !== 'openai' && tool.type === 'custom') {
         const customTool = tool as { name?: string; description?: string; format?: unknown }
         if (customTool.name) {
           toolSet[customTool.name] = shimCustomToolAsFunction(customTool)
@@ -553,7 +548,7 @@ export function mapResponsesRequestToAISDKInput(
             selectableToolNames.add(flatName)
           }
         }
-      } else if (ctx?.providerType === 'openai' && tool.type === 'web_search') {
+      } else if (providerType === 'openai' && tool.type === 'web_search') {
         // web_search hosted tool：@ai-sdk/openai webSearch helper 透传（仅 openai provider，
         // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
         // 已知限制：helper schema 不认 search_content_types / index_gated_web_access，被丢弃。
@@ -594,7 +589,7 @@ export function mapResponsesRequestToAISDKInput(
           args.userLocation = userLocation
         }
         toolSet['web_search'] = openai.tools.webSearch(args) as ToolSet[string]
-      } else if (ctx?.providerType === 'openai' && tool.type === 'tool_search') {
+      } else if (providerType === 'openai' && tool.type === 'tool_search') {
         // tool_search hosted tool：@ai-sdk/openai toolSearch helper 透传（仅 openai provider，
         // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
         const tsTool = tool as {
@@ -609,7 +604,7 @@ export function mapResponsesRequestToAISDKInput(
         if (tsTool.description !== undefined) args.description = tsTool.description
         if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
         toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
-      } else if (ctx?.providerType !== 'openai' && tool.type === 'tool_search') {
+      } else if (providerType !== 'openai' && tool.type === 'tool_search') {
         const tsTool = tool as {
           execution?: string
           description?: string

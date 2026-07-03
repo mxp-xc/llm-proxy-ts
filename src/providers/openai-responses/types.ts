@@ -1,3 +1,5 @@
+import type { NamespaceFlatMap } from '../protocol-types.js'
+
 export interface ResponseOutputText {
   type: 'output_text'
   text: string
@@ -301,3 +303,11 @@ export type OpenAIResponseStreamEvent =
   | ResponseCustomToolCallInputDeltaEvent
   | ResponseCompletedEvent
   | ResponseErrorEvent
+
+/** openai-responses 专属 enrichment，由策略内部计算后传入 renderer。 */
+export type ResponsesEnrichment = {
+  customToolNames?: Set<string>
+  customToolShimmed?: boolean
+  toolSearchShimmed?: boolean
+  namespaceFlatMap?: NamespaceFlatMap
+}

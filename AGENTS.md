@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-`llm-proxy-ts` 是本地优先的 LLM 协议转换代理。核心能力：将上游 provider（无论其原生协议）同时以多种下游协议格式暴露——同一个上游可以同时提供 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 等 API。通过 Vercel AI SDK 统一调用上游，再由各协议的 renderer 渲染成对应格式返回客户端。新增协议只需实现 `ProtocolStrategy` 接口：必填成员 `validate`、`validationMessage`、`getModel`、`isStream`、`mapToAISDKInput`、`renderResult`、`renderStreamSSE`、`formatErrors`，可选成员 `getCustomToolNames`、`getHasClientToolSearch`、`getNamespaceFlatMap`（后三个仅 openai-responses 实现）。
+`llm-proxy-ts` 是本地优先的 LLM 协议转换代理。核心能力：将上游 provider（无论其原生协议）同时以多种下游协议格式暴露——同一个上游可以同时提供 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 等 API。通过 Vercel AI SDK 统一调用上游，再由各协议的 renderer 渲染成对应格式返回客户端。新增协议只需实现 `ProtocolStrategy` 接口：必填成员 `validate`、`validationMessage`、`getModel`、`isStream`、`mapToAISDKInput`、`renderResult`、`renderStreamSSE`、`formatErrors`，可选成员 `prepareEnrichment`（仅 openai-responses 实现，计算 custom tool / tool_search / namespace 等策略专属 enrichment，返回不透明对象由编排器原样透传给 render 函数）。
 
 ## 命令
 
@@ -28,7 +28,7 @@
 
 ### 请求流程
 
-三个 `/v1` 端点共享 `handleProtocolRequest`，通过 `ProtocolStrategy` 策略接口区分协议特定的验证、映射、渲染和错误格式化：
+`handleProtocolRequest` 负责验证、路由、模型解析，然后将执行委托给内部函数 `executeUpstream`（stream / streamOnly / generate 三分支在此内部选择）。通过 `ProtocolStrategy` 策略接口区分协议特定的验证、映射、渲染和错误格式化：
 
 ```
 Client → Hono app
@@ -46,7 +46,7 @@ Client → Hono app
 
 ### 核心模块
 
-- **`src/server/`** — Hono HTTP 服务器。`app.ts` 定义路由并组装 `createApp()`，`handle-protocol.ts` 通用请求处理（`ProtocolContext` 携带 `routingTable`/`settings`/`gateway`/`resolveModel`/`errorLogger`），`gateway.ts` 流规范化（`normalizeStream`/`defaultGateway`），`stream-inspect.ts` 首包插件检查，`stream-utils.ts` 请求超时（`withRequestTimeout`/`RequestTimeoutError`）与异步迭代转流，`logging.ts` pino logger 工厂与日志脱敏（`cleanOldLogs` 同时清理 7 天普通日志与 30 天错误日志），`error-logger.ts` 错误日志落盘（NDJSON，截断+脱敏），`tee-stream.ts` 流式 chunk 缓冲包装器（错误日志用），`types.ts` 定义 `ModelGateway`/`AppDependencies`/`AppEnv`，`server.ts` 生产启动入口（加载 settings、插件、OAuth、`serve`、后台刷新 auth 状态），`oauth/` 回调路由与启动期状态刷新。`createApp()` 的 `AppDependencies` 接受 `settings`（必填）及 `providerRegistry`、`gateway`、`logger`、`tokenManager`、`nonce`、`getAuthStatuses`、`pluginRegistry`、`authFilePath`、`codexCatalogCache`、`errorLogger` 覆盖——主要测试接缝，通过 `app.fetch()` 直接测试。
+- **`src/server/`** — Hono HTTP 服务器。`app.ts` 定义路由并组装 `createApp()`，`handle-protocol.ts` 通用请求处理（`handleProtocolRequest` 负责验证/路由/模型解析，委托给内部函数 `executeUpstream` 执行 stream/streamOnly/generate 三分支；`ProtocolContext` 携带 `routingTable`/`settings`/`gateway`/`resolveModel`/`errorLogger`），`gateway.ts` 流规范化（`normalizeStream`/`defaultGateway`），`stream-inspect.ts` 首包插件检查，`stream-utils.ts` 请求超时（`withRequestTimeout`/`RequestTimeoutError`）与异步迭代转流，`logging.ts` pino logger 工厂与日志脱敏（`cleanOldLogs` 同时清理 7 天普通日志与 30 天错误日志），`error-logger.ts` 错误日志落盘（NDJSON，截断+脱敏；同时拥有 `ErrorPhase` 类型与 `normalizeErrorForLog` 函数），`types.ts` 定义 `ModelGateway`/`AppDependencies`/`AppEnv`，`server.ts` 生产启动入口（加载 settings、插件、OAuth、`serve`、后台刷新 auth 状态），`oauth/` 回调路由与启动期状态刷新。`createApp()` 的 `AppDependencies` 接受 `settings`（必填）及 `providerRegistry`、`gateway`、`logger`、`tokenManager`、`nonce`、`getAuthStatuses`、`pluginRegistry`、`authFilePath`、`codexCatalogCache`、`errorLogger` 覆盖——主要测试接缝，通过 `app.fetch()` 直接测试。
 - **`src/providers/`** — Provider 注册表 + 协议策略，二者正交：**provider type**（`openai-compatible`、`anthropic`、`openai`）决定如何用 AI SDK 连上游（工厂），**protocol strategy**（`openaiCompatibleStrategy`、`openaiResponsesStrategy`、`anthropicStrategy`）决定下游请求/响应格式。`registry.ts` 按 `provider.type`（discriminated union）分派到工厂；`anthropic/`、`openai/` 各含 `provider.ts` 工厂，`openai-compatible/` 只有策略（工厂 `createOpenAICompatibleProvider` 在 `shared/provider-factory.ts`），`openai-responses/` 只有策略实现（无工厂，不创建 LanguageModel，复用 `RoutingTable` 解析出的任意 provider 类型的 LanguageModel）。每个策略目录含 `protocol.ts`（请求 schema + AI SDK 映射）、`renderer.ts`（响应渲染）、`strategy.ts`（策略实例）。`shared/` 放共享工厂（`provider-factory.ts`）、`ProtocolStrategy` 接口（`strategy.ts`）、错误格式化（`error-format.ts`）、渲染/映射/SSE/流收集工具（`renderer-utils.ts`/`protocol-utils.ts`/`sse-utils.ts`/`stream-collector.ts`）及 AI SDK 类型（`aisdk-types.ts`）。
 - **`src/routing.ts`** — model → provider 映射。
 - **`src/cli/`** — Commander.js v15 命令。子命令按目录组织（`serve.ts`、`models/`、`codex/`），每个目录 `index.ts` 导出 `createXxxCommand()`，`cli.ts` 仅 `addCommand` 聚合。业务逻辑保持框架无关。
@@ -69,6 +69,8 @@ Client → Hono app
 ## 关键设计决策
 
 - **Provider 类型与协议策略正交**：`providerConfigSchema` 用 `z.discriminatedUnion('type', [...])` 分派 3 种 provider type（连上游），protocol strategy 独立选择下游格式，任意端点可路由到任意 provider type。
+- **协议策略 seam 封闭**：`ProtocolStrategy` 接口仅含三个策略共享的契约；openai-responses 专属的 custom tool / tool_search / namespace 逻辑不泄漏到通用编排器，而是通过可选的 `prepareEnrichment(request, providerType)` 方法在策略内部计算，返回不透明 enrichment 对象由 `handleProtocolRequest` 原样透传给 `renderStreamSSE` / `renderResult`。`mapToAISDKInput` 接收裸 `providerType?: string`（非 `MappingContext` 对象），策略内部据此决定 tool 透传 vs shim。新增协议策略不继承 responses 的 baggage。
+- **请求编排收拢**：`handleProtocolRequest` 的三条执行路径（stream / streamOnly / generate）收拢到内部函数 `executeUpstream`，每条路径自行构造并返回 `Response`。acquireStream + 限流短路、tee 缓冲（内联 IIFE，非独立模块）、enrichment 透传、NDJSON 错误日志七字段组装（内部闭包 `logUpstreamError`）各只存在一处。pino `logger.error` 调用保留原位不统一（两处消息/形状不同）。`handleUpstreamError` 保持模块级 exported 函数不变。
 - **`${ENV_NAME}` 占位符**：仅匹配完整字符串（`^\$\{...\}$`），部分匹配不替换。
 - **OAuth fetch 组合**：OAuth → proxy → global 链式。OAuth 激活时 `apiKey` 设为 `oauth-placeholder` 绕过 SDK 校验，由 OAuth fetch 负责注入真实 `Authorization` 头并删除 SDK 自动添加的认证头。Token 刷新用 30 秒余量。启动时自动刷新过期 token，未认证 provider 打印登录 URL 不阻塞。
 - **Anthropic tool_choice**：始终对象格式（`{ type: 'auto' }`），不兼容裸字符串。
@@ -76,7 +78,7 @@ Client → Hono app
 - **Logger DI**：`createProviderRegistry` 依赖注入 `Logger`，不耦合实现。
 - **Codex catalog 4 层覆盖**：`/codex/v1/models` 为每个模型 id 生成一条 ModelInfo——基底取 codex bundled catalog 中 `templateSlug` 对应条目，`slug`/`display_name` 固定为 id，再按 `settings.codex.models_catalog` → `provider.options.codex` → `model.codex` 三层 catalog override 覆盖。`templateSlug` 缺失时逐层 fallback，全缺省则动态取 catalog 首个 `supported_in_api` slug；`context_window` 缺失时按 `model.limit.context` → 各层 `codex.context_window` → `settings.codex.models_catalog.context_window`（默认 200000）fallback。`reasoning_effort`（模型属性，2 层 model + provider）在 catalog override 之前应用，映射到 `default_reasoning_level` / `supported_reasoning_levels`；raw catalog override 作为 escape hatch 可覆盖。`CodexCatalogCache` 在 `createApp` 作用域单例，禁 per-request new。
 - **Codex install 配置**：`settings.codex.install`（providerId 默认 `llm-proxy`、providerName 默认 `LLM Proxy`、requiresOpenaiAuth 默认 `false`、checkForUpdateOnStartup 默认 `false`）控制 `pnpm dev codex install` 写入 `~/.codex/config.toml` 的 provider table 与顶层 `check_for_update_on_startup`；默认模型的 `default_reasoning_level` 非空时写入 `model_reasoning_effort` 顶层 key。
-- **错误日志**：`settings.errorLogging`（`enabled` 默认 `true`、`maxBodyLength` 默认 256KB）控制上游异常时的完整入参+出参落盘。`handleProtocolRequest` 在流式（含 streamOnly）、非流式三路径的 `handleUpstreamError` 及流消费 `onError` 中触发 `ErrorLogger.log()`，排除 400/404/429/503（OAuthError）。流式路径用 `teeStream` 缓冲 chunk 引用（`enabled` 为 `false` 时跳过，零开销），出错时连同入参写入 `logs/errors-YYYY-MM-DD.ndjson`（中国时区日期，30 天轮转）。`ErrorLogger` 在 `createApp` 作用域单例，通过 `AppDependencies` 注入。
+- **错误日志**：`settings.errorLogging`（`enabled` 默认 `true`、`maxBodyLength` 默认 256KB）控制上游异常时的完整入参+出参落盘。`executeUpstream` 在流式（含 streamOnly）、非流式三路径的 `handleUpstreamError` 及流消费 `onError` 中触发 `ErrorLogger.log()`，排除 400/404/429/503（OAuthError）。流式路径用内联 IIFE async generator 缓冲 chunk 引用（`enabled` 为 `false` 时跳过，零开销），出错时连同入参写入 `logs/errors-YYYY-MM-DD.ndjson`（中国时区日期，30 天轮转）。`ErrorPhase` 类型与 `normalizeErrorForLog` 函数由 `error-logger.ts` 拥有。`ErrorLogger` 在 `createApp` 作用域单例，通过 `AppDependencies` 注入。
 
 ## TypeScript
 

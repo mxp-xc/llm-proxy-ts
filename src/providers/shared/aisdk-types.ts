@@ -27,11 +27,6 @@ export type ProtocolMessage =
   | { role: 'system'; content: string }
   | { role: 'tool'; content: ProtocolMessagePart[] }
 
-export interface MappingContext {
-  /** 上游 provider 类型，决定非 function tool / reasoning 的透传策略 */
-  providerType: 'openai' | 'openai-compatible' | 'anthropic'
-}
-
 export interface AISDKInput {
   system?: string
   /** 协议映射器产生的消息 — 由 ProtocolMessage 判别联合统一三种协议的消息表达；
