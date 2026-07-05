@@ -281,6 +281,129 @@ describe('fetchUpstreamModels', () => {
   })
 })
 
+describe('fetchUpstreamModels with authMode=anthropic', () => {
+  const mockModelList = {
+    object: 'list',
+    data: [{ id: 'claude-3-5-sonnet', object: 'model', owned_by: 'anthropic' }],
+  }
+
+  let mockFetch: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockModelList),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('uses x-api-key and default anthropic-version headers with apiKey', async () => {
+    await fetchUpstreamModels({
+      baseURL: 'https://api.anthropic.com/v1',
+      apiKey: 'anthropic-key',
+      proxySettings: null,
+      authMode: 'anthropic',
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.anthropic.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-api-key': 'anthropic-key',
+          'anthropic-version': '2023-06-01',
+        }),
+      }),
+    )
+    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> })
+      .headers
+    expect(callHeaders['Authorization']).toBeUndefined()
+  })
+
+  it('uses Authorization Bearer with oauthToken (still sets anthropic-version)', async () => {
+    await fetchUpstreamModels({
+      baseURL: 'https://api.anthropic.com/v1',
+      apiKey: 'anthropic-key',
+      proxySettings: null,
+      oauthToken: { tokenType: 'Bearer', accessToken: 'oauth-token' },
+      authMode: 'anthropic',
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.anthropic.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer oauth-token',
+          'anthropic-version': '2023-06-01',
+        }),
+      }),
+    )
+    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> })
+      .headers
+    expect(callHeaders['x-api-key']).toBeUndefined()
+  })
+
+  it('uses custom anthropicVersion when provided', async () => {
+    await fetchUpstreamModels({
+      baseURL: 'https://api.anthropic.com/v1',
+      apiKey: 'anthropic-key',
+      proxySettings: null,
+      authMode: 'anthropic',
+      anthropicVersion: '2024-10-22',
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'anthropic-version': '2024-10-22',
+          'x-api-key': 'anthropic-key',
+        }),
+      }),
+    )
+  })
+
+  it('follows Anthropic pagination via has_more + last_id', async () => {
+    mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            object: 'list',
+            data: [{ id: 'm1', object: 'model' }],
+            has_more: true,
+            last_id: 'm1',
+          }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            object: 'list',
+            data: [{ id: 'm2', object: 'model' }],
+            has_more: false,
+            last_id: null,
+          }),
+      })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const models = await fetchUpstreamModels({
+      baseURL: 'https://api.anthropic.com/v1',
+      apiKey: 'key',
+      proxySettings: null,
+      authMode: 'anthropic',
+    })
+
+    expect(models.map((m) => m.id)).toEqual(['m1', 'm2'])
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+    expect(mockFetch.mock.calls[1]![0]).toBe('https://api.anthropic.com/v1/models?after_id=m1')
+  })
+})
+
 describe('openAIToDiscoveredModels', () => {
   it('converts OpenAIModel[] to DiscoveredModelList', () => {
     const openaiModels = [

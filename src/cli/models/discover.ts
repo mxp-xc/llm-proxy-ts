@@ -6,7 +6,8 @@ import type { DiscoveredModelList } from '../../plugins/types.js'
 /** 上游 /models 端点返回的单个模型对象（原始格式） */
 export interface UpstreamModelResponse {
   id: string
-  object: string
+  /** OpenAI 响应有此字段（'model'）；Anthropic /v1/models 响应不返回 */
+  object?: string
   created?: number
   owned_by?: string
   /** 上游扩展字段：总上下文窗口长度（如 OpenRouter） */
@@ -33,6 +34,10 @@ export function extractLimit(
 export interface UpstreamModelList {
   object: 'list'
   data: UpstreamModelResponse[]
+  /** Anthropic 分页：是否还有更多页（OpenAI 不返回此字段，单页即终） */
+  has_more?: boolean
+  /** Anthropic 分页：当前页最后一项 id，用作 after_id 游标 */
+  last_id?: string | null
 }
 
 export interface DiscoverModelsOptions {
@@ -46,6 +51,10 @@ export interface DiscoverModelsOptions {
   headers?: Record<string, string> | undefined
   /** 已解析的 OAuth token，优先于 apiKey 设置 Authorization */
   oauthToken?: { tokenType: string; accessToken: string } | undefined
+  /** 鉴权方案：'bearer'（OpenAI 系，默认）用 Authorization: Bearer；'anthropic' 用 x-api-key + anthropic-version */
+  authMode?: 'bearer' | 'anthropic'
+  /** anthropic-version header 值，仅 authMode='anthropic' 时生效，默认 '2023-06-01' */
+  anthropicVersion?: string | undefined
 }
 
 /**
@@ -67,9 +76,16 @@ export function resolveModelsUrl(baseURL: string, modelsEndpoint?: string): stri
   return `${base}${path}`
 }
 
+/** 给 URL 追加查询参数（用于 Anthropic 分页 after_id 游标） */
+function withQueryParam(baseUrl: string, key: string, value: string): string {
+  const u = new URL(baseUrl)
+  u.searchParams.set(key, value)
+  return u.toString()
+}
+
 /**
- * 从上游 OpenAI-compatible provider 获取可用模型列表。
- * 支持 OAuth token、自定义 headers 和自定义 models 端点。
+ * 从上游 provider 获取可用模型列表（OpenAI 协议 /models 端点）。
+ * 支持 OAuth token、自定义 headers、自定义 models 端点，以及 bearer / anthropic 两种鉴权方案。
  */
 export async function fetchUpstreamModels({
   baseURL,
@@ -79,6 +95,8 @@ export async function fetchUpstreamModels({
   modelsEndpoint,
   headers: providerHeaders,
   oauthToken,
+  authMode = 'bearer',
+  anthropicVersion,
 }: DiscoverModelsOptions): Promise<UpstreamModelResponse[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
@@ -87,33 +105,51 @@ export async function fetchUpstreamModels({
   // 1. 铺 provider 级静态 headers
   const headers: Record<string, string> = { ...providerHeaders }
 
-  // 2. 显式鉴权优先于静态 headers 中的 Authorization
+  // 2. 鉴权：OAuth token 两方案均走 Authorization: Bearer；否则 apiKey 按 authMode 写入
   if (oauthToken) {
     headers['Authorization'] = `${oauthToken.tokenType} ${oauthToken.accessToken}`
   } else if (apiKey) {
     const key = Array.isArray(apiKey) ? apiKey[0] : apiKey
     if (key) {
-      headers['Authorization'] = `Bearer ${key}`
+      if (authMode === 'anthropic') {
+        headers['x-api-key'] = key
+      } else {
+        headers['Authorization'] = `Bearer ${key}`
+      }
     }
   }
 
-  const url = resolveModelsUrl(baseURL, modelsEndpoint)
-  const response = await fetchFn(url, {
-    headers,
-    signal: AbortSignal.timeout(timeoutMs),
-  })
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText}`)
+  // 3. anthropic 方案需要 anthropic-version header
+  if (authMode === 'anthropic') {
+    headers['anthropic-version'] = anthropicVersion ?? '2023-06-01'
   }
 
-  const body = (await response.json()) as UpstreamModelList
+  // 4. 拉取模型列表；Anthropic /v1/models 用 has_more + last_id 分页，需循环取全（OpenAI 单页即终）
+  const baseUrl = resolveModelsUrl(baseURL, modelsEndpoint)
+  const collected: UpstreamModelResponse[] = []
+  let afterId: string | null = null
+  do {
+    const url = afterId ? withQueryParam(baseUrl, 'after_id', afterId) : baseUrl
+    const response = await fetchFn(url, {
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
 
-  if (!body.data || !Array.isArray(body.data)) {
-    throw new Error('Unexpected response format: missing data array')
-  }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`)
+    }
 
-  return body.data.sort((a, b) => a.id.localeCompare(b.id))
+    const body = (await response.json()) as UpstreamModelList
+
+    if (!body.data || !Array.isArray(body.data)) {
+      throw new Error('Unexpected response format: missing data array')
+    }
+
+    collected.push(...body.data)
+    afterId = body.has_more ? (body.last_id ?? null) : null
+  } while (afterId)
+
+  return collected.sort((a, b) => a.id.localeCompare(b.id))
 }
 
 /** 将 OpenAI 协议的模型列表转换为内部统一的 DiscoveredModel 格式 */

@@ -16,7 +16,6 @@ export interface ProviderModelsResult {
 
 export type DiscoverSkipReason =
   | 'plugin_failed'
-  | 'type_unsupported'
   | 'oauth_needs_login'
   | 'oauth_refresh_failed'
   | 'fetch_failed'
@@ -39,7 +38,7 @@ export interface DiscoverInput {
 /**
  * 纯函数：编排单个 provider 的模型发现。
  *
- * 优先 auth 插件 discoverModels → anthropic/openai 类型跳过 → HTTP fallback（含 OAuth token 解析）。
+ * 优先 auth 插件 discoverModels → HTTP fallback（含 OAuth token 解析），支持 openai-compatible / openai / anthropic 三种 provider type。
  * 不含任何 clack UI 调用，返回 discriminated union 供调用方决定文案。
  */
 export async function discoverProviderModels(input: DiscoverInput): Promise<DiscoverResult> {
@@ -80,18 +79,7 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
     }
   }
 
-  // 2. anthropic / openai 类型不支持 OpenAI 协议发现
-  if (provider.type === 'anthropic' || provider.type === 'openai') {
-    return {
-      skipped: {
-        providerName,
-        reason: 'type_unsupported',
-        message: `${provider.type} provider does not support OpenAI model discovery`,
-      },
-    }
-  }
-
-  // 3. HTTP fallback
+  // 2. HTTP fallback
   try {
     if (!isRecord(rawParsed)) throw new Error('Invalid settings format')
     const rawProviders = rawParsed['providers']
@@ -133,13 +121,28 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
       }
     }
 
+    // 按 provider.type 解析 baseURL、鉴权方案与端点（默认值与 registry.ts 一致）
+    const baseURL =
+      provider.type === 'openai'
+        ? (provider.baseURL ?? 'https://api.openai.com/v1')
+        : provider.type === 'anthropic'
+          ? (provider.baseURL ?? 'https://api.anthropic.com/v1')
+          : provider.baseURL
+    const authMode: 'bearer' | 'anthropic' = provider.type === 'anthropic' ? 'anthropic' : 'bearer'
+    const anthropicVersion =
+      provider.type === 'anthropic' ? provider.options?.anthropicVersion : undefined
+    const modelsEndpoint =
+      provider.type === 'openai-compatible' ? provider.options?.modelsEndpoint : undefined
+
     const openaiModels = await fetchUpstream({
-      baseURL: provider.baseURL,
+      baseURL,
       apiKey: resolvedApiKey,
       proxySettings: settings.proxy,
-      modelsEndpoint: provider.options?.modelsEndpoint,
+      modelsEndpoint,
       headers: provider.headers,
       oauthToken,
+      authMode,
+      anthropicVersion,
     })
     const models = openAIToDiscoveredModels(openaiModels).models
     return { ok: { providerName, models, existingModels: provider.models, source: 'http' } }

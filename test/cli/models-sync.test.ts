@@ -6,6 +6,7 @@ import type {
   Settings,
   OpenAICompatibleProviderConfig,
   AnthropicProviderConfig,
+  OpenAIProviderConfig,
 } from '../../src/config.js'
 import type { UpstreamModelResponse } from '../../src/cli/models/discover.js'
 import type { DiscoveredModelList } from '../../src/plugins/types.js'
@@ -35,6 +36,21 @@ function anthropicProvider(
   return {
     type: 'anthropic',
     baseURL: 'https://api.anthropic.com',
+    apiKey: 'test-key',
+    headers: {},
+    plugins: [],
+    models: {},
+    ...overrides,
+  }
+}
+
+/** Build a minimal openai provider config. baseURL is optional for this type. */
+function openaiProvider(
+  overrides: Partial<OpenAIProviderConfig> = {},
+): OpenAIProviderConfig {
+  return {
+    type: 'openai',
+    baseURL: 'https://api.example.com/v1',
     apiKey: 'test-key',
     headers: {},
     plugins: [],
@@ -141,25 +157,124 @@ describe('discoverProviderModels', () => {
     })
   })
 
-  it('returns skipped type_unsupported for anthropic provider (no plugin)', async () => {
-    const provider = anthropicProvider()
+  it('returns ok via HTTP fallback for anthropic provider with anthropic authMode', async () => {
+    const provider = anthropicProvider({ baseURL: 'https://api.anthropic.com/v1' })
     const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock()
 
     const result = await discoverProviderModels({
       providerName: 'myprov',
       provider,
       settings,
-      rawParsed: {},
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
       authFilePath,
+      fetchUpstream,
     })
 
-    expect(result).toEqual({
-      skipped: {
-        providerName: 'myprov',
-        reason: 'type_unsupported',
-        message: 'anthropic provider does not support OpenAI model discovery',
-      },
+    expect(result).toHaveProperty('ok')
+    if ('ok' in result) {
+      expect(result.ok.source).toBe('http')
+    }
+    expect(fetchUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://api.anthropic.com/v1',
+        authMode: 'anthropic',
+        apiKey: 'test-key',
+      }),
+    )
+  })
+
+  it('returns ok via HTTP fallback for openai provider with bearer authMode', async () => {
+    const provider = openaiProvider({ baseURL: 'https://api.example.com/v1' })
+    const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock()
+
+    const result = await discoverProviderModels({
+      providerName: 'myprov',
+      provider,
+      settings,
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
+      authFilePath,
+      fetchUpstream,
     })
+
+    expect(result).toHaveProperty('ok')
+    if ('ok' in result) {
+      expect(result.ok.source).toBe('http')
+    }
+    expect(fetchUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseURL: 'https://api.example.com/v1',
+        authMode: 'bearer',
+        apiKey: 'test-key',
+        modelsEndpoint: undefined,
+      }),
+    )
+  })
+
+  it('defaults openai provider baseURL to https://api.openai.com/v1 when absent', async () => {
+    const provider = openaiProvider()
+    delete provider.baseURL
+    const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock()
+
+    await discoverProviderModels({
+      providerName: 'myprov',
+      provider,
+      settings,
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
+      authFilePath,
+      fetchUpstream,
+    })
+
+    expect(fetchUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'https://api.openai.com/v1' }),
+    )
+  })
+
+  it('defaults anthropic provider baseURL to https://api.anthropic.com/v1 when absent', async () => {
+    const provider = anthropicProvider()
+    delete provider.baseURL
+    const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock()
+
+    await discoverProviderModels({
+      providerName: 'myprov',
+      provider,
+      settings,
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
+      authFilePath,
+      fetchUpstream,
+    })
+
+    expect(fetchUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({ baseURL: 'https://api.anthropic.com/v1' }),
+    )
+  })
+
+  it('propagates provider.options.anthropicVersion to fetchUpstream', async () => {
+    const provider = anthropicProvider({
+      baseURL: 'https://api.anthropic.com/v1',
+      options: { anthropicVersion: '2024-10-22' },
+    })
+    const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock()
+
+    await discoverProviderModels({
+      providerName: 'myprov',
+      provider,
+      settings,
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
+      authFilePath,
+      fetchUpstream,
+    })
+
+    expect(fetchUpstream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authMode: 'anthropic',
+        anthropicVersion: '2024-10-22',
+      }),
+    )
   })
 
   it('returns skipped oauth_needs_login when token status is needs_login', async () => {
