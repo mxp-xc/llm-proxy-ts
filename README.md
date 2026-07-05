@@ -34,19 +34,20 @@ bun dev serve
 
 基于 Commander.js，通过 `bun dev <command>` 调用：
 
-| 命令                            | 用途                                                   |
-| ------------------------------- | ------------------------------------------------------ |
-| `bun dev serve`                 | 启动开发服务器（默认 bun --watch 热重载）              |
-| `bun dev serve --no-watch`      | 启动服务器（无热重载）                                 |
-| `bun dev models sync`           | 交互式同步上游模型到配置文件                           |
-| `bun dev models sync -p <name>` | 同步指定 provider                                      |
-| `bun dev models sync --dry-run` | 预览变更，不写入                                       |
-| `bun dev models list`           | 列出已配置模型                                         |
-| `bun dev codex install`         | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
-| `bun run test`                  | 运行全部测试                                           |
-| `bun run test test/xxx.test.ts` | 运行单个测试                                           |
-| `bun run typecheck`             | 类型检查                                               |
-| `bun run generate:schema`       | 从 Zod schema 生成 `config/settings.schema.json`       |
+| 命令                                      | 用途                                                   |
+| ----------------------------------------- | ------------------------------------------------------ |
+| `bun dev serve`                           | 启动开发服务器（默认无热重载）                         |
+| `bun dev serve --watch`                   | 以 bun watch 模式启动开发服务器                        |
+| `bun dev models sync`                     | 交互式同步上游模型到配置文件                           |
+| `bun dev models sync -p <name>`           | 同步指定 provider                                      |
+| `bun dev models sync --dry-run`           | 预览变更，不写入                                       |
+| `bun dev models list`                     | 列出已配置模型                                         |
+| `bun dev codex install`                   | 配置 Codex CLI 指向本代理（写 `~/.codex/config.toml`） |
+| `bun run test`                            | 运行全部测试                                           |
+| `bun run test test/xxx.test.ts`           | 运行单个测试                                           |
+| `bun run typecheck`                       | 类型检查                                               |
+| `bun run format` / `bun run format:check` | 写入 / 检查 Prettier 格式                              |
+| `bun run generate:schema`                 | 从 Zod schema 生成 `config/settings.schema.json`       |
 
 ## 配置
 
@@ -57,7 +58,7 @@ bun dev serve
 - **service** — 服务名（默认 `llm-proxy`）、监听地址和端口
 - **requestTimeoutMs** — 请求超时毫秒（默认 30000）
 - **routing** — 路由选项（`enableFlatModelLookup` 全局裸名查找）
-- **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`、`options`（类型特定，详见 AGENTS「Provider Options 分层」）
+- **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`、`options`；类型特定配置放在 `options`
 - **apiKey 轮询** — `apiKey` 支持字符串数组，按请求 round-robin 选择
 - **模型别名** — `models` 中可定义 `aliases` 和自定义 `upstreamModel`
 - **`${ENV_NAME}`** — 占位符，加载时从环境变量解析（仅匹配完整字符串）
@@ -68,6 +69,6 @@ bun dev serve
 
 ## 安全
 
-- 禁止提交 `.env`、`settings.jsonc` 或真实 API key
+- 禁止提交 `.env*`、`config/settings.jsonc`、`config/auth.json`、日志或真实 API key
 - 日志自动脱敏 `apikey`、`authorization`、`x-api-key` 等敏感字段
 - API key 选择日志仅记录 provider 名称和 key 索引
