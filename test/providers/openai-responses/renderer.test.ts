@@ -339,21 +339,21 @@ describe('renderOpenAIResponseSSE', () => {
     yield { type: 'error', error: new Error('upstream failed') }
   }
 
-  it('emits response.completed after error and terminates stream', async () => {
+  it('emits response.failed after error and terminates stream', async () => {
     const stream = renderOpenAIResponseSSE({
       model: 'gpt-4o',
       stream: errorStream() as AsyncIterable<ProxyStreamPart>,
     })
     const events = await collectSSEFrames<OpenAIResponseStreamEvent>(stream)
     const eventTypes = events.map((e) => e.event)
-    expect(eventTypes).toContain('response.error')
-    expect(eventTypes).toContain('response.completed')
-    const completed = events.find((e) => e.event === 'response.completed')!
-      .data as ResponseCompletedEvent
-    expect(completed.response.status).toBe('incomplete')
-    // No events after response.completed
-    const completedIndex = eventTypes.indexOf('response.completed')
-    expect(eventTypes.length).toBe(completedIndex + 1)
+    expect(eventTypes).toContain('response.failed')
+    expect(eventTypes).not.toContain('response.completed')
+    const failed = events.find((e) => e.event === 'response.failed')!
+    expect((failed.data as any).response.status).toBe('failed')
+    expect((failed.data as any).response.error.message).toBe('upstream failed')
+    // No events after response.failed
+    const failedIndex = eventTypes.indexOf('response.failed')
+    expect(eventTypes.length).toBe(failedIndex + 1)
   })
 
   // Bug #1 — response.completed includes tool calls

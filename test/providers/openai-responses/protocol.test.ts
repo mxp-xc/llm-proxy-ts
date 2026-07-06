@@ -124,6 +124,22 @@ describe('validateOpenAIResponsesRequest', () => {
     })
     expect((result as any).custom_field).toBe('value')
   })
+
+  it('accepts Codex agent_message items for multi-agent turns', () => {
+    expect(() =>
+      validateOpenAIResponsesRequest({
+        model: 'gpt-4o',
+        input: [
+          {
+            type: 'agent_message',
+            author: '/root',
+            recipient: '/root/worker',
+            content: [{ type: 'input_text', text: 'compute 19 + 23' }],
+          },
+        ],
+      }),
+    ).not.toThrow()
+  })
 })
 
 describe('mapResponsesRequestToAISDKInput', () => {
@@ -180,6 +196,50 @@ describe('mapResponsesRequestToAISDKInput', () => {
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
     })
     expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hello' }] }])
+  })
+
+  it('maps Codex agent_message items to labeled user context', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [
+        {
+          type: 'agent_message',
+          author: '/root',
+          recipient: '/root/worker',
+          content: [{ type: 'input_text', text: 'compute 19 + 23' }],
+        } as any,
+      ],
+    })
+    expect(result.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Agent message from /root to /root/worker:' },
+          { type: 'text', text: 'compute 19 + 23' },
+        ],
+      },
+    ])
+  })
+
+  it('maps outgoing historical agent_message items as assistant context', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [
+        {
+          type: 'agent_message',
+          author: '/root',
+          recipient: '/root/worker',
+          content: [{ type: 'input_text', text: 'compute 19 + 23' }],
+        },
+        {
+          type: 'agent_message',
+          author: '/root/worker',
+          recipient: '/root',
+          content: [{ type: 'input_text', text: '42' }],
+        },
+      ] as any,
+    })
+    expect(result.messages.map((m) => m.role)).toEqual(['assistant', 'user'])
   })
 
   it('maps input_image content to text placeholder (ProtocolMessagePart has no image variant)', () => {

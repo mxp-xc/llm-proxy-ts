@@ -187,6 +187,37 @@ export async function* renderOpenAIResponseSSE(
     return ++sequenceNumber
   }
 
+  function failedResponse(error: unknown): OpenAIResponse {
+    return {
+      id: responseId,
+      object: 'response',
+      created_at: Math.floor(Date.now() / 1000),
+      model: input.model,
+      status: 'failed',
+      output: [],
+      output_text: '',
+      error: { message: toErrorMessage(error) },
+      instructions: null,
+      temperature: null,
+      top_p: null,
+      tool_choice: null,
+      tools: [],
+      parallel_tool_calls: true,
+      truncation: 'disabled',
+    }
+  }
+
+  function* emitFailedResponse(error: unknown): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
+    yield {
+      event: 'response.failed',
+      data: {
+        type: 'response.failed',
+        sequence_number: nextSeq(),
+        response: failedResponse(error),
+      },
+    }
+  }
+
   /** Close the in-progress text message item: emit output_text.done +
    *  content_part.done + output_item.done, reset outputItemStarted/
    *  contentPartStarted, and advance outputIndex. No-op when no text
@@ -804,109 +835,17 @@ export async function* renderOpenAIResponseSSE(
       }
 
       if (part.type === 'error') {
-        const errorData = part.error
-        yield {
-          event: 'response.error',
-          data: {
-            type: 'response.error',
-            sequence_number: nextSeq(),
-            error: { type: 'server_error', message: toErrorMessage(errorData) },
-          },
-        }
-        yield {
-          event: 'response.completed',
-          data: {
-            type: 'response.completed',
-            sequence_number: nextSeq(),
-            response: {
-              id: responseId,
-              object: 'response',
-              created_at: Math.floor(Date.now() / 1000),
-              model: input.model,
-              status: 'incomplete',
-              output: [],
-              output_text: '',
-              instructions: null,
-              temperature: null,
-              top_p: null,
-              tool_choice: null,
-              tools: [],
-              parallel_tool_calls: true,
-              truncation: 'disabled',
-            },
-          },
-        }
+        yield* emitFailedResponse(part.error)
         return
       }
 
       if (part.type === 'openai-error') {
-        const errorData = part.body
-        yield {
-          event: 'response.error',
-          data: {
-            type: 'response.error',
-            sequence_number: nextSeq(),
-            error: { type: 'server_error', message: toErrorMessage(errorData) },
-          },
-        }
-        yield {
-          event: 'response.completed',
-          data: {
-            type: 'response.completed',
-            sequence_number: nextSeq(),
-            response: {
-              id: responseId,
-              object: 'response',
-              created_at: Math.floor(Date.now() / 1000),
-              model: input.model,
-              status: 'incomplete',
-              output: [],
-              output_text: '',
-              instructions: null,
-              temperature: null,
-              top_p: null,
-              tool_choice: null,
-              tools: [],
-              parallel_tool_calls: true,
-              truncation: 'disabled',
-            },
-          },
-        }
+        yield* emitFailedResponse(part.body)
         return
       }
     }
   } catch (error) {
-    yield {
-      event: 'response.error',
-      data: {
-        type: 'response.error',
-        sequence_number: nextSeq(),
-        error: { type: 'server_error', message: toErrorMessage(error) },
-      },
-    }
-    yield {
-      event: 'response.completed',
-      data: {
-        type: 'response.completed',
-        sequence_number: nextSeq(),
-        response: {
-          id: responseId,
-          object: 'response',
-          created_at: Math.floor(Date.now() / 1000),
-          model: input.model,
-          status: 'incomplete',
-          output: [],
-          output_text: '',
-          instructions: null,
-          temperature: null,
-          top_p: null,
-          tool_choice: null,
-          tools: [],
-          parallel_tool_calls: true,
-          truncation: 'disabled',
-        },
-      },
-    }
+    yield* emitFailedResponse(error)
     return
   }
 }

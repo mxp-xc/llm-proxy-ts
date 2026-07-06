@@ -27,6 +27,15 @@ const easyInputMessageSchema = z.object({
   content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
 })
 
+const agentMessageSchema = z
+  .object({
+    type: z.literal('agent_message'),
+    author: z.string().min(1),
+    recipient: z.string().min(1),
+    content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]),
+  })
+  .passthrough()
+
 const functionCallSchema = z.object({
   type: z.literal('function_call'),
   id: z.string().optional(),
@@ -93,6 +102,7 @@ const inputItemSchema = z.union([
   customToolCallOutputSchema,
   toolSearchCallSchema,
   toolSearchOutputSchema,
+  agentMessageSchema,
   reasoningItemSchema,
 ])
 
@@ -265,6 +275,31 @@ function mapEasyInputContent(content: EasyInputContent): string | ProtocolMessag
   })
 }
 
+function mapAgentMessageContent(item: z.infer<typeof agentMessageSchema>): ProtocolMessagePart[] {
+  const mapped = mapEasyInputContent(item.content)
+  const content = typeof mapped === 'string' ? [{ type: 'text' as const, text: mapped }] : mapped
+  return [
+    {
+      type: 'text',
+      text: 'Agent message from ' + item.author + ' to ' + item.recipient + ':',
+    },
+    ...content,
+  ]
+}
+
+function inferCurrentAgent(input: OpenAIResponsesRequest['input']): string | undefined {
+  if (!Array.isArray(input)) return undefined
+  for (let i = input.length - 1; i >= 0; i--) {
+    const item = input[i]
+    if (!item) continue
+    if ('type' in item && item.type === 'agent_message') {
+      const recipient = (item as z.infer<typeof agentMessageSchema>).recipient
+      if (recipient) return recipient
+    }
+  }
+  return undefined
+}
+
 // ─── Shim Helpers ────────────────────────────────────────────
 
 function buildShimmedCustomToolDescription(
@@ -341,6 +376,7 @@ export function mapResponsesRequestToAISDKInput(
   } else {
     // Build call_id → tool name lookup (function_call_output lacks tool name)
     const callIdToName = new Map<string, string>()
+    const currentAgent = inferCurrentAgent(request.input)
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
         const fc = item as { call_id: string; name: string; namespace?: string }
@@ -446,6 +482,12 @@ export function mapResponsesRequestToAISDKInput(
               output: { type: 'text', value: output },
             },
           ],
+        })
+      } else if ('type' in item && item.type === 'agent_message') {
+        const agentMessage = item as z.infer<typeof agentMessageSchema>
+        messages.push({
+          role: agentMessage.author === currentAgent ? 'assistant' : 'user',
+          content: mapAgentMessageContent(agentMessage),
         })
       } else if ('type' in item && item.type === 'reasoning') {
         // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content

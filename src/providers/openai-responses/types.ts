@@ -77,9 +77,10 @@ export interface OpenAIResponse {
   object: 'response'
   created_at: number
   model: string
-  status: 'completed' | 'incomplete'
+  status: 'completed' | 'incomplete' | 'failed'
   output: ResponseOutputItem[]
   output_text: string
+  error?: { code?: string | null; message: string }
   usage?: ResponseUsage
   instructions: string | null
   temperature: number | null
@@ -280,6 +281,12 @@ export interface ResponseCompletedEvent {
   response: OpenAIResponse
 }
 
+export interface ResponseFailedEvent {
+  type: 'response.failed'
+  sequence_number: number
+  response: OpenAIResponse
+}
+
 interface ResponseErrorEvent {
   type: 'response.error'
   sequence_number: number
@@ -302,6 +309,7 @@ export type OpenAIResponseStreamEvent =
   | ResponseReasoningSummaryTextDoneEvent
   | ResponseCustomToolCallInputDeltaEvent
   | ResponseCompletedEvent
+  | ResponseFailedEvent
   | ResponseErrorEvent
 
 /** openai-responses 专属 enrichment，由策略内部计算后传入 renderer。 */
