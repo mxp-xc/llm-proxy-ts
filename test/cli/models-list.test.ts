@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { formatLimitNum, renderRows } from '../../src/cli/models/list-run.js'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { formatLimitNum, renderRows, runModelsList } from '../../src/cli/models/list-run.js'
 import type { ModelRow } from '../../src/cli/models/list-run.js'
 
 describe('formatLimitNum', () => {
@@ -11,24 +14,28 @@ describe('formatLimitNum', () => {
     expect(formatLimitNum(0)).toBe('0')
   })
 
-  it('returns "1M" for 1_048_576', () => {
+  it('returns floored decimal M for values at least 1_000_000', () => {
     expect(formatLimitNum(1_048_576)).toBe('1M')
+    expect(formatLimitNum(1_999_999)).toBe('1M')
   })
 
-  it('returns "8M" for 8_388_608', () => {
+  it('returns "8M" for 8_388_608 using decimal floor', () => {
     expect(formatLimitNum(8_388_608)).toBe('8M')
   })
 
-  it('returns "4K" for 4096', () => {
+  it('returns floored decimal K for values at least 1_000', () => {
     expect(formatLimitNum(4096)).toBe('4K')
+    expect(formatLimitNum(1999)).toBe('1K')
   })
 
-  it('returns "125K" for 128000', () => {
-    expect(formatLimitNum(128000)).toBe('125K')
+  it('returns "128K" for 128000', () => {
+    expect(formatLimitNum(128000)).toBe('128K')
   })
 
-  it('returns raw number for non-round values', () => {
-    expect(formatLimitNum(200000)).toBe('200000')
+  it('formats token limits with decimal K/M units', () => {
+    expect(formatLimitNum(272000)).toBe('272K')
+    expect(formatLimitNum(1000000)).toBe('1M')
+    expect(formatLimitNum(200000)).toBe('200K')
   })
 
   it('returns "1" for 1', () => {
@@ -86,5 +93,155 @@ describe('renderRows', () => {
   it('model.flat=true marks all aliases bare', () => {
     const lines = renderRows([row({ aliases: [{ name: 'a', flat: false }], modelFlat: true })])
     expect(lines[2]).toMatch(/a \*/)
+  })
+})
+
+describe('runModelsList', () => {
+  it('prints every exposed model and alias id', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-models-list-'))
+    const settingsPath = join(dir, 'settings.json')
+    const logs: string[] = []
+    const originalLog = console.log
+
+    try {
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          providers: {
+            zhipu: {
+              type: 'openai-compatible',
+              baseURL: 'https://example.com/v1',
+              apiKey: 'test-key',
+              headers: {},
+              plugins: [],
+              models: {
+                'glm-5': {
+                  upstreamModel: 'glm-5',
+                  aliases: [{ name: 'zhipu-flat', flat: true }],
+                  headers: {},
+                  plugins: [],
+                  limit: { context: 200000 },
+                },
+              },
+            },
+            openai: {
+              type: 'openai',
+              apiKey: 'test-key',
+              headers: {},
+              plugins: [],
+              options: { enableFlatModelLookup: true },
+              models: {
+                'gpt-5.5': {
+                  upstreamModel: 'gpt-5.5',
+                  aliases: [{ name: 'gpt-5.5-alias', flat: true }],
+                  headers: {},
+                  plugins: [],
+                  limit: { context: 1000000 },
+                },
+                'codex/mini': {
+                  upstreamModel: 'codex/mini',
+                  aliases: [],
+                  headers: {},
+                  plugins: [],
+                  limit: { context: 1999 },
+                },
+              },
+            },
+          },
+        }),
+      )
+      console.log = (...args: unknown[]) => logs.push(args.join(' '))
+
+      await runModelsList({ settingsPath })
+
+      const output = logs.join('\n')
+      expect(output).toContain('openai/gpt-5.5')
+      expect(output).toContain('gpt-5.5')
+      expect(output).toContain('openai/gpt-5.5-alias')
+      expect(output).toContain('gpt-5.5-alias')
+      expect(output).toContain('openai/codex/mini')
+      expect(output).toContain('zhipu/zhipu-flat')
+      expect(output).toContain('zhipu-flat')
+      expect(output).toContain('1M')
+      expect(output).toContain('1K')
+
+      const ids = logs
+        .slice(2)
+        .filter((line) => line.trim() !== '' && !line.startsWith(' '))
+        .map((line) => line.split(/\s+/)[0])
+      expect(ids).toEqual([
+        'zhipu/glm-5',
+        'zhipu/zhipu-flat',
+        'zhipu-flat',
+        'openai/gpt-5.5',
+        'openai/gpt-5.5-alias',
+        'openai/codex/mini',
+        'gpt-5.5',
+        'gpt-5.5-alias',
+      ])
+    } finally {
+      console.log = originalLog
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('uses runtime routing override for duplicate flat ids', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'llm-proxy-models-list-'))
+    const settingsPath = join(dir, 'settings.json')
+
+    try {
+      await writeFile(
+        settingsPath,
+        JSON.stringify({
+          providers: {
+            zhipu: {
+              type: 'openai-compatible',
+              baseURL: 'https://example.com/v1',
+              apiKey: 'test-key',
+              headers: {},
+              plugins: [],
+              models: {
+                'glm-5': {
+                  upstreamModel: 'glm-5',
+                  aliases: [{ name: 'gpt-5.5', flat: true }],
+                  headers: {},
+                  plugins: [],
+                },
+              },
+            },
+            openai: {
+              type: 'openai',
+              apiKey: 'test-key',
+              headers: {},
+              plugins: [],
+              options: { enableFlatModelLookup: true },
+              models: {
+                'gpt-5.5': {
+                  upstreamModel: 'gpt-5.5',
+                  aliases: [],
+                  headers: {},
+                  plugins: [],
+                },
+              },
+            },
+          },
+        }),
+      )
+
+      const logs: string[] = []
+      const originalLog = console.log
+      console.log = (...args: unknown[]) => logs.push(args.join(' '))
+      try {
+        await runModelsList({ settingsPath })
+      } finally {
+        console.log = originalLog
+      }
+
+      const bareGpt55Lines = logs.filter((line) => /^gpt-5\.5\s/.test(line))
+      expect(bareGpt55Lines).toHaveLength(1)
+      expect(bareGpt55Lines[0]).toMatch(/^gpt-5\.5\s+openai\s+gpt-5\.5\s/)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 })

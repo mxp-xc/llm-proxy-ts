@@ -1,6 +1,9 @@
 import { loadSettingsFromFile } from '../../config.js'
 import type { AliasEntry, ModelRouteConfig, Settings } from '../../config.js'
 import { enumerateModelEntries } from '../../providers/model-types.js'
+import { isFlatLookupEnabled } from '../../config-helpers.js'
+import { RoutingTable } from '../../routing.js'
+import { canUseFlatModelSelector } from '../../model-selector.js'
 
 export interface ModelsListOptions {
   settingsPath: string
@@ -15,22 +18,66 @@ export interface ModelRow {
   limit: ModelRouteConfig['limit']
 }
 
+function collectEntryIds(entry: ReturnType<typeof enumerateModelEntries>[number]): {
+  id: string
+  usesFlatId: boolean
+}[] {
+  const ids = [{ id: `${entry.providerName}/${entry.modelKey}`, usesFlatId: false }]
+  if (entry.modelFlat && canUseFlatModelSelector(entry.modelKey)) {
+    ids.push({ id: entry.modelKey, usesFlatId: true })
+  }
+  for (const alias of entry.aliases) {
+    ids.push({ id: `${entry.providerName}/${alias.name}`, usesFlatId: false })
+    if ((entry.modelFlat || alias.flat) && canUseFlatModelSelector(alias.name)) {
+      ids.push({ id: alias.name, usesFlatId: true })
+    }
+  }
+  return ids
+}
+
 function collectRows(settings: Settings): ModelRow[] {
-  return enumerateModelEntries(settings).map((entry) => ({
-    id: `${entry.providerName}/${entry.modelKey}`,
-    provider: entry.providerName,
-    upstreamModel: entry.upstreamModel,
-    aliases: entry.aliases,
-    modelFlat: entry.modelFlat,
-    limit: entry.limit ?? undefined,
-  }))
+  const routingTable = RoutingTable.fromSettings(settings)
+  const providerOrder = new Map(Object.keys(settings.providers).map((name, index) => [name, index]))
+  const rowsById = new Map<
+    string,
+    ModelRow & { order: number; providerOrder: number; usesFlatId: boolean }
+  >()
+  let order = 0
+  for (const entry of enumerateModelEntries(settings)) {
+    for (const { id, usesFlatId } of collectEntryIds(entry)) {
+      const route = routingTable.resolve(id)
+      const model = route.provider.models[route.modelKey]
+      if (!model) continue
+      const row = {
+        id,
+        provider: route.providerName,
+        upstreamModel: route.upstreamModel,
+        aliases: model.aliases,
+        modelFlat: isFlatLookupEnabled(route.provider, settings) || !!model.flat,
+        limit: model.limit ?? undefined,
+        order: order++,
+        providerOrder: providerOrder.get(route.providerName) ?? Number.MAX_SAFE_INTEGER,
+        usesFlatId,
+      }
+      rowsById.delete(id)
+      rowsById.set(id, row)
+    }
+  }
+  return [...rowsById.values()]
+    .sort(
+      (a, b) =>
+        a.providerOrder - b.providerOrder ||
+        Number(a.usesFlatId) - Number(b.usesFlatId) ||
+        a.order - b.order,
+    )
+    .map(({ order: _order, providerOrder: _providerOrder, usesFlatId: _usesFlatId, ...row }) => row)
 }
 
 export function formatLimitNum(value: number | undefined): string {
   if (value === undefined) return '-'
   if (value === 0) return '0'
-  if (value % 1_048_576 === 0) return `${value / 1_048_576}M`
-  if (value % 1024 === 0) return `${value / 1024}K`
+  if (value >= 1_000_000) return `${Math.floor(value / 1_000_000)}M`
+  if (value >= 1000) return `${Math.floor(value / 1000)}K`
   return String(value)
 }
 

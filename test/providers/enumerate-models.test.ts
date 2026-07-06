@@ -274,6 +274,20 @@ describe('enumerateModelEntries ids (new semantics)', () => {
     expect(e.modelFlat).toBe(true)
   })
 
+  it('does not emit an unusable flat id when modelKey contains slashes', () => {
+    const s = makeSettings({
+      p: P(
+        {
+          'codex/mini': M('up', []),
+        },
+        true,
+      ),
+    })
+    const e = enumerateModelEntries(s).find((x) => x.modelKey === 'codex/mini')!
+    expect(e.ids).toEqual(['p/codex/mini'])
+    expect(e.modelFlat).toBe(true)
+  })
+
   it('flat off + record alias {flat:true} → [p/m, p/a, a]', () => {
     const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: true }]) }) })
     const e = enumerateModelEntries(s).find((x) => x.modelKey === 'm')!

@@ -2,6 +2,7 @@ import type { ProviderConfig, Settings } from './config.js'
 import { enumerateModelEntries } from './providers/model-types.js'
 import type { PluginRegistry, ResolvedPlugin } from './plugins/registry.js'
 import { getBuiltInPlugin } from './plugins/loader.js'
+import { canUseFlatModelSelector, parseModelSelector } from './model-selector.js'
 
 export interface RouteMatch {
   providerName: string
@@ -53,7 +54,7 @@ export class RoutingTable {
 
     // 复用共享枚举核心 enumerateModelEntries —— 与 listModels/collectRows/buildCodexModelsResponse
     // 共享同一 (provider, modelKey, flat, aliases) 视图。route 按 (provider, modelKey) 构建;
-    // 裸名入口(modelKey + 满足条件的 aliases)写入 flatRoutes 并做 ambiguous 检测。
+    // 裸名入口(modelKey + 满足条件的 aliases)写入 flatRoutes;后注册的同名入口覆盖先注册入口。
     for (const entry of enumerateModelEntries(settings)) {
       const provider = settings.providers[entry.providerName]
       if (!provider) continue
@@ -93,18 +94,18 @@ export class RoutingTable {
         )
       }
 
-      // 裸名入口注册 + ambiguous 检测(flatRoutes 跨 provider 全局)
+      // 裸名入口注册(flatRoutes 跨 provider 全局),后配置覆盖先配置。
       const registerBare = (selector: string) => {
         if (flatRoutes.has(selector)) {
-          throw new Error(`ambiguous flat route '${selector}' is configured`)
+          flatRoutes.delete(selector)
         }
         flatRoutes.set(selector, route)
       }
-      if (entry.modelFlat) {
+      if (entry.modelFlat && canUseFlatModelSelector(entry.modelKey)) {
         registerBare(entry.modelKey)
       }
       for (const alias of entry.aliases) {
-        if (entry.modelFlat || alias.flat) {
+        if ((entry.modelFlat || alias.flat) && canUseFlatModelSelector(alias.name)) {
           registerBare(alias.name)
         }
       }
@@ -123,8 +124,9 @@ export class RoutingTable {
       )
     }
 
-    if (!selector.includes('/')) {
-      const route = this.flatRoutes.get(selector)
+    const parsedSelector = parseModelSelector(selector)
+    if (parsedSelector.kind === 'flat') {
+      const route = this.flatRoutes.get(parsedSelector.name)
       if (!route) {
         throw new RoutingError(
           404,
@@ -136,7 +138,7 @@ export class RoutingTable {
       return route
     }
 
-    if (selector.split('/').length !== 2) {
+    if (parsedSelector.kind === 'invalid') {
       throw new RoutingError(
         404,
         'unknown_model',
@@ -152,8 +154,7 @@ export class RoutingTable {
     }
 
     // 未命中缓存:区分 unknown_provider / unknown_model 以保持错误语义。
-    const [providerName] = selector.split('/') as [string, string]
-    if (!this.settings.providers[providerName]) {
+    if (!this.settings.providers[parsedSelector.provider]) {
       throw new RoutingError(
         404,
         'unknown_provider',

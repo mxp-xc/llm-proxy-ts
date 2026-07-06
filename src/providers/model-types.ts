@@ -1,5 +1,6 @@
 import { isFlatLookupEnabled } from '../config-helpers.js'
 import type { AliasEntry, Settings } from '../config.js'
+import { canUseFlatModelSelector } from '../model-selector.js'
 
 /** 模型 token 限制 */
 export interface ModelLimit {
@@ -58,12 +59,12 @@ export function enumerateModelEntries(settings: Settings): ModelEntry[] {
     for (const [modelKey, model] of Object.entries(provider.models)) {
       const modelFlat = providerFlat || !!model.flat
       const ids: string[] = [`${providerName}/${modelKey}`]
-      if (modelFlat) {
+      if (modelFlat && canUseFlatModelSelector(modelKey)) {
         ids.push(modelKey)
       }
       for (const alias of model.aliases) {
         ids.push(`${providerName}/${alias.name}`)
-        if (modelFlat || alias.flat) {
+        if ((modelFlat || alias.flat) && canUseFlatModelSelector(alias.name)) {
           ids.push(alias.name)
         }
       }

@@ -2,10 +2,7 @@ import { copyFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { modify, applyEdits } from 'jsonc-parser'
 
-const SRC = 'config/settings.example.jsonc'
 const DST = 'config/settings.jsonc'
-
-copyFileSync(SRC, DST)
 
 const text = readFileSync(DST, 'utf8')
 

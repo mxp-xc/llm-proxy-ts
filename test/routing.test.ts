@@ -81,7 +81,7 @@ describe('RoutingTable', () => {
     }
   })
 
-  it('rejects ambiguous flat selectors across providers both with flat lookup enabled', () => {
+  it('lets later flat selectors override earlier providers when flat lookup is enabled', () => {
     const s = settings(true)
     s.providers.deepseek = {
       type: 'openai-compatible',
@@ -98,9 +98,9 @@ describe('RoutingTable', () => {
         },
       },
     }
-    // Both openrouter (inherits global true) and deepseek (inherits global true)
-    // have 'default' alias registered as bare — ambiguous
-    expect(() => RoutingTable.fromSettings(s)).toThrow(/ambiguous flat route 'default'/)
+    const table = RoutingTable.fromSettings(s)
+    expect(table.resolve('default').providerName).toBe('deepseek')
+    expect(table.resolve('default').upstreamModel).toBe('deepseek/other')
   })
 
   it('model-level plugin overrides provider-level with same name (no PluginRegistry)', () => {
@@ -149,6 +149,14 @@ describe('RoutingTable flat/alias resolution', () => {
     expect(RoutingTable.fromSettings(s).resolve('p/a').modelKey).toBe('m')
   })
 
+  it('resolves prefixed model selectors whose model name contains slashes', () => {
+    const s = makeSettings({ openai: P({ 'codex/mini': M('up') }, true) })
+    const route = RoutingTable.fromSettings(s).resolve('openai/codex/mini')
+    expect(route.providerName).toBe('openai')
+    expect(route.modelKey).toBe('codex/mini')
+    expect(route.upstreamModel).toBe('up')
+  })
+
   it('resolves record alias flat:true naked name without provider flat', () => {
     const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: true }]) }) })
     expect(RoutingTable.fromSettings(s).resolve('a').modelKey).toBe('m')
@@ -164,10 +172,10 @@ describe('RoutingTable flat/alias resolution', () => {
     }
   })
 
-  it('rejects ambiguous naked alias across providers (both alias.flat)', () => {
+  it('lets later flat aliases override earlier providers', () => {
     const mk = (flat: boolean) => P({ m: M('up', [{ name: 'shared', flat }]) })
     const s = makeSettings({ p1: mk(true), p2: mk(true) })
-    expect(() => RoutingTable.fromSettings(s)).toThrow(/ambiguous flat route 'shared'/)
+    expect(RoutingTable.fromSettings(s).resolve('shared').providerName).toBe('p2')
   })
 
   it('rejects duplicate prefixed selector: alias name == modelKey', () => {

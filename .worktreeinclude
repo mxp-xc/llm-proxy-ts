@@ -4,3 +4,4 @@
 .env
 .env.*
 temp/
+config/settings.jsonc
