@@ -15,10 +15,7 @@ export interface ProviderModelsResult {
 }
 
 export type DiscoverSkipReason =
-  | 'plugin_failed'
-  | 'oauth_needs_login'
-  | 'oauth_refresh_failed'
-  | 'fetch_failed'
+  'plugin_failed' | 'oauth_needs_login' | 'oauth_refresh_failed' | 'fetch_failed'
 
 export type DiscoverResult =
   | { ok: ProviderModelsResult }

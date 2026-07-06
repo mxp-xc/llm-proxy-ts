@@ -45,9 +45,7 @@ function anthropicProvider(
 }
 
 /** Build a minimal openai provider config. baseURL is optional for this type. */
-function openaiProvider(
-  overrides: Partial<OpenAIProviderConfig> = {},
-): OpenAIProviderConfig {
+function openaiProvider(overrides: Partial<OpenAIProviderConfig> = {}): OpenAIProviderConfig {
   return {
     type: 'openai',
     baseURL: 'https://api.example.com/v1',

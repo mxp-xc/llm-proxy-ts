@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit",
     "generate:schema": "bun scripts/generate-schema.ts",
     "models:sync": "bun src/cli/cli.ts models sync",
-    "format": "prettier --write .",
+    "format": "prettier --write . --log-level warn",
     "format:check": "prettier --check ."
   },
   "dependencies": {

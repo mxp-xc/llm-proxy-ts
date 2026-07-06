@@ -318,8 +318,7 @@ describe('fetchUpstreamModels with authMode=anthropic', () => {
         }),
       }),
     )
-    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> })
-      .headers
+    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> }).headers
     expect(callHeaders['Authorization']).toBeUndefined()
   })
 
@@ -341,8 +340,7 @@ describe('fetchUpstreamModels with authMode=anthropic', () => {
         }),
       }),
     )
-    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> })
-      .headers
+    const callHeaders = (mockFetch.mock.calls[0]![1] as { headers: Record<string, string> }).headers
     expect(callHeaders['x-api-key']).toBeUndefined()
   })
 
