@@ -856,15 +856,13 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.providerOptions).toEqual({ openai: { store: false } })
   })
 
-  it('maps client_metadata to providerOptions.openai.metadata', () => {
+  it('does not forward Codex client_metadata to upstream metadata', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-5',
       input: 'hi',
       client_metadata: { session_id: 's1', turn_id: 't1' },
     })
-    expect(result.providerOptions).toEqual({
-      openai: { metadata: { session_id: 's1', turn_id: 't1' } },
-    })
+    expect(result.providerOptions).toBeUndefined()
   })
 
   it('combines camelCase mapped fields with passthrough unknown fields', () => {

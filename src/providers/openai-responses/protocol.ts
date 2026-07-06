@@ -712,11 +712,7 @@ export function mapResponsesRequestToAISDKInput(
   if (request.prompt_cache_key !== undefined) {
     providerOptions.promptCacheKey = request.prompt_cache_key
   }
-  // client_metadata：Codex 自定义字段，OpenAI Responses API 无 client_metadata；
-  // 映射到标准 metadata 字段（AI SDK 支持 metadata: z.any()），供上游观测/计费关联
-  if (request.client_metadata !== undefined) {
-    providerOptions.metadata = request.client_metadata
-  }
+  // client_metadata 是 Codex 客户端侧关联信息；不要转发为上游 metadata。
   if (Object.keys(providerOptions).length > 0) {
     input.providerOptions = { openai: providerOptions }
   }
