@@ -2,7 +2,7 @@
 
 ## 项目结构与模块组织
 
-`llm-proxy-ts` 是本地优先的 TypeScript LLM 协议转换代理。主要源码在 `src/`：`server/` 放 Hono 应用、协议处理、日志和启动入口；`providers/` 放上游 provider 工厂与下游协议策略/渲染；`cli/` 放 Commander 命令；`oauth/` 和 `plugins/` 分别处理 token 与插件。测试在 `test/`，按功能域镜像源码结构。配置示例和 schema 在 `config/`，示例插件在 `plugins/`，设计/计划文档在 `docs/superpowers/`。临时调试产物放 `temp/`。
+`llm-proxy-ts` 是本地优先的 TypeScript LLM 协议转换代理。主要源码在 `src/`：`server/` 放 Hono 应用、协议处理、日志和启动入口；`providers/` 放上游 provider 工厂与下游协议策略/渲染；`cli/` 放 Commander 命令；`oauth/` 和 `plugins/` 分别处理 token 与插件。测试在 `test/`，按功能域镜像源码结构。配置示例和 schema 在 `config/`，示例插件在 `plugins/`，设计/计划文档在 `docs/superpowers/`，协议标准参考在 `docs/protocols/`。临时调试产物放 `temp/`。
 
 ## 构建、测试与开发命令
 
