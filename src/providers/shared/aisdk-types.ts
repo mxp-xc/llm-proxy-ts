@@ -9,6 +9,9 @@ export type ProtocolMessagePart =
       toolCallId: string
       toolName: string
       input: Record<string, unknown> | string
+      /** 携带 provider 专属元数据（如 openai namespace），由 gateway 透传给 SDK，
+       *  SDK 据此重建上游 input item（如 function_call.namespace）。 */
+      providerMetadata?: ProviderMetadata
     }
   | {
       type: 'tool-result'

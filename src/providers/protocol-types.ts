@@ -1,3 +1,5 @@
+import type { ProviderMetadata } from 'ai'
+
 /**
  * 协议层共享类型，供 OpenAI 和 Anthropic renderer 共用。
  */
@@ -34,6 +36,8 @@ export interface RenderResultInput {
     toolName: string
     input: unknown
     providerExecuted?: boolean
+    /** provider 专属元数据（openai namespace 等），供 renderer 还原 function_call.namespace */
+    providerMetadata?: ProviderMetadata
   }>
 }
 

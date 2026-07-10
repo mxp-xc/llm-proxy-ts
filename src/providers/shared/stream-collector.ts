@@ -1,3 +1,4 @@
+import type { ProviderMetadata } from 'ai'
 import type { FinishReason, RenderResultInput } from '../protocol-types.js'
 import { extractUsageFromFinishPart } from './renderer-utils.js'
 import type { ProxyStreamPart } from './aisdk-types.js'
@@ -13,6 +14,7 @@ export interface CollectedResult {
     toolName: string
     input: unknown
     providerExecuted?: boolean
+    providerMetadata?: ProviderMetadata
   }>
 }
 
@@ -32,6 +34,7 @@ export async function collectStreamResult(
     toolName: string
     input: unknown
     providerExecuted?: boolean
+    providerMetadata?: ProviderMetadata
   }> = []
 
   for await (const part of stream) {
@@ -55,12 +58,14 @@ export async function collectStreamResult(
           toolName: string
           input: unknown
           providerExecuted?: boolean
+          providerMetadata?: ProviderMetadata
         } = {
           toolCallId: part.toolCallId,
           toolName: part.toolName,
           input,
         }
         if (part.providerExecuted) call.providerExecuted = true
+        if (part.providerMetadata) call.providerMetadata = part.providerMetadata
         toolCalls.push(call)
         break
       }

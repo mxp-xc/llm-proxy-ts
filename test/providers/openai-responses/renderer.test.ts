@@ -929,6 +929,38 @@ describe('renderOpenAIResponseSSE', () => {
     expect('namespace' in (fc3 as object)).toBe(false)
   })
 
+  it('resolves namespace from providerMetadata when namespacePassthrough (non-streaming)', () => {
+    // openai 上游：namespace 从 tool-call 的 providerMetadata.openai.namespace 取，不依赖 flatMap
+    const result = renderOpenAIResponse({
+      model: 'gpt-5',
+      text: '',
+      finishReason: 'tool-calls',
+      toolCalls: [
+        {
+          toolCallId: 'call_1',
+          toolName: 'spawn_agent',
+          input: { message: 'hi' },
+          providerMetadata: { openai: { namespace: 'multi_agent_v1' } },
+        },
+        { toolCallId: 'call_2', toolName: 'exec_command', input: { cmd: 'ls' } },
+      ],
+      namespacePassthrough: true,
+    })
+    const fc1 = result.output.find(
+      (o) => o.type === 'function_call' && (o as { call_id?: string }).call_id === 'call_1',
+    )
+    const fc2 = result.output.find(
+      (o) => o.type === 'function_call' && (o as { call_id?: string }).call_id === 'call_2',
+    )
+    expect(fc1).toMatchObject({
+      type: 'function_call',
+      name: 'spawn_agent',
+      namespace: 'multi_agent_v1',
+    })
+    expect(fc2).toMatchObject({ type: 'function_call', name: 'exec_command' })
+    expect('namespace' in (fc2 as object)).toBe(false)
+  })
+
   it('renders flattened toolName back to {name, namespace} in streaming', async () => {
     const namespaceFlatMap = new Map([
       ['multi_agent_v1__spawn_agent', { namespace: 'multi_agent_v1', name: 'spawn_agent' }],

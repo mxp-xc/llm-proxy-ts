@@ -591,6 +591,41 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(Object.keys(result.tools!).sort()).toEqual(['apply_patch', 'shell_command'])
   })
 
+  it('passes namespace tools through as providerOptions.openai.namespace for openai provider', () => {
+    // openai 上游原生支持 namespace：子工具用原名注册（不 flatten 成 mcp__ns__name），
+    // 附 providerOptions.openai.namespace 由 SDK 组装为上游 {type:'namespace', name, tools:[...]}
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: 'hi',
+        tools: [
+          {
+            type: 'namespace',
+            name: 'mcp__node_repl',
+            description: 'node repl',
+            tools: [
+              {
+                type: 'function',
+                name: 'js',
+                description: 'run js',
+                parameters: { type: 'object', properties: { code: { type: 'string' } } },
+              },
+              { type: 'function', name: 'js_reset', parameters: { type: 'object' } },
+            ],
+          },
+        ],
+      },
+      'openai',
+    )
+    expect(Object.keys(result.tools!).sort()).toEqual(['js', 'js_reset'])
+    expect(result.tools!['js']!.providerOptions).toEqual({
+      openai: { namespace: { name: 'mcp__node_repl', description: 'node repl' } },
+    })
+    expect(result.tools!['js_reset']!.providerOptions).toEqual({
+      openai: { namespace: { name: 'mcp__node_repl', description: 'node repl' } },
+    })
+  })
+
   it('shims apply_patch custom tool as function for openai-compatible provider', () => {
     const result = mapResponsesRequestToAISDKInput(
       {
@@ -1008,6 +1043,50 @@ describe('mapResponsesRequestToAISDKInput', () => {
             type: 'tool-result',
             toolCallId: 'call_1',
             toolName: 'multi_agent_v1__spawn_agent',
+            output: { type: 'text', value: '{"agent_id":"a1"}' },
+          },
+        ],
+      })
+    })
+
+    it('passes function_call namespace via providerMetadata for openai provider', () => {
+      // openai 上游：历史 function_call 保持原名，namespace 通过 providerMetadata.openai.namespace
+      // 携带，SDK 据此重建上游 function_call.namespace（不 flatten 成 ns__name）
+      const result = mapResponsesRequestToAISDKInput(
+        {
+          model: 'gpt-5',
+          input: [
+            {
+              type: 'function_call',
+              call_id: 'call_1',
+              name: 'spawn_agent',
+              namespace: 'multi_agent_v1',
+              arguments: '{"message":"hi"}',
+            },
+            { type: 'function_call_output', call_id: 'call_1', output: '{"agent_id":"a1"}' },
+          ],
+        },
+        'openai',
+      )
+      expect(result.messages[0]).toEqual({
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'call_1',
+            toolName: 'spawn_agent',
+            input: { message: 'hi' },
+            providerMetadata: { openai: { namespace: 'multi_agent_v1' } },
+          },
+        ],
+      })
+      expect(result.messages[1]).toEqual({
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'call_1',
+            toolName: 'spawn_agent',
             output: { type: 'text', value: '{"agent_id":"a1"}' },
           },
         ],

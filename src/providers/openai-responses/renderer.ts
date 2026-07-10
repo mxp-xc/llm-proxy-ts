@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { toErrorMessage } from '../protocol-types.js'
 import { extractUsageFromFinishPart, hasUsageData } from '../shared/renderer-utils.js'
+import type { ProviderMetadata } from 'ai'
 import type { SSEOutput } from '../shared/sse-utils.js'
 import type { FinishReason, RenderResultInput, NamespaceFlatMap } from '../protocol-types.js'
 import type { ProxyStreamPart } from '../shared/aisdk-types.js'
@@ -73,8 +74,16 @@ function isToolSearchShimmed(toolName: string, shimmed: boolean | undefined): bo
  *  不进此函数——apply_patch namespace=None 无需拆回，tool_search 是 hosted 不在 flatMap。 */
 function resolveNamespacedToolName(
   toolName: string,
-  namespaceFlatMap?: NamespaceFlatMap,
+  namespaceFlatMap: NamespaceFlatMap | undefined,
+  providerMetadata: ProviderMetadata | undefined,
+  passthrough?: boolean,
 ): { name: string; namespace?: string } {
+  // openai 上游：namespace 由 SDK 放在 tool-call part 的 providerMetadata.openai.namespace
+  if (passthrough) {
+    const ns = (providerMetadata?.openai as { namespace?: string } | undefined)?.namespace
+    return ns != null ? { name: toolName, namespace: ns } : { name: toolName }
+  }
+  // 非 openai 上游：从请求侧构建的 flatMap 反查拍平 toolName
   const entry = namespaceFlatMap?.get(toolName)
   if (entry && entry.namespace !== undefined) {
     return { name: entry.name, namespace: entry.namespace }
@@ -182,6 +191,7 @@ export async function* renderOpenAIResponseSSE(
   const customToolShimmed = input.customToolShimmed
   const toolSearchShimmed = input.toolSearchShimmed
   const namespaceFlatMap = input.namespaceFlatMap
+  const namespacePassthrough = input.namespacePassthrough
 
   function nextSeq(): number {
     return ++sequenceNumber
@@ -445,7 +455,12 @@ export async function* renderOpenAIResponseSSE(
 
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
-        const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
+        const nsResolved = resolveNamespacedToolName(
+          toolName,
+          namespaceFlatMap,
+          part.providerMetadata,
+          namespacePassthrough,
+        )
         const addedItem = isCustom
           ? {
               id: fcId,
@@ -540,7 +555,12 @@ export async function* renderOpenAIResponseSSE(
           toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
-        const nsResolved = resolveNamespacedToolName(toolName, namespaceFlatMap)
+        const nsResolved = resolveNamespacedToolName(
+          toolName,
+          namespaceFlatMap,
+          part.providerMetadata,
+          namespacePassthrough,
+        )
 
         yield* closeCurrentTextMessage()
 
@@ -860,6 +880,7 @@ export function renderOpenAIResponse(
   const customToolShimmed = input.customToolShimmed
   const toolSearchShimmed = input.toolSearchShimmed
   const namespaceFlatMap = input.namespaceFlatMap
+  const namespacePassthrough = input.namespacePassthrough
 
   if (input.text != null) {
     output.push({
@@ -900,7 +921,12 @@ export function renderOpenAIResponse(
         })
       } else {
         const args = typeof call.input === 'string' ? call.input : JSON.stringify(call.input ?? {})
-        const nsResolved = resolveNamespacedToolName(call.toolName, namespaceFlatMap)
+        const nsResolved = resolveNamespacedToolName(
+          call.toolName,
+          namespaceFlatMap,
+          call.providerMetadata,
+          namespacePassthrough,
+        )
         output.push({
           id: `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
           type: 'function_call',

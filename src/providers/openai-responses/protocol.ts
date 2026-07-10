@@ -364,6 +364,9 @@ export function mapResponsesRequestToAISDKInput(
 ): AISDKInput {
   const messages: ProtocolMessage[] = []
   const systemParts: string[] = []
+  // openai 上游原生支持 namespace：namespace 走 providerOptions.openai.namespace 透传（不 flatten），
+  // 历史 function_call/custom_tool_call 的 namespace 通过 providerMetadata 携带由 SDK 重建。
+  const nativeResponses = providerType === 'openai'
 
   // instructions → system option
   if (request.instructions !== undefined && request.instructions !== '') {
@@ -380,7 +383,10 @@ export function mapResponsesRequestToAISDKInput(
     for (const item of request.input) {
       if ('type' in item && item.type === 'function_call') {
         const fc = item as { call_id: string; name: string; namespace?: string }
-        callIdToName.set(fc.call_id, flattenToolName(fc.name, fc.namespace))
+        callIdToName.set(
+          fc.call_id,
+          nativeResponses ? fc.name : flattenToolName(fc.name, fc.namespace),
+        )
       }
     }
 
@@ -400,8 +406,12 @@ export function mapResponsesRequestToAISDKInput(
             {
               type: 'tool-call',
               toolCallId: fc.call_id,
-              toolName: flattenToolName(fc.name, fc.namespace),
+              toolName: nativeResponses ? fc.name : flattenToolName(fc.name, fc.namespace),
               input: args,
+              // openai 上游：namespace 由 SDK 从 providerMetadata 重建为 function_call.namespace
+              ...(nativeResponses && fc.namespace !== undefined
+                ? { providerMetadata: { openai: { namespace: fc.namespace } } }
+                : {}),
             },
           ],
         })
@@ -426,8 +436,11 @@ export function mapResponsesRequestToAISDKInput(
           namespace?: string
           input: string | Record<string, unknown>
         }
-        callIdToName.set(ctc.call_id, flattenToolName(ctc.name, ctc.namespace))
-        const isShimmed = providerType !== 'openai'
+        callIdToName.set(
+          ctc.call_id,
+          nativeResponses ? ctc.name : flattenToolName(ctc.name, ctc.namespace),
+        )
+        const isShimmed = !nativeResponses
         const rawInput = ctc.input
         const mappedInput =
           isShimmed && typeof rawInput === 'string' ? { input: rawInput } : rawInput
@@ -437,8 +450,11 @@ export function mapResponsesRequestToAISDKInput(
             {
               type: 'tool-call',
               toolCallId: ctc.call_id,
-              toolName: flattenToolName(ctc.name, ctc.namespace),
+              toolName: nativeResponses ? ctc.name : flattenToolName(ctc.name, ctc.namespace),
               input: mappedInput,
+              ...(nativeResponses && ctc.namespace !== undefined
+                ? { providerMetadata: { openai: { namespace: ctc.namespace } } }
+                : {}),
             },
           ],
         })
@@ -575,19 +591,38 @@ export function mapResponsesRequestToAISDKInput(
         }
       } else if (tool.type === 'namespace') {
         // namespace tool：Codex 把 MCP server 的工具包成 {type:'namespace', name, tools:[function...]}。
-        // AI SDK 不认 namespace tool（prepareResponsesTools 无此 case），原样透传会被丢弃 → MCP 工具不可用。
-        // flatten 成顶层 function tool，name 用 mcp__<server>__<tool> 匹配 Codex 扁平回路命名（codex issue #20652）。
-        // 对 compatible + openai 上游均生效（function tool 不会被丢弃）。
-        const nsTool = tool as { name?: string; tools?: ResponsesFunctionTool[] }
+        // openai 上游原生支持 namespace：子工具用原名注册 + providerOptions.openai.namespace，
+        // SDK 自动组装为上游 {type:'namespace', name, tools:[...]}（@ai-sdk/openai@3.0.69+）。
+        // 非 openai 上游（Chat Completions/Anthropic 协议无 namespace）：flatten 成顶层 function tool，
+        // name 用 mcp__<server>__<tool> 匹配 Codex 扁平回路命名（codex issue #20652）。
+        const nsTool = tool as {
+          name?: string
+          description?: string
+          tools?: ResponsesFunctionTool[]
+        }
         if (nsTool.name && Array.isArray(nsTool.tools)) {
           for (const subTool of nsTool.tools) {
             // Fix 4: 校验 subTool.name，避免 malformed sub-tool 变成 `mcp__x__undefined`
             if (!subTool.name) continue
             // 只展开 function 子工具；非 function（如 custom）子工具跳过，避免被当 function 注册
             if ((subTool as { type?: string }).type !== 'function') continue
-            const flatName = flattenToolName(subTool.name, nsTool.name)
-            toolSet[flatName] = mapResponsesFunctionTool({ ...subTool, name: flatName })
-            selectableToolNames.add(flatName)
+            if (nativeResponses) {
+              const def = mapResponsesFunctionTool(subTool)
+              def.providerOptions = {
+                openai: {
+                  namespace: {
+                    name: nsTool.name,
+                    ...(nsTool.description !== undefined && { description: nsTool.description }),
+                  },
+                },
+              }
+              toolSet[subTool.name] = def
+              selectableToolNames.add(subTool.name)
+            } else {
+              const flatName = flattenToolName(subTool.name, nsTool.name)
+              toolSet[flatName] = mapResponsesFunctionTool({ ...subTool, name: flatName })
+              selectableToolNames.add(flatName)
+            }
           }
         }
       } else if (providerType === 'openai' && tool.type === 'web_search') {
@@ -677,17 +712,37 @@ export function mapResponsesRequestToAISDKInput(
           if (!t.name || !Array.isArray(t.tools)) continue
           for (const sub of t.tools) {
             if (!sub.name || sub.type !== 'function') continue
-            const flatName = flattenToolName(sub.name, t.name)
-            if (flatName in toolSet) continue // 幂等
-            // 显式构型 type:'function'（sub 来自 passthrough record，type 非 'function' 字面量，
-            // spread 不保留字面量 → 需显式声明以满足 mapResponsesFunctionTool 的 ResponsesFunctionTool 类型）
-            toolSet[flatName] = mapResponsesFunctionTool({
-              type: 'function',
-              name: flatName,
-              ...(sub.description !== undefined && { description: sub.description }),
-              ...(sub.parameters !== undefined && { parameters: sub.parameters }),
-            })
-            selectableToolNames.add(flatName)
+            if (nativeResponses) {
+              if (sub.name in toolSet) continue // 幂等
+              const def = mapResponsesFunctionTool({
+                type: 'function',
+                name: sub.name,
+                ...(sub.description !== undefined && { description: sub.description }),
+                ...(sub.parameters !== undefined && { parameters: sub.parameters }),
+              })
+              def.providerOptions = {
+                openai: {
+                  namespace: {
+                    name: t.name,
+                    ...(t.description !== undefined && { description: t.description }),
+                  },
+                },
+              }
+              toolSet[sub.name] = def
+              selectableToolNames.add(sub.name)
+            } else {
+              const flatName = flattenToolName(sub.name, t.name)
+              if (flatName in toolSet) continue // 幂等
+              // 显式构型 type:'function'（sub 来自 passthrough record，type 非 'function' 字面量，
+              // spread 不保留字面量 → 需显式声明以满足 mapResponsesFunctionTool 的 ResponsesFunctionTool 类型）
+              toolSet[flatName] = mapResponsesFunctionTool({
+                type: 'function',
+                name: flatName,
+                ...(sub.description !== undefined && { description: sub.description }),
+                ...(sub.parameters !== undefined && { parameters: sub.parameters }),
+              })
+              selectableToolNames.add(flatName)
+            }
           }
         } else if (t.type === 'function') {
           if (!t.name) continue

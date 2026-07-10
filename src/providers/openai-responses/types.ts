@@ -318,4 +318,7 @@ export type ResponsesEnrichment = {
   customToolShimmed?: boolean
   toolSearchShimmed?: boolean
   namespaceFlatMap?: NamespaceFlatMap
+  /** openai 上游原生支持 namespace：请求侧用 providerOptions.openai.namespace 透传、
+   *  响应侧从 providerMetadata.openai.namespace 取，不走 flatten/反查。 */
+  namespacePassthrough?: boolean
 }
