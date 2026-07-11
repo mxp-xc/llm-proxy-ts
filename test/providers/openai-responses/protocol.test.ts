@@ -278,6 +278,39 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.system).toBe('Be helpful\nBe precise')
   })
 
+  it('keeps native OpenAI instructions and developer messages on AI SDK standard fields', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'Be precise' }],
+          },
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hello' }],
+          },
+        ],
+        instructions: 'Be helpful',
+      },
+      'openai',
+    )
+
+    expect(result.system).toBeUndefined()
+    expect(result.allowSystemInMessages).toBe(true)
+    expect(result.messages).toEqual([
+      { role: 'system', content: 'Be precise' },
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+    ])
+    expect(result.providerOptions?.openai).toEqual({
+      instructions: 'Be helpful',
+      systemMessageMode: 'developer',
+    })
+  })
+
   it('maps input_text content to AI SDK text type', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',

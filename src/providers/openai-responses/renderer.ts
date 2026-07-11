@@ -981,3 +981,136 @@ export function renderOpenAIResponse(
 
   return response
 }
+
+export function renderOpenAIResponsesRawResponse(
+  input: RenderResultInput & ResponsesEnrichment,
+): OpenAIResponse {
+  if (input.response && 'body' in input.response && input.response.body !== undefined) {
+    return input.response.body as OpenAIResponse
+  }
+  return renderOpenAIResponse(input)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isResponseFailedFrame(value: unknown): value is OpenAIResponseStreamEvent {
+  return isRecord(value) && value.type === 'response.failed'
+}
+
+export function tryExtractOpenAIResponsesFailedFrame(
+  error: unknown,
+): OpenAIResponseStreamEvent | undefined {
+  const seen = new Set<unknown>()
+  const stack: unknown[] = [error]
+
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (!current || seen.has(current)) continue
+    seen.add(current)
+
+    if (isResponseFailedFrame(current)) return current
+    if (!isRecord(current)) continue
+
+    const data = current.data
+    if (isResponseFailedFrame(data)) return data
+
+    const responseBody = current.responseBody
+    if (typeof responseBody === 'string') {
+      try {
+        const parsed = JSON.parse(responseBody) as unknown
+        if (isResponseFailedFrame(parsed)) return parsed
+      } catch {
+        // responseBody is best-effort error metadata; fall through to generic handling.
+      }
+    }
+
+    if ('lastError' in current) stack.push(current.lastError)
+    if ('cause' in current) stack.push(current.cause)
+  }
+
+  return undefined
+}
+
+function rawEventName(rawValue: unknown): string | undefined {
+  return isRecord(rawValue) && typeof rawValue.type === 'string' ? rawValue.type : undefined
+}
+
+export async function* renderOpenAIResponsesRawSSE(input: {
+  model: string
+  stream: AsyncIterable<ProxyStreamPart>
+}): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
+  for await (const part of input.stream) {
+    if (part.type === 'raw') {
+      const event = rawEventName(part.rawValue)
+      const frame: SSEOutput<OpenAIResponseStreamEvent> =
+        event !== undefined
+          ? { event, data: part.rawValue as OpenAIResponseStreamEvent }
+          : { data: part.rawValue as OpenAIResponseStreamEvent }
+      yield frame
+      continue
+    }
+
+    if (part.type === 'error') {
+      const failedFrame = tryExtractOpenAIResponsesFailedFrame(part.error)
+      if (failedFrame) {
+        yield { event: 'response.failed', data: failedFrame }
+        return
+      }
+      yield {
+        event: 'response.failed',
+        data: {
+          type: 'response.failed',
+          sequence_number: 0,
+          response: {
+            id: `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+            object: 'response',
+            created_at: Math.floor(Date.now() / 1000),
+            model: input.model,
+            status: 'failed',
+            output: [],
+            output_text: '',
+            error: { message: toErrorMessage(part.error) },
+            instructions: null,
+            temperature: null,
+            top_p: null,
+            tool_choice: null,
+            tools: [],
+            parallel_tool_calls: true,
+            truncation: 'disabled',
+          },
+        },
+      }
+      return
+    }
+
+    if (part.type === 'openai-error') {
+      yield {
+        event: 'response.failed',
+        data: {
+          type: 'response.failed',
+          sequence_number: 0,
+          response: {
+            id: `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+            object: 'response',
+            created_at: Math.floor(Date.now() / 1000),
+            model: input.model,
+            status: 'failed',
+            output: [],
+            output_text: '',
+            error: { message: toErrorMessage(part.body) },
+            instructions: null,
+            temperature: null,
+            top_p: null,
+            tool_choice: null,
+            tools: [],
+            parallel_tool_calls: true,
+            truncation: 'disabled',
+          },
+        },
+      }
+      return
+    }
+  }
+}

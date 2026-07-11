@@ -30,7 +30,12 @@ export interface RenderResultInput {
     cacheReadTokens?: number
     reasoningTokens?: number
   }
-  response?: { id?: string; timestamp?: Date }
+  response?: {
+    id?: string
+    timestamp?: Date
+    body?: unknown
+    headers?: Headers | Record<string, string>
+  }
   toolCalls?: Array<{
     toolCallId: string
     toolName: string

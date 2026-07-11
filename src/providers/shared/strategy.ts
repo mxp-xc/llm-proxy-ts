@@ -4,8 +4,9 @@ import type { RenderResultInput } from '../protocol-types.js'
 import type { ProtocolErrorFormatter } from './error-format.js'
 import type { RouteMatch } from '../../routing.js'
 import type { Settings } from '../../config.js'
-import type { ProviderPassthroughTransport } from '../registry.js'
+import type { LanguageModelOptions, ProviderPassthroughTransport } from '../registry.js'
 import type { Logger } from '../../types.js'
+import type { GatewayGenerateOptions, GatewayStreamOptions } from '../../server/types.js'
 
 /** passthrough 直通转发入参：原生协议 + 原生上游时，请求响应绕过 AI SDK 直接转发。
  *  仅 openai-responses + openai 上游启用；其余协议/上游不实现 passthrough（回退 AI SDK 路径）。 */
@@ -66,6 +67,40 @@ export interface ProtocolStrategy<
 export interface ProtocolRenderEnrichment<TRequest, TEnrichment extends object> {
   /** 策略专属的请求侧 enrichment 计算；返回的不透明对象由编排器原样透传给 renderer。 */
   prepareEnrichment(request: TRequest, providerType: string): TEnrichment | undefined
+}
+
+export interface ExecutionOverrideInput<TRequest> {
+  route: RouteMatch
+  request: TRequest
+  rawBody: unknown
+  upstreamModel: string
+}
+
+export interface ExecutionOverrideConfig<TSSEData, TResult, TEnrichment extends object> {
+  languageModelOptions?: LanguageModelOptions
+  generateOptions?: GatewayGenerateOptions
+  streamOptions?: GatewayStreamOptions
+  renderResult?: (input: RenderResultInput & TEnrichment) => TResult
+  renderStreamSSE?: (
+    input: {
+      model: string
+      stream: AsyncIterable<ProxyStreamPart>
+    } & TEnrichment,
+  ) => AsyncIterable<SSEOutput<TSSEData>>
+  responseHeaders?: (input: RenderResultInput & TEnrichment) => HeadersInit | undefined
+  streamResponseHeaders?: () => HeadersInit | undefined
+}
+
+export interface ProtocolExecutionOverride<
+  TRequest,
+  TSSEData,
+  TResult,
+  TEnrichment extends object,
+> {
+  /** 为特定 provider/request 替换执行细节；undefined 表示继续普通矩阵转换路径。 */
+  prepareExecution(
+    input: ExecutionOverrideInput<TRequest>,
+  ): ExecutionOverrideConfig<TSSEData, TResult, TEnrichment> | undefined
 }
 
 export interface ProtocolPassthroughCapability<TRequest> {

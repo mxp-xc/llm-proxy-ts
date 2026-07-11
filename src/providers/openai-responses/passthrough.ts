@@ -1,13 +1,9 @@
-import { sanitizeHeaders } from '../shared/provider-factory.js'
-import { openAIErrorFormat } from '../shared/error-format.js'
-import { withRequestTimeout, RequestTimeoutError } from '../../request-timeout.js'
-import { OAuthError } from '../../oauth/types.js'
-import type { OpenAIProviderConfig } from '../../config.js'
-import type { PassthroughInput } from '../shared/strategy.js'
+import type { ExecutionOverrideInput, ExecutionOverrideConfig } from '../shared/strategy.js'
 import type { OpenAIResponsesRequest } from './protocol.js'
+import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
+import { renderOpenAIResponsesRawResponse, renderOpenAIResponsesRawSSE } from './renderer.js'
 
-/** 响应头中需剔除的：content-encoding/length 由 Response 重新计算，
- *  透传会导致客户端重复解压或长度不匹配。 */
+/** 响应头中需剔除的：content-encoding/length 由 Response 重新计算。 */
 const SKIP_RESPONSE_HEADERS = new Set([
   'content-encoding',
   'content-length',
@@ -15,156 +11,213 @@ const SKIP_RESPONSE_HEADERS = new Set([
   'connection',
 ])
 
-/**
- * 构造上游请求头：仅 content-type + accept + provider/model 配置头 + Authorization。
- *
- * **不透传客户端（codex）请求头**（originator、user-agent、x-codex-*、x-oai-attestation、
- * session-id、thread-id 等）：上游后端会校验 codex 客户端头（attestation），
- * codex CLI（codex_exec）不生成 attestation，透传这些头会被上游拒绝（502）。
- * 这与 AI SDK 路径行为一致（AI SDK 仅发 provider 配置头 + Authorization），
- * 也与脚本直连后端的原生基准一致（脚本不带 codex 客户端头）。
- */
-function buildUpstreamHeaders(
-  routeHeaders: Record<string, string>,
-  apiKey: string | undefined,
-  isStream: boolean,
-  openAIOptions: OpenAIProviderConfig['options'] | undefined,
-): Headers {
-  const headers = new Headers()
-  headers.set('content-type', 'application/json')
-  if (isStream) headers.set('accept', 'text/event-stream')
-  if (openAIOptions?.organization !== undefined) {
-    headers.set('OpenAI-Organization', openAIOptions.organization)
-  }
-  if (openAIOptions?.project !== undefined) {
-    headers.set('OpenAI-Project', openAIOptions.project)
-  }
-  // provider/model 配置头（sanitize 去敏感：authorization/api-key 等）
-  for (const [key, value] of Object.entries(sanitizeHeaders(routeHeaders))) {
-    headers.set(key, value)
-  }
-  // authorization：后端真实 key（不透传客户端的 "Bearer not-need"）
-  if (apiKey !== undefined) {
-    headers.set('authorization', `Bearer ${apiKey}`)
-  }
-  return headers
+type FetchWrapper = (baseFetch?: typeof fetch) => typeof fetch
+export interface OpenAIResponsesPassthroughFetchState {
+  responseHeaders?: Headers
+}
+const WEB_SEARCH_RAW_ONLY_FIELDS = ['search_content_types', 'index_gated_web_access'] as const
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function filterResponseHeaders(headers: Headers): Headers {
+function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'string') return undefined
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return isRecord(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isResponsesUrl(input: RequestInfo | URL): boolean {
+  const url = input instanceof Request ? input.url : input.toString()
+  try {
+    return new URL(url).pathname.replace(/\/+$/, '').endsWith('/responses')
+  } catch {
+    return false
+  }
+}
+
+function contentIncludesText(content: unknown, text: string): boolean {
+  if (typeof content === 'string') return content.includes(text)
+  if (Array.isArray(content)) return content.some((part) => contentIncludesText(part, text))
+  if (!isRecord(content)) return false
+
+  if (typeof content.text === 'string' && content.text.includes(text)) return true
+  if ('content' in content) return contentIncludesText(content.content, text)
+  return false
+}
+
+function sdkInputAlreadyContainsInstructions(
+  sdkBody: Record<string, unknown>,
+  instructions: string,
+): boolean {
+  const input = sdkBody.input
+  if (!Array.isArray(input)) return false
+
+  return input.some((item) => {
+    if (!isRecord(item)) return false
+    const role = item.role
+    if (role !== 'developer' && role !== 'system') return false
+    return contentIncludesText(item.content, instructions)
+  })
+}
+
+function patchWebSearchTools(
+  sdkTools: unknown,
+  rawTools: unknown,
+): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(sdkTools) || !Array.isArray(rawTools)) return undefined
+
+  const rawWebSearchTools = rawTools.filter(
+    (tool): tool is Record<string, unknown> => isRecord(tool) && tool.type === 'web_search',
+  )
+  if (rawWebSearchTools.length === 0) return undefined
+
+  let rawIndex = 0
+  let changed = false
+  const patchedTools = sdkTools.map((tool) => {
+    if (!isRecord(tool) || tool.type !== 'web_search') return tool
+
+    const rawTool = rawWebSearchTools[rawIndex]
+    rawIndex += 1
+    if (!rawTool) return tool
+
+    const patchedTool: Record<string, unknown> = { ...tool }
+    for (const key of WEB_SEARCH_RAW_ONLY_FIELDS) {
+      if (key in rawTool && !(key in patchedTool)) {
+        patchedTool[key] = rawTool[key]
+        changed = true
+      }
+    }
+    return patchedTool
+  })
+
+  return changed ? patchedTools : undefined
+}
+
+function mergeRequestHeadersForBody(
+  headers: HeadersInit | undefined,
+  mergedBody: Record<string, unknown>,
+): HeadersInit | undefined {
+  if (mergedBody.stream !== true) return headers
+
+  const mergedHeaders = new Headers(headers)
+  mergedHeaders.set('accept', 'text/event-stream')
+  return mergedHeaders
+}
+
+export function mergeOpenAIResponsesRequestBody(
+  sdkBody: Record<string, unknown>,
+  rawBody: unknown,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...sdkBody }
+  if (!isRecord(rawBody)) return merged
+
+  if (Array.isArray(rawBody.include)) {
+    merged.include = rawBody.include
+  }
+
+  const patchedTools = patchWebSearchTools(merged.tools, rawBody.tools)
+  if (patchedTools !== undefined) {
+    merged.tools = patchedTools
+  }
+
+  for (const [key, value] of Object.entries(rawBody)) {
+    if (
+      key === 'instructions' &&
+      typeof value === 'string' &&
+      sdkInputAlreadyContainsInstructions(merged, value)
+    ) {
+      continue
+    }
+    if (!(key in merged)) {
+      merged[key] = value
+    }
+  }
+  return merged
+}
+
+export function createOpenAIResponsesRequestBodyMergeFetch(
+  rawBody: unknown,
+  state?: OpenAIResponsesPassthroughFetchState,
+): FetchWrapper {
+  return (baseFetch) => {
+    const fetchFn = baseFetch ?? globalThis.fetch
+    return async (input, init) => {
+      if (!isResponsesUrl(input)) {
+        return fetchFn(input, init)
+      }
+
+      const sendResponsesRequest = async (
+        requestInput: RequestInfo | URL,
+        requestInit: RequestInit | undefined,
+      ) => {
+        const response = await fetchFn(requestInput, requestInit)
+        if (state !== undefined) {
+          state.responseHeaders = new Headers(response.headers)
+        }
+        return response
+      }
+
+      const sdkBody = parseJsonObject(init?.body)
+      if (!sdkBody) {
+        return sendResponsesRequest(input, init)
+      }
+
+      const mergedBody = mergeOpenAIResponsesRequestBody(sdkBody, rawBody)
+      const mergedInit: RequestInit = { ...init, body: JSON.stringify(mergedBody) }
+      const mergedHeaders = mergeRequestHeadersForBody(init?.headers, mergedBody)
+      if (mergedHeaders !== undefined) mergedInit.headers = mergedHeaders
+      return sendResponsesRequest(input, mergedInit)
+    }
+  }
+}
+
+export function filterOpenAIResponsesResponseHeaders(headers: unknown): Headers | undefined {
+  if (headers === undefined || headers === null) return undefined
+  const source = headers instanceof Headers ? headers : new Headers(headers as HeadersInit)
   const filtered = new Headers()
-  for (const [key, value] of headers.entries()) {
+  for (const [key, value] of source.entries()) {
     if (SKIP_RESPONSE_HEADERS.has(key.toLowerCase())) continue
     filtered.set(key, value)
+    if (key.toLowerCase() === 'x-request-id' && !filtered.has('x-upstream-request-id')) {
+      filtered.set('x-upstream-request-id', value)
+    }
   }
   return filtered
 }
 
-/** 日志安全 URL：保留 protocol://host/path，剥离可能的 query 敏感参数。 */
-function safeUrl(url: string): string {
-  try {
-    const u = new URL(url)
-    return `${u.protocol}//${u.host}${u.pathname}`
-  } catch {
-    return url
-  }
-}
+export function prepareOpenAIResponsesPassthroughExecution(
+  input: ExecutionOverrideInput<OpenAIResponsesRequest>,
+):
+  | ExecutionOverrideConfig<OpenAIResponseStreamEvent, OpenAIResponse, ResponsesEnrichment>
+  | undefined {
+  if (input.route.provider.type !== 'openai') return undefined
 
-/**
- * openai-responses + openai 上游 passthrough 直通转发：
- * 请求原始 JSON（仅替换 model + Authorization）直接 POST 到 {baseURL}/responses，
- * 响应 SSE/JSON 直接 pipe，绕过 AI SDK 序列化/解析，实现出入参字节级一致。
- *
- * 非 openai 上游（openai-compatible/anthropic）返回 undefined，回退 AI SDK 矩阵转换路径。
- * 后端非 2xx：原生错误格式透传（status + body），客户端拿到与直连一致的错误。
- */
-export async function passthroughOpenAIResponses(
-  input: PassthroughInput<OpenAIResponsesRequest>,
-): Promise<Response | undefined> {
-  const { route, rawBody, upstreamModel, settings, passthroughTransport, abortController } = input
+  const fetchState: OpenAIResponsesPassthroughFetchState = {}
 
-  if (route.provider.type !== 'openai') return undefined
-
-  const provider = route.provider
-  const baseURL = provider.baseURL ?? 'https://api.openai.com/v1'
-  const url = `${baseURL.replace(/\/+$/, '')}/responses`
-
-  // body：原始 JSON 副本，仅替换 model。保留 instructions/service_tier/client_metadata
-  // 及 input 子项原貌（schema 虽 passthrough，但子 schema 会 strip；故必须用原始 body）。
-  const bodyObj =
-    rawBody != null && typeof rawBody === 'object' ? (rawBody as Record<string, unknown>) : {}
-  const body = JSON.stringify({ ...bodyObj, model: upstreamModel })
-
-  const { fetch: fetchFn, apiKey, keySelection } = passthroughTransport(route.providerName)
-  if (keySelection) input.setKeySelection(keySelection)
-
-  const headers = buildUpstreamHeaders(
-    route.headers,
-    apiKey,
-    input.request.stream ?? false,
-    provider.options,
-  )
-  const { logger } = input
-
-  try {
-    const upstream = await withRequestTimeout(
-      fetchFn(url, {
-        method: 'POST',
-        headers,
-        body,
-        signal: abortController.signal,
-      }),
-      settings.requestTimeoutMs,
-      abortController,
-    )
-
-    // 后端非 2xx：原生错误格式透传（status + body），codex 拿到与直连一致的错误
-    if (!upstream.ok) {
-      const errBody = await upstream.text()
-      const error = new Error(`Passthrough upstream returned ${upstream.status}`)
-      logger.error(
-        {
-          err: error,
-          status: upstream.status,
-          provider: route.providerName,
-          url: safeUrl(url),
-          errBody: errBody.slice(0, 1000),
-        },
-        'passthrough upstream non-2xx',
+  return {
+    languageModelOptions: {
+      customFetch: createOpenAIResponsesRequestBodyMergeFetch(input.rawBody, fetchState),
+    },
+    generateOptions: {
+      include: { requestBody: true, responseBody: true },
+    },
+    streamOptions: {
+      include: { requestBody: true, rawChunks: true },
+    },
+    renderResult: renderOpenAIResponsesRawResponse,
+    renderStreamSSE: renderOpenAIResponsesRawSSE,
+    responseHeaders(renderInput) {
+      return filterOpenAIResponsesResponseHeaders(
+        renderInput.response?.headers ?? fetchState.responseHeaders,
       )
-      return new Response(errBody, {
-        status: upstream.status,
-        statusText: upstream.statusText,
-        headers: filterResponseHeaders(upstream.headers),
-      })
-    }
-
-    return new Response(upstream.body, {
-      status: upstream.status,
-      statusText: upstream.statusText,
-      headers: filterResponseHeaders(upstream.headers),
-    })
-  } catch (error) {
-    if (error instanceof OAuthError && error.code === 'auth_required') {
-      logger.error(
-        { err: error, provider: route.providerName, url: safeUrl(url) },
-        'passthrough oauth required',
-      )
-      const { body: errBody, status } = openAIErrorFormat.oauth(error.message, input.loginUrl)
-      return Response.json(errBody, { status })
-    }
-    if (error instanceof RequestTimeoutError) {
-      logger.error(
-        { err: error, provider: route.providerName, url: safeUrl(url) },
-        'passthrough fetch timed out',
-      )
-      const { body: errBody, status } = openAIErrorFormat.timeout()
-      return Response.json(errBody, { status })
-    }
-    logger.error(
-      { err: error, provider: route.providerName, url: safeUrl(url) },
-      'passthrough fetch failed',
-    )
-    const { body: errBody, status } = openAIErrorFormat.upstream()
-    return Response.json(errBody, { status })
+    },
+    streamResponseHeaders() {
+      return filterOpenAIResponsesResponseHeaders(fetchState.responseHeaders)
+    },
   }
 }

@@ -217,6 +217,79 @@ describe('provider registry', () => {
     expect(transport.fetch).toBeDefined()
     expect(transport.apiKey).toBe('secret')
   })
+
+  it('composes request-scoped fetch inside auth fetch for language models', async () => {
+    const calls: string[] = []
+    let capturedHeaders: Headers | undefined
+    let capturedBody: BodyInit | null | undefined
+    const authFetch = ((baseFetch?: typeof fetch) => {
+      return async (input, init) => {
+        calls.push('auth')
+        const headers = new Headers(init?.headers)
+        headers.set('x-auth-plugin', 'yes')
+        const fetchFn = baseFetch ?? globalThis.fetch
+        return fetchFn(input, { ...init, headers })
+      }
+    }) satisfies (baseFetch?: typeof fetch) => typeof fetch
+    const requestFetch = ((baseFetch?: typeof fetch) => {
+      return async (input, init) => {
+        calls.push('request')
+        const headers = new Headers(init?.headers)
+        expect(headers.get('x-auth-plugin')).toBe('yes')
+        const fetchFn = baseFetch ?? globalThis.fetch
+        return fetchFn(input, { ...init, body: 'request-body' })
+      }
+    }) satisfies (baseFetch?: typeof fetch) => typeof fetch
+    const baseFetch = (async (_input, init) => {
+      calls.push('base')
+      capturedHeaders = new Headers(init?.headers)
+      capturedBody = init?.body
+      return new Response('{}', { headers: { 'content-type': 'application/json' } })
+    }) satisfies typeof fetch
+    const pluginRegistry: AuthFetchRegistry = {
+      async createAuthFetch(providerId) {
+        return providerId === 'openrouter' ? authFetch : undefined
+      },
+    }
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      mockLogger,
+      pluginRegistry,
+      undefined,
+      stubFactory,
+    )
+
+    const first = registry.languageModel(
+      'openrouter',
+      'openrouter/chat',
+      {},
+      {
+        customFetch: requestFetch,
+      },
+    )
+    const second = registry.languageModel(
+      'openrouter',
+      'openrouter/chat',
+      {},
+      {
+        customFetch: requestFetch,
+      },
+    )
+
+    expect(first.keySelection).toEqual({ index: 0, count: 1 })
+    expect(second.keySelection).toEqual({ index: 0, count: 1 })
+    const composed = capturedFactoryInputs[0]!.customFetch?.(baseFetch)
+    await composed?.('https://example.test/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'sdk-body',
+    })
+
+    expect(calls).toEqual(['auth', 'request', 'base'])
+    expect(capturedHeaders?.get('x-auth-plugin')).toBe('yes')
+    expect(capturedBody).toBe('request-body')
+  })
 })
 
 describe('shared ProxyAgent singleton', () => {

@@ -736,10 +736,14 @@ export function mapResponsesRequestToAISDKInput(
   // openai 上游原生支持 namespace：namespace 走 providerOptions.openai.namespace 透传（不 flatten），
   // 历史 function_call/custom_tool_call 的 namespace 通过 providerMetadata 携带由 SDK 重建。
   const nativeResponses = providerType === 'openai'
+  let hasNativeSystemMessage = false
+  let hasNativeDeveloperMessage = false
 
   // instructions → system option
   if (request.instructions !== undefined && request.instructions !== '') {
-    systemParts.push(request.instructions)
+    if (!nativeResponses) {
+      systemParts.push(request.instructions)
+    }
   }
 
   // input → messages
@@ -897,7 +901,15 @@ export function mapResponsesRequestToAISDKInput(
         const { role, content } = item
         if (role === 'developer' || role === 'system') {
           const text = typeof content === 'string' ? content : extractTextFromContent(content)
-          if (text) systemParts.push(text)
+          if (text) {
+            if (nativeResponses) {
+              messages.push({ role: 'system', content: text })
+              hasNativeSystemMessage = true
+              if (role === 'developer') hasNativeDeveloperMessage = true
+            } else {
+              systemParts.push(text)
+            }
+          }
         } else {
           messages.push({ role, content: mapEasyInputContent(content) })
         }
@@ -906,7 +918,10 @@ export function mapResponsesRequestToAISDKInput(
   }
 
   const input: AISDKInput = { messages }
-  if (systemParts.length > 0) {
+  if (nativeResponses && hasNativeSystemMessage) {
+    input.allowSystemInMessages = true
+  }
+  if (!nativeResponses && systemParts.length > 0) {
     input.system = systemParts.join('\n')
   }
 
@@ -943,6 +958,12 @@ export function mapResponsesRequestToAISDKInput(
   // prompt_cache_key：AI SDK 期望 promptCacheKey
   if (request.prompt_cache_key !== undefined) {
     providerOptions.promptCacheKey = request.prompt_cache_key
+  }
+  if (nativeResponses && request.instructions !== undefined && request.instructions !== '') {
+    providerOptions.instructions = request.instructions
+  }
+  if (nativeResponses && hasNativeDeveloperMessage) {
+    providerOptions.systemMessageMode = 'developer'
   }
   // client_metadata 是 Codex 客户端侧关联信息；不要转发为上游 metadata。
   if (Object.keys(providerOptions).length > 0) {

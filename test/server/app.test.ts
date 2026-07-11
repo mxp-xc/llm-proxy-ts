@@ -1036,7 +1036,7 @@ describe('request logging', () => {
     expect(completed?.keySelection).toEqual({ index: 1, count: 2 })
   })
 
-  it('logs keySelection for passthrough responses', async () => {
+  it('logs keySelection for openai responses AI SDK path', async () => {
     const { logger, logs } = capturingPino()
     const settings = makeSettings({
       openai: {
@@ -1050,17 +1050,25 @@ describe('request logging', () => {
     })
     const providerRegistry: ProviderRegistry = {
       languageModel() {
-        throw new Error('languageModel should not be called for passthrough')
-      },
-      passthroughTransport() {
         return {
-          apiKey: 'sk-test',
+          model: { provider: 'test:openai', modelId: 'gpt-5' } as never,
           keySelection: { index: 0, count: 1 },
-          fetch: async () => new Response(JSON.stringify({ id: 'resp_1', output: [] })),
         }
       },
+      passthroughTransport() {
+        throw new Error('passthroughTransport should not be called')
+      },
     }
-    const app = createApp({ settings, providerRegistry, logger })
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: '',
+          finishReason: 'stop',
+          response: { body: { id: 'resp_1', output: [] } },
+        } as GenerateTextReturn
+      },
+    })
+    const app = createApp({ settings, providerRegistry, gateway, logger })
 
     const response = await app.request('/v1/responses', {
       method: 'POST',

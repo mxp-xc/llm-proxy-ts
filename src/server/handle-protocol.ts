@@ -5,7 +5,8 @@ import { RoutingError } from '../routing.js'
 import { flattenUsage } from '../providers/shared/renderer-utils.js'
 import { collectStreamResult } from '../providers/shared/stream-collector.js'
 import type {
-  ProtocolPassthroughCapability,
+  ExecutionOverrideConfig,
+  ProtocolExecutionOverride,
   ProtocolRenderEnrichment,
   ProtocolStrategy,
 } from '../providers/shared/strategy.js'
@@ -36,6 +37,7 @@ interface AcquireStreamOptions {
   model: LanguageModel
   callInput: AISDKInput
   requestModel: string
+  options?: Parameters<ModelGateway['stream']>[0]['options']
   plugins: ResolvedPlugin[]
   timeoutMs: number
   abortController: AbortController
@@ -48,12 +50,14 @@ type AcquireStreamResult =
   | { rateLimitResponse: { body: unknown; status: number } }
 
 async function acquireStream(opts: AcquireStreamOptions): Promise<AcquireStreamResult> {
-  const stream = opts.gateway.stream({
+  const streamInput: Parameters<ModelGateway['stream']>[0] = {
     model: opts.model,
     callInput: opts.callInput,
     requestModel: opts.requestModel,
     abortSignal: opts.abortController.signal,
-  })
+  }
+  if (opts.options !== undefined) streamInput.options = opts.options
+  const stream = opts.gateway.stream(streamInput)
   const inspection = await withRequestTimeout(
     inspectFirstStreamChunk(opts.plugins, stream, opts.inspectCtx),
     opts.timeoutMs,
@@ -102,6 +106,59 @@ const TRUNCATED_STREAM_PREVIEW = {
   _truncated: true,
   reason: 'stream error preview exceeded maxBodyLength',
 }
+const STREAM_RESPONSE_HEADER_PROBE_CHUNKS = 8
+
+function replayStreamParts(
+  buffered: ProxyStreamPart[],
+  iterator: AsyncIterator<ProxyStreamPart>,
+): AsyncIterable<ProxyStreamPart> {
+  return (async function* () {
+    try {
+      for (const part of buffered) {
+        yield part
+      }
+      while (true) {
+        const next = await iterator.next()
+        if (next.done) return
+        yield next.value
+      }
+    } finally {
+      await iterator.return?.()
+    }
+  })()
+}
+
+function hasAnyHeader(headers: Headers): boolean {
+  return headers.keys().next().done !== true
+}
+
+async function prepareStreamResponseHeaders(
+  stream: AsyncIterable<ProxyStreamPart>,
+  getHeaders: (() => HeadersInit | undefined) | undefined,
+): Promise<{ stream: AsyncIterable<ProxyStreamPart>; headers: Headers }> {
+  const initialHeaders = new Headers(getHeaders?.())
+  if (hasAnyHeader(initialHeaders) || getHeaders === undefined) {
+    if (!initialHeaders.has('content-type')) initialHeaders.set('content-type', 'text/event-stream')
+    return { stream, headers: initialHeaders }
+  }
+
+  const iterator = stream[Symbol.asyncIterator]()
+  const buffered: ProxyStreamPart[] = []
+  for (let i = 0; i < STREAM_RESPONSE_HEADER_PROBE_CHUNKS; i += 1) {
+    const next = await iterator.next()
+    if (next.done) break
+    buffered.push(next.value)
+
+    const probedHeaders = new Headers(getHeaders())
+    if (hasAnyHeader(probedHeaders)) {
+      if (!probedHeaders.has('content-type')) probedHeaders.set('content-type', 'text/event-stream')
+      return { stream: replayStreamParts(buffered, iterator), headers: probedHeaders }
+    }
+  }
+
+  initialHeaders.set('content-type', 'text/event-stream')
+  return { stream: replayStreamParts(buffered, iterator), headers: initialHeaders }
+}
 
 function appendTruncatedStreamPreview(buffer: unknown[], maxBodyLength: number): void {
   while (
@@ -137,12 +194,14 @@ function stringifyForPreview(value: unknown): string {
   }
 }
 
-function getPassthroughCapability<TRequest>(
-  strategy: ProtocolStrategy<TRequest, unknown, unknown, object>,
-): ProtocolPassthroughCapability<TRequest> | undefined {
-  const candidate = strategy as Partial<ProtocolPassthroughCapability<TRequest>>
-  return typeof candidate.passthrough === 'function'
-    ? (candidate as ProtocolPassthroughCapability<TRequest>)
+function getExecutionOverrideCapability<TRequest, TSSEData, TResult, TEnrichment extends object>(
+  strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>,
+): ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment> | undefined {
+  const candidate = strategy as Partial<
+    ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment>
+  >
+  return typeof candidate.prepareExecution === 'function'
+    ? (candidate as ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment>)
     : undefined
 }
 
@@ -168,6 +227,7 @@ interface ExecuteUpstreamOptions<TRequest, TSSEData, TResult, TEnrichment extend
   loginUrl: string
   abortController: AbortController
   inspectCtx: StreamInspectContext
+  executionOverride?: ExecutionOverrideConfig<TSSEData, TResult, TEnrichment>
 }
 
 async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends object>(
@@ -186,6 +246,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
     loginUrl,
     abortController,
     inspectCtx,
+    executionOverride,
   } = opts
   const { formatErrors } = strategy
 
@@ -200,10 +261,15 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
       abortController,
       formatErrors,
       inspectCtx,
+      ...(executionOverride?.streamOptions !== undefined
+        ? { options: executionOverride.streamOptions }
+        : {}),
     })
 
   const withEnrichment = <TBase extends object>(base: TBase): TBase & TEnrichment =>
     Object.assign(base, enrichment ?? {}) as TBase & TEnrichment
+  const renderStreamSSE = executionOverride?.renderStreamSSE ?? strategy.renderStreamSSE
+  const renderResult = executionOverride?.renderResult ?? strategy.renderResult
 
   // 5-6. Stream or generate + render
   if (strategy.isStream(request)) {
@@ -220,10 +286,14 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
         enabled,
         ctx.settings.errorLogging.maxBodyLength,
       )
+      const preparedStreamResponse = await prepareStreamResponseHeaders(
+        teedStream,
+        executionOverride?.streamResponseHeaders,
+      )
       return new Response(
         readableStreamFromAsyncIterable(
-          strategy.renderStreamSSE({
-            ...withEnrichment({ model: requestModel, stream: teedStream }),
+          renderStreamSSE({
+            ...withEnrichment({ model: requestModel, stream: preparedStreamResponse.stream }),
           }),
           (error) => {
             reqLogger.error({ err: error }, 'stream consumption failed')
@@ -232,7 +302,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
           abortController,
         ),
         {
-          headers: { 'content-type': 'text/event-stream' },
+          headers: preparedStreamResponse.headers,
         },
       )
     } catch (error) {
@@ -273,7 +343,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
         ...(collected.toolCalls && { toolCalls: collected.toolCalls }),
       })
       if (collected.usage) renderInput.usage = collected.usage
-      return c.json(strategy.renderResult(renderInput))
+      return c.json(renderResult(renderInput))
     } catch (error) {
       return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only', {
         errorLogger: ctx.errorLogger,
@@ -285,13 +355,17 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
 
   // 正常非流式路径
   try {
+    const generateInput: Parameters<ModelGateway['generate']>[0] = {
+      model,
+      callInput,
+      requestModel,
+      abortSignal: abortController.signal,
+    }
+    if (executionOverride?.generateOptions !== undefined) {
+      generateInput.options = executionOverride.generateOptions
+    }
     const result = await withRequestTimeout(
-      ctx.gateway.generate({
-        model,
-        callInput,
-        requestModel,
-        abortSignal: abortController.signal,
-      }),
+      ctx.gateway.generate(generateInput),
       ctx.settings.requestTimeoutMs,
       abortController,
     )
@@ -303,7 +377,13 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
       toolCalls: result.toolCalls,
     })
     if (result.usage) renderInput.usage = flattenUsage(result.usage)
-    return c.json(strategy.renderResult(renderInput))
+    const responseHeaders = executionOverride?.responseHeaders?.(renderInput)
+    if (responseHeaders !== undefined) {
+      const headers = new Headers(responseHeaders)
+      if (!headers.has('content-type')) headers.set('content-type', 'application/json')
+      return new Response(JSON.stringify(renderResult(renderInput)), { headers })
+    }
+    return c.json(renderResult(renderInput))
   } catch (error) {
     return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate', {
       errorLogger: ctx.errorLogger,
@@ -361,25 +441,14 @@ export async function handleProtocolRequest<
 
   const loginUrl = buildOAuthLoginUrl(ctx.settings, route.providerName)
 
-  // 3. passthrough 直通转发（openai 上游 + openai-responses 时绕过 AI SDK，字节级一致）
+  // 3. Prepare execution override（例如 openai-responses + openai 上游的 AI SDK raw renderer）
   const abortController = new AbortController()
-  const passthrough = getPassthroughCapability(strategy)
-  if (passthrough) {
-    const passthroughResp = await passthrough.passthrough({
-      route,
-      request,
-      rawBody,
-      upstreamModel: route.upstreamModel,
-      loginUrl,
-      settings: ctx.settings,
-      passthroughTransport: (providerName) =>
-        ctx.providerRegistry.passthroughTransport(providerName),
-      setKeySelection: (keySelection) => c.set('keySelection', keySelection),
-      logger: c.get('logger'),
-      abortController,
-    })
-    if (passthroughResp) return passthroughResp
-  }
+  const executionOverride = getExecutionOverrideCapability(strategy)?.prepareExecution({
+    route,
+    request,
+    rawBody,
+    upstreamModel: route.upstreamModel,
+  })
 
   // 4. Map to AI SDK input + compute strategy-local enrichment
   const callInput = strategy.mapToAISDKInput(request, route.provider.type)
@@ -395,6 +464,7 @@ export async function handleProtocolRequest<
       route.providerName,
       route.upstreamModel,
       route.headers,
+      executionOverride?.languageModelOptions,
     )
     model = modelResult.model
     if (modelResult.keySelection) {
@@ -436,6 +506,7 @@ export async function handleProtocolRequest<
     loginUrl,
     abortController,
     inspectCtx,
+    ...(executionOverride !== undefined ? { executionOverride } : {}),
   })
 }
 

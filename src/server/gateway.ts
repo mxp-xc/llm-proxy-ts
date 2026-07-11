@@ -32,13 +32,19 @@ export async function* normalizeStream(
 }
 
 export const defaultGateway: ModelGateway = {
-  async generate({ model, callInput, abortSignal }) {
-    return generateText({ model, ...callInput, abortSignal } as Parameters<typeof generateText>[0])
+  async generate({ model, callInput, abortSignal, options }) {
+    return generateText({
+      model,
+      ...callInput,
+      ...options,
+      abortSignal,
+    } as Parameters<typeof generateText>[0])
   },
-  stream({ model, callInput, abortSignal }) {
+  stream({ model, callInput, abortSignal, options }) {
     const result = streamText({
       model,
       ...callInput,
+      ...options,
       abortSignal,
       // AI SDK streamText 抑制异常并整合到 fullStream 中作为 { type: 'error' } chunk。
       // onError 仅是日志回调，不改变流行为；error chunk 会经过插件检查流程。

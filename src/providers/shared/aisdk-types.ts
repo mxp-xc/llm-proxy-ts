@@ -34,6 +34,7 @@ export type ProtocolMessage =
 
 export interface AISDKInput {
   system?: string
+  allowSystemInMessages?: boolean
   /** 协议映射器产生的消息 — 由 ProtocolMessage 判别联合统一三种协议的消息表达；
    *  由 gateway.ts 的 `as Parameters<typeof generateText>[0]` 转换为 SDK 类型 */
   messages: ProtocolMessage[]

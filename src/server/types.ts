@@ -14,18 +14,36 @@ export type { Settings } from '../config.js'
 /** generateText 的返回类型 — 避免直接引用 Output 命名空间 */
 export type GenerateTextReturn = Awaited<ReturnType<typeof generateText>>
 
+export interface GatewayGenerateOptions {
+  include?: {
+    requestBody?: boolean
+    responseBody?: boolean
+  }
+  maxRetries?: number
+}
+
+export interface GatewayStreamOptions {
+  include?: {
+    requestBody?: boolean
+    rawChunks?: boolean
+  }
+  maxRetries?: number
+}
+
 export interface ModelGateway {
   generate(input: {
     model: LanguageModel
     callInput: AISDKInput
     requestModel: string
     abortSignal?: AbortSignal
+    options?: GatewayGenerateOptions
   }): Promise<GenerateTextReturn>
   stream(input: {
     model: LanguageModel
     callInput: AISDKInput
     requestModel: string
     abortSignal?: AbortSignal
+    options?: GatewayStreamOptions
   }): AsyncIterable<ProxyStreamPart>
 }
 
