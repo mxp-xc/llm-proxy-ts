@@ -105,6 +105,17 @@ const webSearchCallInputSchema = z
   })
   .passthrough()
 
+// Codex Desktop can send tool declarations inside input as additional_tools.
+// They describe client-side tool availability for the model request envelope; the
+// AI SDK mapping path cannot consume them as conversation messages.
+const additionalToolsInputSchema = z
+  .object({
+    type: z.literal('additional_tools'),
+    role: z.string().optional(),
+    tools: z.array(z.union([functionToolSchema, passthroughToolSchema])).optional(),
+  })
+  .passthrough()
+
 const inputItemSchema = z.union([
   easyInputMessageSchema,
   functionCallSchema,
@@ -116,6 +127,7 @@ const inputItemSchema = z.union([
   webSearchCallInputSchema,
   agentMessageSchema,
   reasoningItemSchema,
+  additionalToolsInputSchema,
 ])
 
 export const openAIResponsesRequestSchema = z
@@ -140,6 +152,21 @@ export const openAIResponsesRequestSchema = z
 
 export type OpenAIResponsesRequest = z.infer<typeof openAIResponsesRequestSchema>
 
+type ResponsesTool = NonNullable<OpenAIResponsesRequest['tools']>[number]
+
+function getRequestTools(request: OpenAIResponsesRequest): ResponsesTool[] {
+  const tools: ResponsesTool[] = []
+  if (request.tools) tools.push(...request.tools)
+  if (Array.isArray(request.input)) {
+    for (const item of request.input) {
+      if (!('type' in item) || item.type !== 'additional_tools') continue
+      const additionalTools = (item as { tools?: ResponsesTool[] }).tools
+      if (Array.isArray(additionalTools)) tools.push(...additionalTools)
+    }
+  }
+  return tools
+}
+
 // ─── Validation ──────────────────────────────────────────────
 
 export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesRequest {
@@ -160,9 +187,10 @@ export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesR
 export function getResponsesCustomToolNames(
   request: OpenAIResponsesRequest,
 ): Set<string> | undefined {
-  if (!request.tools) return undefined
+  const tools = getRequestTools(request)
+  if (tools.length === 0) return undefined
   const names = new Set<string>()
-  for (const tool of request.tools) {
+  for (const tool of tools) {
     if (tool.type === 'custom') {
       const customTool = tool as { name?: string }
       if (customTool.name) names.add(customTool.name)
@@ -172,13 +200,12 @@ export function getResponsesCustomToolNames(
 }
 
 export function hasClientToolSearch(request: OpenAIResponsesRequest): boolean {
-  if (!request.tools) return false
-  return request.tools.some(
+  return getRequestTools(request).some(
     (t) => t.type === 'tool_search' && (t as { execution?: string }).execution === 'client',
   )
 }
 
-/** tool_search_output / request.tools 中 namespace 元素的工具形状（passthrough record 的窄化目标）。 */
+/** tool_search_output / 声明工具集合中 namespace 元素的工具形状（passthrough record 的窄化目标）。 */
 type ToolSearchOutputTool = {
   type?: string
   name?: string
@@ -195,7 +222,8 @@ function flattenToolName(name: string, namespace: string | undefined): string {
 }
 
 /** 收集 namespace 拍平映射：flatName → {namespace, name}。
- *  来源：(1) request.tools 的 namespace 工具；(2) input 历史的 tool_search_output 里的 namespace/顶层 function。
+ *  来源：(1) 顶层 tools / input.additional_tools 的 namespace 工具；
+ *  (2) input 历史的 tool_search_output 里的 namespace/顶层 function。
  *  用于响应侧把 GLM 返回的拍平 toolName 拆回 codex 期望的 {name, namespace} 分离字段。 */
 export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap {
   const map: NamespaceFlatMap = new Map()
@@ -204,16 +232,14 @@ export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): Namesp
     if (!map.has(flatName)) map.set(flatName, { namespace, name })
   }
 
-  // (1) request.tools 的 namespace
-  if (request.tools) {
-    for (const tool of request.tools) {
-      if (tool.type !== 'namespace') continue
-      const nsTool = tool as ToolSearchOutputTool
-      if (!nsTool.name || !Array.isArray(nsTool.tools)) continue
-      for (const sub of nsTool.tools) {
-        if (!sub.name || sub.type !== 'function') continue
-        add(nsTool.name, sub.name)
-      }
+  // (1) 顶层 tools / input.additional_tools 的 namespace
+  for (const tool of getRequestTools(request)) {
+    if (tool.type !== 'namespace') continue
+    const nsTool = tool as ToolSearchOutputTool
+    if (!nsTool.name || !Array.isArray(nsTool.tools)) continue
+    for (const sub of nsTool.tools) {
+      if (!sub.name || sub.type !== 'function') continue
+      add(nsTool.name, sub.name)
     }
   }
 
@@ -550,6 +576,10 @@ export function mapResponsesRequestToAISDKInput(
         // 历史 hosted web_search 调用：AI SDK 不处理，跳过（不传给上游）。
         // openai 上游走 passthrough 透传原始 body，不走此 map；此处仅 openai-compatible 兜底。
         continue
+      } else if ('type' in item && item.type === 'additional_tools') {
+        // Codex Desktop 的 input 内工具声明块，不是对话内容；顶层 tools / tool_search_output
+        // 才会进入 toolSet 构造。这里跳过，避免把声明块误当 developer message。
+        continue
       } else {
         // EasyInputMessage
         const { role, content } = item
@@ -578,8 +608,9 @@ export function mapResponsesRequestToAISDKInput(
   // 不含 hosted tool（web_search/tool_search 由 provider 执行，不可 function-select）。
   const toolSet: ToolSet = {}
   const selectableToolNames = new Set<string>()
-  if (request.tools) {
-    for (const tool of request.tools) {
+  const requestTools = getRequestTools(request)
+  if (requestTools.length > 0) {
+    for (const tool of requestTools) {
       if (tool.type === 'function') {
         const fnTool = tool as ResponsesFunctionTool
         toolSet[fnTool.name] = mapResponsesFunctionTool(fnTool)
@@ -721,7 +752,7 @@ export function mapResponsesRequestToAISDKInput(
   // tool_search_output 历史发现的 namespace/顶层 function 工具，拍平加入 toolSet（幂等、追加末尾）。
   // codex 不把 tool_search 动态发现的工具放进顶层 tools[]（依赖 OpenAI 服务端从历史注册），
   // GLM 无此 hosted 机制 → 必须由代理把发现的工具加入 tools[] 才能被调用。幂等保缓存前缀稳定。
-  // 注意：此段在 if (request.tools) 块外，确保 request.tools 为 undefined 时仍扫描。
+  // 注意：此段在声明工具循环外，确保没有顶层 tools / additional_tools 时仍扫描。
   if (Array.isArray(request.input)) {
     for (const item of request.input) {
       if (!('type' in item) || item.type !== 'tool_search_output') continue
@@ -787,7 +818,7 @@ export function mapResponsesRequestToAISDKInput(
   // 导致 tool_choice 引用 flattened MCP 工具名时静默回退 'auto'。
   // 仅当声明了 tools（toolSet 非空）时才校验；未声明 tools 时直接映射（保留原行为）。
   if (request.tool_choice) {
-    if (typeof request.tool_choice === 'object' && request.tools) {
+    if (typeof request.tool_choice === 'object' && requestTools.length > 0) {
       const functionName = request.tool_choice.name
       // 只允许选中 function/custom/flatten 工具；hosted tool（web_search/tool_search）
       // 由 provider 执行不可 function-select，引用它们或未知名时回退 'auto'
@@ -837,10 +868,7 @@ export function mapResponsesRequestToAISDKInput(
   return input
 }
 
-type ResponsesFunctionTool = Extract<
-  NonNullable<OpenAIResponsesRequest['tools']>[number],
-  { type: 'function' }
->
+type ResponsesFunctionTool = Extract<ResponsesTool, { type: 'function' }>
 
 function mapResponsesFunctionTool(tool: ResponsesFunctionTool): ToolSet[string] {
   const def = mapToolToAISDK(

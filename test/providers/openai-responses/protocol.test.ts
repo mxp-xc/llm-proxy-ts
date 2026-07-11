@@ -58,6 +58,30 @@ describe('validateOpenAIResponsesRequest', () => {
     expect(items[1]?.type).toBe('reasoning')
   })
 
+  it('accepts Codex additional_tools input items', () => {
+    const result = validateOpenAIResponsesRequest({
+      model: 'gpt-5',
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            {
+              type: 'custom',
+              name: 'exec',
+              description: 'Run JavaScript code',
+            },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      ],
+    })
+
+    expect(Array.isArray(result.input)).toBe(true)
+    const items = result.input as Exclude<typeof result.input, string>
+    expect(items[0]?.type).toBe('additional_tools')
+  })
+
   it('accepts function tools with flat structure', () => {
     const result = validateOpenAIResponsesRequest({
       model: 'gpt-4o',
@@ -179,6 +203,33 @@ describe('mapResponsesRequestToAISDKInput', () => {
     })
     expect(result.system).toBe('Be precise')
     expect(result.messages).toEqual([])
+  })
+
+  it('maps tools from Codex additional_tools input items without adding messages', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            type: 'additional_tools',
+            role: 'developer',
+            tools: [
+              {
+                type: 'custom',
+                name: 'exec',
+                description: 'Run JavaScript code',
+              },
+            ],
+          },
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+        ],
+      } as any,
+      'openai-compatible',
+    )
+
+    expect(result.system).toBeUndefined()
+    expect(Object.keys(result.tools!).sort()).toEqual(['exec'])
+    expect(result.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hello' }] }])
   })
 
   it('merges instructions and developer role into system', () => {
@@ -1170,6 +1221,24 @@ describe('getResponsesCustomToolNames', () => {
       ],
     })
     expect(names).toEqual(new Set(['apply_patch', 'my_grammar_tool']))
+  })
+
+  it('collects names of custom tools from additional_tools input items', () => {
+    const names = getResponsesCustomToolNames({
+      model: 'gpt-5',
+      input: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [
+            { type: 'custom', name: 'exec', format: { type: 'grammar' } },
+            { type: 'function', name: 'wait', parameters: {} },
+          ],
+        },
+      ],
+    } as any)
+
+    expect(names).toEqual(new Set(['exec']))
   })
 
   it('returns undefined when no custom tools', () => {
