@@ -36,14 +36,12 @@ export type {
 
 function mapResponseStatus(
   finishReason?: FinishReason,
-  toolCalls?: unknown[],
+  // toolCalls 不再参与判定：有 function/custom tool call 是正常完成（模型回合结束，
+  // 等客户端执行工具），status=completed。之前误把 tool_call 当 incomplete，违反
+  // Responses API 语义，导致 codex 收到 incomplete 后不执行工具（issue2）。
+  _toolCalls?: unknown[],
 ): 'completed' | 'incomplete' {
-  if (toolCalls?.length) return 'incomplete'
-  if (
-    finishReason === 'length' ||
-    finishReason === 'content-filter' ||
-    finishReason === 'tool-calls'
-  ) {
+  if (finishReason === 'length' || finishReason === 'content-filter') {
     return 'incomplete'
   }
   return 'completed'
@@ -78,10 +76,20 @@ function resolveNamespacedToolName(
   providerMetadata: ProviderMetadata | undefined,
   passthrough?: boolean,
 ): { name: string; namespace?: string } {
-  // openai 上游：namespace 由 SDK 放在 tool-call part 的 providerMetadata.openai.namespace
+  // openai 上游：namespace 由 SDK 放在 tool-call/done part 的 providerMetadata.openai.namespace。
+  // 但 tool-input-start（output_item.added）阶段 providerMetadata 无 namespace（AI SDK v4 设计），
+  // 需从请求侧 flatMap 反查补 namespace，使 added 就带 namespace（与原生一致）。
   if (passthrough) {
     const ns = (providerMetadata?.openai as { namespace?: string } | undefined)?.namespace
-    return ns != null ? { name: toolName, namespace: ns } : { name: toolName }
+    if (ns != null) return { name: toolName, namespace: ns }
+    if (namespaceFlatMap) {
+      for (const entry of namespaceFlatMap.values()) {
+        if (entry.name === toolName && entry.namespace !== undefined) {
+          return { name: toolName, namespace: entry.namespace }
+        }
+      }
+    }
+    return { name: toolName }
   }
   // 非 openai 上游：从请求侧构建的 flatMap 反查拍平 toolName
   const entry = namespaceFlatMap?.get(toolName)

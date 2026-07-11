@@ -12,6 +12,7 @@ import {
   createProxyFetch,
   sanitizeHeaders,
 } from './shared/provider-factory.js'
+import { safeProxyUrl } from '../server/logging.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
 import { createOpenAIProvider } from './openai/provider.js'
 
@@ -87,6 +88,9 @@ export interface ProviderRegistry {
     upstreamModel: string,
     modelHeaders: Record<string, string>,
   ): LanguageModelResult
+  /** 按 providerName 选 API key（复用内部轮询状态）。
+   *  供 passthrough 透传路径注入 Authorization，与 AI SDK 路径共享 keySelection 轮询。 */
+  selectApiKey(providerName: string): { apiKey: string | undefined; keySelection?: KeySelection }
   debugProviderConfig(providerName: string): {
     baseURL: string
     headers: Record<string, string>
@@ -111,6 +115,17 @@ export async function createProviderRegistry(
   const sharedProxyFetch = settings.proxy
     ? createProxyFetch(settings.proxy.url, settings.proxy.verify)
     : undefined
+
+  // 启动时记录代理配置,便于排查「请求是否走代理」。url 经 safeProxyUrl 剥离凭据后以
+  // 结构化 URL 形式输出(如 http://127.0.0.1:9000)。
+  if (settings.proxy) {
+    log.info(
+      { proxyUrl: safeProxyUrl(settings.proxy.url), verify: settings.proxy.verify },
+      'proxy configured',
+    )
+  } else {
+    log.info('proxy disabled — no proxy configured in settings')
+  }
 
   // 预构建 auth fetch wrappers（per-provider，并行加载）
   const authFetchMap = new Map<string, (baseFetch?: typeof fetch) => typeof fetch>()
@@ -173,6 +188,18 @@ export async function createProviderRegistry(
         result.keySelection = { index: selection.index, count: selection.count }
       }
       return result
+    },
+    selectApiKey(providerName) {
+      const provider = settings.providers[providerName]
+      if (!provider) {
+        throw new Error(`Unknown provider '${providerName}'`)
+      }
+      const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
+      if (!selection) return { apiKey: undefined }
+      return {
+        apiKey: selection.apiKey,
+        keySelection: { index: selection.index, count: selection.count },
+      }
     },
     debugProviderConfig(providerName) {
       const provider = settings.providers[providerName]

@@ -56,7 +56,7 @@ describe('renderOpenAIResponse', () => {
         { toolCallId: 'call_123', toolName: 'get_weather', input: { location: 'Paris' } },
       ],
     })
-    expect(result.status).toBe('incomplete')
+    expect(result.status).toBe('completed')
     const fc = result.output.find((o) => o.type === 'function_call')
     expect(fc).toBeDefined()
     if (fc && fc.type === 'function_call') {
@@ -78,7 +78,7 @@ describe('renderOpenAIResponse', () => {
     expect(result.output).toHaveLength(2)
     expect(result.output[0]!.type).toBe('message')
     expect(result.output[1]!.type).toBe('function_call')
-    expect(result.status).toBe('incomplete')
+    expect(result.status).toBe('completed')
   })
 
   it('maps finishReason to status', () => {
@@ -91,6 +91,15 @@ describe('renderOpenAIResponse', () => {
     expect(
       renderOpenAIResponse({ model: 'gpt-4o', text: 'hi', finishReason: 'content-filter' }).status,
     ).toBe('incomplete')
+    // tool-calls 是正常完成（模型回合结束，等客户端执行工具），status=completed（非 incomplete）
+    expect(
+      renderOpenAIResponse({
+        model: 'gpt-4o',
+        text: '',
+        finishReason: 'tool-calls',
+        toolCalls: [{ toolCallId: 'c1', toolName: 't', input: {} }],
+      }).status,
+    ).toBe('completed')
   })
 
   it('uses response id and timestamp when provided', () => {

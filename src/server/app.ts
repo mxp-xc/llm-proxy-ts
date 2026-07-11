@@ -74,6 +74,7 @@ export function createApp({
     settings,
     gateway,
     resolveModel,
+    selectApiKey: (providerName) => resolvedRegistry.selectApiKey(providerName),
     errorLogger:
       errorLogger ??
       new ErrorLogger({

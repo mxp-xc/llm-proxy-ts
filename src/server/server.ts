@@ -79,7 +79,10 @@ async function main(): Promise<void> {
       port: settings.service.port,
     },
     (info) => {
-      logger.info({ host: info.address, port: info.port }, `${settings.service.name} listening`)
+      logger.info(
+        { url: `http://${info.address}:${info.port}` },
+        `${settings.service.name} listening`,
+      )
     },
   )
 

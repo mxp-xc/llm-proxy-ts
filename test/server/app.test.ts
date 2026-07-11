@@ -172,6 +172,9 @@ describe('chat endpoint', () => {
           modelSelections.push(`${providerName}/${upstreamModel}`)
           return { model: { providerName, upstreamModel } as never }
         },
+        selectApiKey() {
+          return { apiKey: undefined }
+        },
         debugProviderConfig() {
           throw new Error('not used')
         },

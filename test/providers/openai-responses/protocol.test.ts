@@ -1049,9 +1049,10 @@ describe('mapResponsesRequestToAISDKInput', () => {
       })
     })
 
-    it('passes function_call namespace via providerMetadata for openai provider', () => {
-      // openai 上游：历史 function_call 保持原名，namespace 通过 providerMetadata.openai.namespace
-      // 携带，SDK 据此重建上游 function_call.namespace（不 flatten 成 ns__name）
+    it('passes function_call namespace via providerOptions for openai provider', () => {
+      // openai 上游：历史 function_call 保持原名，namespace 通过 providerOptions.openai.namespace
+      // 携带，SDK 据此重建上游 function_call.namespace（不 flatten 成 ns__name）。
+      // 必须用 providerOptions：ai 包 convertToLanguageModelPrompt 只读 part.providerOptions。
       const result = mapResponsesRequestToAISDKInput(
         {
           model: 'gpt-5',
@@ -1076,7 +1077,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
             toolCallId: 'call_1',
             toolName: 'spawn_agent',
             input: { message: 'hi' },
-            providerMetadata: { openai: { namespace: 'multi_agent_v1' } },
+            providerOptions: { openai: { namespace: 'multi_agent_v1' } },
           },
         ],
       })

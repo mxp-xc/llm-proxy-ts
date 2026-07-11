@@ -10,8 +10,10 @@ export type ProtocolMessagePart =
       toolName: string
       input: Record<string, unknown> | string
       /** 携带 provider 专属元数据（如 openai namespace），由 gateway 透传给 SDK，
-       *  SDK 据此重建上游 input item（如 function_call.namespace）。 */
-      providerMetadata?: ProviderMetadata
+       *  SDK 据此重建上游 input item（如 function_call.namespace）。
+       *  用 providerOptions（非 providerMetadata）：ai 包 convertToLanguageModelPrompt
+       *  只读 part.providerOptions，providerMetadata 会被丢弃。 */
+      providerOptions?: Record<string, Record<string, unknown>>
     }
   | {
       type: 'tool-result'

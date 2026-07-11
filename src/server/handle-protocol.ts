@@ -11,6 +11,7 @@ import type { Settings } from '../config.js'
 import type { RoutingTable } from '../routing.js'
 import type { ResolvedPlugin } from '../plugins/registry.js'
 import type { AppEnv, ModelGateway } from './types.js'
+import type { KeySelection } from '../providers/registry.js'
 import { RequestTimeoutError, withRequestTimeout } from './stream-utils.js'
 import { inspectFirstStreamChunk, type StreamInspectContext } from './stream-inspect.js'
 import { readableStreamFromAsyncIterable } from './stream-utils.js'
@@ -27,6 +28,10 @@ export interface ProtocolContext {
     headers: Record<string, string>,
     c: Context<AppEnv>,
   ) => LanguageModel
+  /** 选 API key（复用 registry 轮询状态），供 passthrough 透传注入 Authorization */
+  selectApiKey: (
+    providerName: string,
+  ) => { apiKey: string | undefined; keySelection?: KeySelection }
   errorLogger: ErrorLogger
 }
 
@@ -260,10 +265,12 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
 ): Promise<Response> {
   const { formatErrors } = strategy
 
-  // 1. Validate request
+  // 1. Validate request（缓存原始 body 供 passthrough 透传字节级一致）
   let request: TRequest
+  let rawBody: unknown
   try {
-    request = strategy.validate(await c.req.json())
+    rawBody = await c.req.json()
+    request = strategy.validate(rawBody)
   } catch {
     const { body, status } = formatErrors.validation(strategy.validationMessage)
     return c.json(body, status as 400)
@@ -291,11 +298,27 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     'route resolved',
   )
 
-  // 3. Map to AI SDK input + compute strategy-local enrichment
+  // 3. passthrough 直通转发（openai 上游 + openai-responses 时绕过 AI SDK，字节级一致）
+  const abortController = new AbortController()
+  if (strategy.passthrough) {
+    const passthroughResp = await strategy.passthrough({
+      c,
+      route,
+      request,
+      rawBody,
+      upstreamModel: route.upstreamModel,
+      settings: ctx.settings,
+      selectApiKey: ctx.selectApiKey,
+      abortController,
+    })
+    if (passthroughResp) return passthroughResp
+  }
+
+  // 4. Map to AI SDK input + compute strategy-local enrichment
   const callInput = strategy.mapToAISDKInput(request, route.provider.type)
   const enrichment = strategy.prepareEnrichment?.(request, route.provider.type)
 
-  // 4. Get LanguageModel + delegate execution to executeUpstream
+  // 5. Get LanguageModel + delegate execution to executeUpstream
   const loginUrl = `http://127.0.0.1:${ctx.settings.service.port}/oauth/login/${route.providerName}`
   let model
   try {
@@ -307,7 +330,6 @@ export async function handleProtocolRequest<TRequest, TSSEData, TResult>(
     }
     throw error
   }
-  const abortController = new AbortController()
   const inspectCtx: StreamInspectContext = {
     requestId: c.get('requestId'),
     settings: ctx.settings,

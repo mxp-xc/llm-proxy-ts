@@ -94,6 +94,17 @@ const toolSearchOutputSchema = z
   })
   .passthrough()
 
+// 多轮对话中 Codex 回传的 hosted web_search 调用项（type: 'web_search_call'）。
+// AI SDK 不处理历史 web_search_call input；mapping 阶段跳过。这里放行避免 400。
+const webSearchCallInputSchema = z
+  .object({
+    type: z.literal('web_search_call'),
+    id: z.string().optional(),
+    status: z.string().optional(),
+    action: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough()
+
 const inputItemSchema = z.union([
   easyInputMessageSchema,
   functionCallSchema,
@@ -102,6 +113,7 @@ const inputItemSchema = z.union([
   customToolCallOutputSchema,
   toolSearchCallSchema,
   toolSearchOutputSchema,
+  webSearchCallInputSchema,
   agentMessageSchema,
   reasoningItemSchema,
 ])
@@ -408,9 +420,11 @@ export function mapResponsesRequestToAISDKInput(
               toolCallId: fc.call_id,
               toolName: nativeResponses ? fc.name : flattenToolName(fc.name, fc.namespace),
               input: args,
-              // openai 上游：namespace 由 SDK 从 providerMetadata 重建为 function_call.namespace
+              // openai 上游：namespace 由 SDK 从 providerOptions 重建为 function_call.namespace。
+              // 必须用 providerOptions（非 providerMetadata）：ai 包 convertToLanguageModelPrompt
+              // 只读 part.providerOptions，providerMetadata 会被丢弃（namespace 丢失）。
               ...(nativeResponses && fc.namespace !== undefined
-                ? { providerMetadata: { openai: { namespace: fc.namespace } } }
+                ? { providerOptions: { openai: { namespace: fc.namespace } } }
                 : {}),
             },
           ],
@@ -453,7 +467,7 @@ export function mapResponsesRequestToAISDKInput(
               toolName: nativeResponses ? ctc.name : flattenToolName(ctc.name, ctc.namespace),
               input: mappedInput,
               ...(nativeResponses && ctc.namespace !== undefined
-                ? { providerMetadata: { openai: { namespace: ctc.namespace } } }
+                ? { providerOptions: { openai: { namespace: ctc.namespace } } }
                 : {}),
             },
           ],
@@ -532,6 +546,10 @@ export function mapResponsesRequestToAISDKInput(
               }
             : { type: 'reasoning', text: summaryText }
         messages.push({ role: 'assistant', content: [reasoningPart] })
+      } else if ('type' in item && item.type === 'web_search_call') {
+        // 历史 hosted web_search 调用：AI SDK 不处理，跳过（不传给上游）。
+        // openai 上游走 passthrough 透传原始 body，不走此 map；此处仅 openai-compatible 兜底。
+        continue
       } else {
         // EasyInputMessage
         const { role, content } = item
@@ -572,7 +590,9 @@ export function mapResponsesRequestToAISDKInput(
         // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
         const customTool = tool as { name?: string; description?: string; format?: unknown }
         if (customTool.name) {
-          const args: Parameters<typeof openai.tools.customTool>[0] = { name: customTool.name }
+          // v4: customTool args 不含 name（name 来自 toolSet key，prepareResponsesTools
+          // 序列化时用 tool.name → {type:'custom', name: 'apply_patch'}）
+          const args: Parameters<typeof openai.tools.customTool>[0] = {}
           if (customTool.description !== undefined) args.description = customTool.description
           if (customTool.format !== undefined) {
             args.format = customTool.format as Exclude<
@@ -823,7 +843,16 @@ type ResponsesFunctionTool = Extract<
 >
 
 function mapResponsesFunctionTool(tool: ResponsesFunctionTool): ToolSet[string] {
-  return mapToolToAISDK(tool.parameters ?? { type: 'object', properties: {} }, tool.description)
+  const def = mapToolToAISDK(
+    tool.parameters ?? { type: 'object', properties: {} },
+    tool.description,
+  ) as ToolSet[string] & { strict?: boolean }
+  // 透传 strict：codex 工具显式 strict:false。剥离后部分后端把"无 strict"当作严格模式，
+  // 迫使模型为 optional 字段填空字符串（如 spawn_agent 的 reasoning_effort=""），
+  // 下游 subagent 请求 reasoning.effort="" 被后端拒绝 → "调不了工具"。
+  // AI SDK v4 序列化时 ...tool.strict != null ? { strict: tool.strict } : {}。
+  if (tool.strict !== undefined) def.strict = tool.strict
+  return def
 }
 
 function mapResponsesToolChoice(

@@ -8,6 +8,7 @@ import {
   getResponsesNamespaceFlatMap,
 } from './protocol.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from './renderer.js'
+import { passthroughOpenAIResponses } from './passthrough.js'
 import type { OpenAIResponsesRequest } from './protocol.js'
 import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 
@@ -30,6 +31,11 @@ export const openaiResponsesStrategy: ProtocolStrategy<
     if (providerType === 'openai') {
       const enrichment: ResponsesEnrichment = { namespacePassthrough: true }
       if (customToolNames) enrichment.customToolNames = customToolNames
+      // 构建 namespaceFlatMap：renderer 在 output_item.added（tool-input-start）阶段
+      // providerMetadata 无 namespace（AI SDK v4 设计，namespace 只在 tool-input-end/tool-call 带），
+      // 需从请求 tools 反查补 namespace，使 added 就带 namespace（与原生一致）。
+      const namespaceFlatMap = getResponsesNamespaceFlatMap(request)
+      if (namespaceFlatMap) enrichment.namespaceFlatMap = namespaceFlatMap
       return enrichment
     }
 
@@ -44,6 +50,7 @@ export const openaiResponsesStrategy: ProtocolStrategy<
     if (namespaceFlatMap) enrichment.namespaceFlatMap = namespaceFlatMap
     return Object.keys(enrichment).length > 0 ? enrichment : undefined
   },
+  passthrough: passthroughOpenAIResponses,
   renderResult: renderOpenAIResponse,
   renderStreamSSE: renderOpenAIResponseSSE,
   formatErrors: openAIErrorFormat,

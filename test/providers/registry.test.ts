@@ -120,6 +120,8 @@ describe('provider registry', () => {
       undefined,
       stubFactory,
     )
+    // createProviderRegistry 启动时发 proxy configured 日志，与 key-selection 日志无关，清空后只校验后者
+    capturedLogs.length = 0
 
     const r1 = registry.languageModel('openrouter', 'openrouter/chat', {})
     const r2 = registry.languageModel('openrouter', 'openrouter/chat', {})

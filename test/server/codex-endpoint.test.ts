@@ -239,10 +239,11 @@ describe('POST /codex/v1/responses', () => {
     expect(json.output).toBeDefined()
   })
 
-  it('passes apply_patch through for openai provider and renders custom_tool_call', async () => {
+  it('passes apply_patch through for openai-compatible provider and renders custom_tool_call', async () => {
     const settings = makeSettings({
       openai: {
-        type: 'openai',
+        type: 'openai-compatible',
+        baseURL: 'https://example.com/v1',
         apiKey: 'secret',
         headers: {},
         plugins: [],
@@ -296,7 +297,8 @@ describe('POST /codex/v1/responses', () => {
   it('renders non-apply_patch custom tool as custom_tool_call via declared customToolNames', async () => {
     const settings = makeSettings({
       openai: {
-        type: 'openai',
+        type: 'openai-compatible',
+        baseURL: 'https://example.com/v1',
         apiKey: 'secret',
         headers: {},
         plugins: [],
@@ -344,10 +346,11 @@ describe('POST /codex/v1/responses', () => {
     expect(text).not.toContain('"function_call"')
   })
 
-  it('renders web_search_call for openai provider hosted tool', async () => {
+  it('renders web_search_call for openai-compatible provider hosted tool', async () => {
     const settings = makeSettings({
       openai: {
-        type: 'openai',
+        type: 'openai-compatible',
+        baseURL: 'https://example.com/v1',
         apiKey: 'secret',
         headers: {},
         plugins: [],

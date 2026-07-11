@@ -110,6 +110,12 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
       }
     }
 
+    // 透传 AbortSignal：客户端断开 / 请求超时时中断上游 undici request，
+    // 释放 socket、停止上游计费（undici request 原生支持 signal）。
+    if (init?.signal !== undefined) {
+      options.signal = init.signal
+    }
+
     const response = await request(url, options)
 
     // 将 undici headers 转为干净的 Headers 对象：

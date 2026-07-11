@@ -21,12 +21,12 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.81",
-    "@ai-sdk/openai": "^3.0.71",
-    "@ai-sdk/openai-compatible": "^2.0.50",
+    "@ai-sdk/anthropic": "^4.0.11",
+    "@ai-sdk/openai": "^4.0.11",
+    "@ai-sdk/openai-compatible": "^3.0.7",
     "@clack/prompts": "^1.5.1",
     "@hono/node-server": "^2.0.4",
-    "ai": "^6.0.197",
+    "ai": "^7.0.20",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "hono": "^4.12.25",

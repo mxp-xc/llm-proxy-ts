@@ -7,6 +7,9 @@ export const stubRegistry: ProviderRegistry = {
   languageModel() {
     return { model: {} as never }
   },
+  selectApiKey() {
+    return { apiKey: undefined }
+  },
   debugProviderConfig() {
     return {} as never
   },
