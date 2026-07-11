@@ -5,6 +5,7 @@ import {
   mapResponsesRequestToAISDKInput,
   validateOpenAIResponsesRequest,
 } from '../../../src/providers/openai-responses/protocol.js'
+import type { OpenAIResponsesRequest } from '../../../src/providers/openai-responses/protocol.js'
 
 describe('validateOpenAIResponsesRequest', () => {
   it('rejects request without model', () => {
@@ -37,6 +38,42 @@ describe('validateOpenAIResponsesRequest', () => {
     expect(result.input).toEqual([
       { type: 'function_call_output', call_id: 'call_123', output: 'result' },
     ])
+  })
+
+  it('rejects tool_search_call without call_id or id', () => {
+    expect(() =>
+      validateOpenAIResponsesRequest({
+        model: 'gpt-4o',
+        input: [{ type: 'tool_search_call', arguments: { query: 'browser' } }],
+      }),
+    ).toThrow(/tool_search_call requires call_id or id/)
+  })
+
+  it('rejects tool_search_call with string arguments', () => {
+    expect(() =>
+      validateOpenAIResponsesRequest({
+        model: 'gpt-4o',
+        input: [{ type: 'tool_search_call', call_id: 'ts_1', arguments: 'query=browser' }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects tool_search_call with array arguments', () => {
+    expect(() =>
+      validateOpenAIResponsesRequest({
+        model: 'gpt-4o',
+        input: [{ type: 'tool_search_call', call_id: 'ts_1', arguments: ['browser'] }],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects tool_search_output without call_id or id', () => {
+    expect(() =>
+      validateOpenAIResponsesRequest({
+        model: 'gpt-4o',
+        input: [{ type: 'tool_search_output', tools: [{ name: 'open_page' }] }],
+      }),
+    ).toThrow(/tool_search_output requires call_id or id/)
   })
 
   it('accepts reasoning items in input (multi-turn)', () => {
@@ -677,6 +714,30 @@ describe('mapResponsesRequestToAISDKInput', () => {
     })
   })
 
+  it('rejects duplicate native namespace sub-tool names instead of silently overwriting', () => {
+    expect(() =>
+      mapResponsesRequestToAISDKInput(
+        {
+          model: 'gpt-5',
+          input: 'hi',
+          tools: [
+            {
+              type: 'namespace',
+              name: 'mcp__one',
+              tools: [{ type: 'function', name: 'run', parameters: { type: 'object' } }],
+            },
+            {
+              type: 'namespace',
+              name: 'mcp__two',
+              tools: [{ type: 'function', name: 'run', parameters: { type: 'object' } }],
+            },
+          ],
+        },
+        'openai',
+      ),
+    ).toThrow(/Duplicate tool name 'run'/)
+  })
+
   it('shims apply_patch custom tool as function for openai-compatible provider', () => {
     const result = mapResponsesRequestToAISDKInput(
       {
@@ -810,6 +871,42 @@ describe('mapResponsesRequestToAISDKInput', () => {
           toolCallId: 'ts_1',
           toolName: 'tool_search',
           output: { type: 'text', value: JSON.stringify([{ name: 'open_page' }]) },
+        },
+      ],
+    })
+  })
+
+  it('uses id as fallback for tool_search_call and tool_search_output', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          { type: 'tool_search_call', id: 'ts_1', arguments: { query: 'browser' } },
+          { type: 'tool_search_output', id: 'ts_1', tools: [{ name: 'open_page' }] },
+        ],
+      },
+      'openai-compatible',
+    )
+
+    expect(result.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'ts_1',
+          toolName: 'tool_search',
+          input: { query: 'browser' },
+        },
+      ],
+    })
+    expect(result.messages[1]).toEqual({
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'ts_1',
+          toolName: 'tool_search',
+          output: { type: 'text', value: '[{\"name\":\"open_page\"}]' },
         },
       ],
     })
@@ -1031,7 +1128,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
   // Codex CLI sends explicit null for optional fields it wants to "unset".
   // validateOpenAIResponsesRequest strips top-level nulls so schema + mapping see undefined.
   it('strips top-level null fields in validate (Codex CLI compatibility)', () => {
-    const validated = validateOpenAIResponsesRequest({
+    const raw = {
       model: 'gpt-5',
       input: 'hi',
       reasoning: null,
@@ -1044,7 +1141,9 @@ describe('mapResponsesRequestToAISDKInput', () => {
       temperature: null,
       top_p: null,
       max_output_tokens: null,
-    })
+      custom_null: null,
+    }
+    const validated = validateOpenAIResponsesRequest(raw)
     // All null fields removed, schema-defined fields are undefined
     expect(validated.reasoning).toBeUndefined()
     expect(validated.store).toBeUndefined()
@@ -1056,6 +1155,11 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.providerOptions).toBeUndefined()
     expect(result.system).toBeUndefined()
     expect(result.temperature).toBeUndefined()
+
+    // Passthrough routes reuse the original raw body, so validation must not mutate it.
+    expect(raw.store).toBeNull()
+    expect(raw.instructions).toBeNull()
+    expect(raw.custom_null).toBeNull()
   })
 
   describe('historical function_call namespace → flattened toolName', () => {
@@ -1205,6 +1309,109 @@ describe('mapResponsesRequestToAISDKInput', () => {
         'mcp__codegraph__codegraph_search',
       )
     })
+  })
+})
+
+describe('mapResponsesRequestToAISDKInput tool input', () => {
+  it('returns tools and selectable toolChoice for declared function tools', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: 'hi',
+      tools: [{ type: 'function', name: 'get_weather', parameters: { type: 'object' } }],
+      tool_choice: { type: 'function', name: 'get_weather' },
+    })
+
+    expect(result.tools).toHaveProperty('get_weather')
+    expect(result.toolChoice).toEqual({ type: 'tool', toolName: 'get_weather' })
+  })
+
+  it('returns auto for hosted tool choices but keeps hosted tools in native OpenAI tools', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: 'hi',
+        tools: [{ type: 'web_search', external_web_access: true }],
+        tool_choice: { type: 'function', name: 'web_search' },
+      },
+      'openai',
+    )
+
+    expect(result.tools).toHaveProperty('web_search')
+    expect(result.toolChoice).toBe('auto')
+  })
+
+  it('keeps discovered tools after declared tools', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            type: 'tool_search_output',
+            call_id: 'ts_1',
+            tools: [
+              {
+                type: 'namespace',
+                name: 'multi_agent_v1',
+                tools: [{ type: 'function', name: 'spawn_agent', parameters: { type: 'object' } }],
+              },
+            ],
+          },
+        ],
+        tools: [{ type: 'function', name: 'shell', parameters: { type: 'object' } }],
+      },
+      'openai-compatible',
+    )
+
+    expect(Object.keys(result.tools!)).toEqual(['shell', 'multi_agent_v1__spawn_agent'])
+  })
+
+  it('validates tool choices against discovered-only tools', () => {
+    const request: OpenAIResponsesRequest = {
+      model: 'gpt-5',
+      input: [
+        {
+          type: 'tool_search_output',
+          call_id: 'ts_1',
+          tools: [
+            {
+              type: 'namespace',
+              name: 'multi_agent_v1',
+              tools: [{ type: 'function', name: 'spawn_agent', parameters: { type: 'object' } }],
+            },
+          ],
+        },
+      ],
+    }
+
+    const selectableResult = mapResponsesRequestToAISDKInput(
+      {
+        ...request,
+        tool_choice: { type: 'function', name: 'multi_agent_v1__spawn_agent' },
+      },
+      'openai-compatible',
+    )
+    const unknownResult = mapResponsesRequestToAISDKInput(
+      {
+        ...request,
+        tool_choice: { type: 'function', name: 'missing_tool' },
+      },
+      'openai-compatible',
+    )
+    const hostedResult = mapResponsesRequestToAISDKInput(
+      {
+        ...request,
+        tool_choice: { type: 'function', name: 'web_search' },
+      },
+      'openai-compatible',
+    )
+
+    expect(selectableResult.tools).toHaveProperty('multi_agent_v1__spawn_agent')
+    expect(selectableResult.toolChoice).toEqual({
+      type: 'tool',
+      toolName: 'multi_agent_v1__spawn_agent',
+    })
+    expect(unknownResult.toolChoice).toBe('auto')
+    expect(hostedResult.toolChoice).toBe('auto')
   })
 })
 
@@ -1455,6 +1662,41 @@ describe('tool_search_output discovered tools → tools[]', () => {
       'openai-compatible',
     )
     expect(Object.keys(result.tools!)).toEqual(['multi_agent_v1__spawn_agent'])
+  })
+
+  it('keeps native OpenAI namespace providerOptions for discovered namespace tools', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            type: 'tool_search_output',
+            call_id: 'ts_1',
+            tools: [
+              {
+                type: 'namespace',
+                name: 'multi_agent_v1',
+                description: 'sub-agents',
+                tools: [
+                  {
+                    type: 'function',
+                    name: 'spawn_agent',
+                    description: 'spawn',
+                    parameters: { type: 'object', properties: { message: { type: 'string' } } },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      'openai',
+    )
+
+    expect(Object.keys(result.tools!)).toEqual(['spawn_agent'])
+    expect(result.tools!['spawn_agent']!.providerOptions).toEqual({
+      openai: { namespace: { name: 'multi_agent_v1', description: 'sub-agents' } },
+    })
   })
 
   it('does not add tools when tool_search_output empty', () => {

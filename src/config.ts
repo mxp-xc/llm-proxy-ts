@@ -8,11 +8,14 @@ import { codexModelOverrideSchema, codexSettingsSchema } from './codex-types.js'
 
 // ─── Plugin entry schema ────────────────────────────────────────
 
-/** 单个插件条目的完整结构（transform 后） */
-const pluginEntryObjectSchema = z.object({
+const pluginEntryBaseObjectSchema = z.object({
   name: z.string().min(1).optional(),
   module: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).default({}),
+})
+
+/** 全局插件条目的完整结构（transform 后） */
+const pluginEntryObjectSchema = pluginEntryBaseObjectSchema.extend({
   /** 仅全局级：关联的 provider 列表 */
   providers: z
     .union([z.string().min(1), z.array(z.string().min(1))])
@@ -24,6 +27,15 @@ export const pluginEntrySchema = z
   .union([z.string().min(1), pluginEntryObjectSchema])
   .transform((v) =>
     typeof v === 'string' ? { name: v, config: {} as Record<string, unknown>, providers: [] } : v,
+  )
+  .refine((v) => v.name || v.module, { message: 'Plugin must have name or module' })
+
+const scopedPluginEntryObjectSchema = pluginEntryBaseObjectSchema.strict()
+
+const scopedPluginEntrySchema = z
+  .union([z.string().min(1), scopedPluginEntryObjectSchema])
+  .transform((v) =>
+    typeof v === 'string' ? { name: v, config: {} as Record<string, unknown> } : v,
   )
   .refine((v) => v.name || v.module, { message: 'Plugin must have name or module' })
 
@@ -68,16 +80,20 @@ export const reasoningEffortConfigSchema = z
 export type ReasoningEffortConfig = z.infer<typeof reasoningEffortConfigSchema>
 
 // ─── Alias entry schema ─────────────────────────────────────────
+const aliasNameSchema = z
+  .string()
+  .min(1)
+  .regex(/^[^/]+$/, "alias name must not contain '/'")
+
 const aliasEntryObjectSchema = z.object({
-  name: z.string().min(1),
+  name: aliasNameSchema,
   flat: z.boolean().optional().default(false),
 })
 
-/** alias 条目：string 短写等价于 { name, flat:false }。transform 后统一禁 "/" */
+/** alias 条目：string 短写等价于 { name, flat:false }。 */
 export const aliasEntrySchema = z
-  .union([z.string().min(1), aliasEntryObjectSchema])
+  .union([aliasNameSchema, aliasEntryObjectSchema])
   .transform((v) => (typeof v === 'string' ? { name: v, flat: false } : v))
-  .refine((v) => !v.name.includes('/'), "alias name must not contain '/'")
 
 export type AliasEntry = z.infer<typeof aliasEntrySchema>
 
@@ -86,7 +102,7 @@ export const modelRouteConfigSchema = z.object({
   aliases: z.array(aliasEntrySchema).optional().default([]),
   flat: z.boolean().optional(),
   headers: z.record(z.string(), z.string()).optional().default({}),
-  plugins: z.array(pluginEntrySchema).optional().default([]),
+  plugins: z.array(scopedPluginEntrySchema).optional().default([]),
   limit: modelLimitSchema.optional(),
   reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
@@ -137,7 +153,7 @@ const openaiOptionsSchema = commonProviderOptionsSchema
 const baseProviderFields = {
   apiKey: apiKeySchema,
   headers: z.record(z.string(), z.string()).default({}),
-  plugins: z.array(pluginEntrySchema).default([]),
+  plugins: z.array(scopedPluginEntrySchema).default([]),
   models: z.record(z.string(), modelRouteConfigSchema).default({}),
   oauth: oauthConfigSchema.optional(),
 }
@@ -205,6 +221,7 @@ export const settingsSchema = z.object({
 })
 
 export type PluginEntry = z.infer<typeof pluginEntrySchema>
+export type ScopedPluginEntry = z.infer<typeof scopedPluginEntrySchema>
 export type ModelRouteConfig = z.infer<typeof modelRouteConfigSchema>
 /** 写入配置文件时使用的输入类型，aliases/headers/plugins 可省略（Zod default 填充）。 */
 export type ModelRouteInput = z.input<typeof modelRouteConfigSchema>
@@ -275,7 +292,7 @@ function checkMigratedTopLevelFields(parsed: unknown): void {
         throw new Error(
           `Provider "${providerName}": "${key}" has been migrated to provider.options. ` +
             `Move \`${key}: ${String(provider[key])}\` to \`options: { ${key}: ... }\`. ` +
-            `See docs/migration.md for details.`,
+            `See config/settings.example.jsonc for current provider.options examples.`,
         )
       }
     }

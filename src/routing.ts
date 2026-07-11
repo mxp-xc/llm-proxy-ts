@@ -1,6 +1,6 @@
 import type { ProviderConfig, Settings } from './config.js'
 import { enumerateModelEntries } from './providers/model-types.js'
-import type { PluginRegistry, ResolvedPlugin } from './plugins/registry.js'
+import type { PipelinePluginRegistry, ResolvedPlugin } from './plugins/registry.js'
 import { getBuiltInPlugin } from './plugins/loader.js'
 import { canUseFlatModelSelector, parseModelSelector } from './model-selector.js'
 
@@ -23,17 +23,6 @@ export class RoutingError extends Error {
   ) {
     super(message)
   }
-
-  toResponse(): { error: { type: string; code: string; message: string; selector: string } } {
-    return {
-      error: {
-        type: 'routing_error',
-        code: this.code,
-        message: this.message,
-        selector: this.selector,
-      },
-    }
-  }
 }
 
 export class RoutingTable {
@@ -41,10 +30,9 @@ export class RoutingTable {
     private readonly settings: Settings,
     private readonly flatRoutes: Map<string, RouteMatch>,
     private readonly prefixedRoutes: Map<string, RouteMatch>,
-    private readonly pluginRegistry?: PluginRegistry,
   ) {}
 
-  static fromSettings(settings: Settings, pluginRegistry?: PluginRegistry): RoutingTable {
+  static fromSettings(settings: Settings, pluginRegistry?: PipelinePluginRegistry): RoutingTable {
     const flatRoutes = new Map<string, RouteMatch>()
     // 带前缀入口缓存:settings 不可变,fromSettings 时一次性构建所有 provider/model + 别名路由,
     // resolve() 带前缀分支直接 Map 查找,消除 per-request buildRoute + 线性别名扫描。
@@ -111,7 +99,7 @@ export class RoutingTable {
       }
     }
 
-    return new RoutingTable(settings, flatRoutes, prefixedRoutes, pluginRegistry)
+    return new RoutingTable(settings, flatRoutes, prefixedRoutes)
   }
 
   resolve(selector: string): RouteMatch {
@@ -177,7 +165,7 @@ function buildRoute(
   provider: ProviderConfig,
   modelKey: string,
   modelSelector: string,
-  pluginRegistry?: PluginRegistry,
+  pluginRegistry?: PipelinePluginRegistry,
 ): RouteMatch {
   const model = provider.models[modelKey]
   if (!model) {

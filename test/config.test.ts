@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
+import { Ajv } from 'ajv'
 import {
   generateSettingsJsonSchema,
   loadSettingsFromFile,
@@ -7,6 +9,11 @@ import {
   resolveEnvPlaceholders,
 } from '../src/config.js'
 import { writeTempSettings } from './helpers/temp-file.js'
+
+function compileGeneratedSettingsSchema() {
+  const ajv = new Ajv({ strict: false, allErrors: true })
+  return ajv.compile(generateSettingsJsonSchema())
+}
 
 describe('config', () => {
   afterEach(() => {
@@ -276,6 +283,53 @@ describe('config', () => {
     expect(settings.plugins[1]?.providers).toEqual(['auth-only'])
   })
 
+  it('normalizes global plugin providers shorthand', () => {
+    const settings = parseAndValidateSettings(`{
+      "plugins": [
+        { "name": "my-auth", "config": {}, "providers": "auth-only" }
+      ],
+      "providers": {
+        "auth-only": {
+          "type": "openai-compatible",
+          "baseURL": "https://api.example.com/v1",
+          "apiKey": "secret",
+          "models": {}
+        }
+      }
+    }`)
+
+    expect(settings.plugins[0]?.providers).toEqual(['auth-only'])
+  })
+
+  it.each([
+    {
+      level: 'provider',
+      pluginsJson: '"plugins": [{ "name": "vendor_sse_error", "providers": ["other"] }]',
+    },
+    {
+      level: 'model',
+      pluginsJson: `"models": {
+        "chat": {
+          "upstreamModel": "upstream-chat",
+          "plugins": [{ "name": "vendor_sse_error", "providers": ["other"] }]
+        }
+      }`,
+    },
+  ])('rejects providers on $level-scoped plugins', ({ pluginsJson }) => {
+    expect(() =>
+      parseAndValidateSettings(`{
+        "providers": {
+          "openrouter": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "apiKey": "secret",
+            ${pluginsJson}
+          }
+        }
+      }`),
+    ).toThrow(/providers/)
+  })
+
   it.each([
     {
       name: 'openai-compatible',
@@ -409,24 +463,81 @@ describe('config', () => {
 
   // ── JSON Schema 按类型区分 options ──────────────────────
 
-  it('generates per-type options in JSON schema', () => {
-    const schema = generateSettingsJsonSchema()
-    const json = JSON.stringify(schema)
+  it('validates provider-specific options through generated JSON schema', () => {
+    const validate = compileGeneratedSettingsSchema()
 
-    // openai-compatible 应有 modelsEndpoint/includeUsage，不应有 anthropicVersion/organization/project
-    expect(json).toContain('modelsEndpoint')
-    expect(json).toContain('includeUsage')
-    expect(json).toContain('anthropicVersion')
-    expect(json).toContain('organization')
-    expect(json).toContain('project')
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            options: { modelsEndpoint: '/models', includeUsage: true },
+            models: { chat: { upstreamModel: 'model-x' } },
+          },
+        },
+      }),
+    ).toBe(true)
 
-    // 验证 schema 结构：找到 openai-compatible 的 options 块应包含 modelsEndpoint 但不含 anthropicVersion
-    const schemaObj = schema as Record<string, unknown>
-    const defs = schemaObj.definitions as Record<string, unknown> | undefined
-    // $refStrategy: 'none' 意味着没有 definitions，所有内容内联
-    // 通过验证关键属性存在即可
-    expect(json).toContain('streamOnly')
-    expect(json).toContain('enableFlatModelLookup')
+    expect(
+      validate({
+        providers: {
+          openai: {
+            type: 'openai',
+            apiKey: 'secret',
+            options: { organization: 'org-test', project: 'proj-test' },
+            models: { chat: { upstreamModel: 'gpt-5' } },
+          },
+        },
+      }),
+    ).toBe(true)
+
+    expect(
+      validate({
+        providers: {
+          openai: {
+            type: 'openai',
+            apiKey: 'secret',
+            options: { modelsEndpoint: '/models' },
+            models: { chat: { upstreamModel: 'gpt-5' } },
+          },
+        },
+      }),
+    ).toBe(false)
+
+    expect(
+      validate({
+        providers: {
+          anthropic: {
+            type: 'anthropic',
+            apiKey: 'secret',
+            options: { organization: 'org-test' },
+            models: { sonnet: { upstreamModel: 'claude-sonnet' } },
+          },
+        },
+      }),
+    ).toBe(false)
+  })
+
+  it('rejects slash-containing aliases through generated JSON schema', () => {
+    const validate = compileGeneratedSettingsSchema()
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            models: { chat: { upstreamModel: 'model-x', aliases: ['bad/alias'] } },
+          },
+        },
+      }),
+    ).toBe(false)
+  })
+
+  it('keeps committed settings schema in sync with generated schema', async () => {
+    const committed = await readFile('config/settings.schema.json', 'utf8')
+    expect(committed).toBe(`${JSON.stringify(generateSettingsJsonSchema(), null, 2)}\n`)
   })
 })
 

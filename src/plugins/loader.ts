@@ -1,5 +1,4 @@
 import type { Plugin } from './types.js'
-import type { PluginEntry } from '../config.js'
 import { isAbsolute, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { vendorSseErrorPlugin } from './builtins/vendor-sse-error.js'
@@ -19,6 +18,11 @@ export function getBuiltInPlugin(name: string): Plugin | undefined {
 
 // ─── Loader ──────────────────────────────────────────────────────
 
+interface LoadablePluginEntry {
+  name?: string | undefined
+  module?: string | undefined
+}
+
 /**
  * 加载单个插件。
  *
@@ -27,7 +31,7 @@ export function getBuiltInPlugin(name: string): Plugin | undefined {
  * - 两者都有 → module 加载，name 用于日志和引用标识
  */
 export async function loadPlugin(
-  entry: PluginEntry,
+  entry: LoadablePluginEntry,
   baseDir: string,
 ): Promise<{ plugin: Plugin; modulePath?: string }> {
   // 外部插件：有 module 字段
@@ -82,11 +86,7 @@ function validatePluginShape(plugin: unknown, source: string): asserts plugin is
     'init',
     'beforeServerStart',
     'afterServerStart',
-    'beforeRequest',
-    'beforeProviderCall',
-    'afterProviderResult',
     'inspectStreamChunk',
-    'mapProviderError',
     'createFetch',
     'discoverModels',
   ] as const

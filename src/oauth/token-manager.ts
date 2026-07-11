@@ -1,7 +1,7 @@
 import type { OAuthConfig } from '../config.js'
 import type { AuthStatus, OAuthToken, OAuthTokenResponse, TokenStore } from './types.js'
 import { OAuthError } from './types.js'
-import { loadAuthFile, extractTokenStore, saveAuthFile, mergeTokenStore } from './token-store.js'
+import { loadAuthFile, extractTokenStore, saveTokenStore } from './token-store.js'
 
 /** Token 过期前的提前刷新余量（秒） */
 const EXPIRY_MARGIN_SECONDS = 30
@@ -90,7 +90,7 @@ export async function refreshAccessToken(
       )
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'refresh_failed')
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError('refresh_failed', `Token refresh failed: ${String(error)}`)
@@ -129,7 +129,7 @@ export async function fetchClientCredentialsToken(
       )
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'refresh_failed')
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError(
@@ -171,7 +171,7 @@ export async function exchangeAuthorizationCode(
       )
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse)
+    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'exchange_failed')
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError('exchange_failed', `Authorization code exchange failed: ${String(error)}`)
@@ -181,7 +181,12 @@ export async function exchangeAuthorizationCode(
 /**
  * 解析 OAuth token 端点的 JSON 响应。
  */
-function parseTokenResponse(data: OAuthTokenResponse): OAuthToken {
+type TokenEndpointFailureCode = 'refresh_failed' | 'exchange_failed'
+
+function parseTokenResponse(
+  data: OAuthTokenResponse,
+  failureCode: TokenEndpointFailureCode,
+): OAuthToken {
   const accessToken = data['access_token']
   const expiresIn = data['expires_in']
   const tokenType = data['token_type']
@@ -189,11 +194,11 @@ function parseTokenResponse(data: OAuthTokenResponse): OAuthToken {
   const scope = data['scope']
 
   if (typeof accessToken !== 'string') {
-    throw new OAuthError('refresh_failed', 'Token response missing access_token')
+    throw new OAuthError(failureCode, 'Token response missing access_token')
   }
 
   if (typeof expiresIn !== 'number') {
-    throw new OAuthError('refresh_failed', 'Token response missing expires_in')
+    throw new OAuthError(failureCode, 'Token response missing expires_in')
   }
 
   return {
@@ -233,8 +238,7 @@ export class TokenManager {
         return extractTokenStore(data)
       },
       async save(store: TokenStore): Promise<void> {
-        const data = await loadAuthFile(authFilePath)
-        await saveAuthFile(authFilePath, mergeTokenStore(data, store))
+        await saveTokenStore(authFilePath, store)
       },
     }
     return new TokenManager(persistence, fetchFn)

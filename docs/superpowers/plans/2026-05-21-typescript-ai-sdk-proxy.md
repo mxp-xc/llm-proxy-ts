@@ -1341,13 +1341,7 @@ Create `apps/server/src/protocols/openai-chat-renderer.ts`:
 import { randomUUID } from 'node:crypto'
 
 type FinishReason =
-  | 'stop'
-  | 'length'
-  | 'content-filter'
-  | 'tool-calls'
-  | 'error'
-  | 'other'
-  | undefined
+  'stop' | 'length' | 'content-filter' | 'tool-calls' | 'error' | 'other' | undefined
 
 export interface RenderResultInput {
   model: string

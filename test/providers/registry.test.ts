@@ -1,57 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Settings } from '../../src/index.js'
+import type { AuthFetchRegistry } from '../../src/plugins/registry.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
-import type { ProviderFactory } from '../../src/providers/registry.js'
 import * as providerFactoryModule from '../../src/providers/shared/provider-factory.js'
 import { makeSettings } from '../helpers/settings.js'
 import { createCapturingLogger } from '../helpers/registry.js'
+import { createCapturingProviderFactory } from '../helpers/provider-factory.js'
 
 const { logger: mockLogger, capturedLogs } = createCapturingLogger()
-
-/**
- * Stub factory that captures arguments and returns lightweight model objects,
- * avoiding real AI SDK provider construction.
- *
- * 签名与 `ProviderFactory` 一致（含 `customFetch` / `proxyFetch` 参数），
- * 记录 `proxyFetch` 到 `capturedProxyFetch` 以验证 registry 作用域的共享 fetch
- * 真正透传到 provider 工厂。
- */
-const capturedProxyFetch: Array<typeof fetch | undefined> = []
-const stubFactory = {
-  createOpenAICompatible(
-    providerName: string,
-    _provider: unknown,
-    _modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    _customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
-  ) {
-    capturedProxyFetch.push(proxyFetch)
-    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
-  },
-  createAnthropic(
-    providerName: string,
-    _provider: unknown,
-    _modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    _customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
-  ) {
-    capturedProxyFetch.push(proxyFetch)
-    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
-  },
-  createOpenAI(
-    providerName: string,
-    _provider: unknown,
-    _modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    _customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
-  ) {
-    capturedProxyFetch.push(proxyFetch)
-    return (upstreamModel: string) => ({ upstreamModel, providerName, selectedApiKey })
-  },
-} as unknown as ProviderFactory
+const { factory: stubFactory, inputs: capturedFactoryInputs } = createCapturingProviderFactory()
 
 const settings = makeSettings(
   {
@@ -60,12 +17,6 @@ const settings = makeSettings(
       baseURL: 'https://openrouter.ai/api/v1',
       apiKey: 'secret',
       headers: {
-        authorization: 'Bearer wrong',
-        'proxy-authorization': 'Basic wrong',
-        'x-api-key': 'wrong',
-        'api-key': 'wrong',
-        apikey: 'wrong',
-        api_key: 'wrong',
         'X-Test': 'yes',
       },
       plugins: [],
@@ -78,10 +29,10 @@ const settings = makeSettings(
 describe('provider registry', () => {
   afterEach(() => {
     capturedLogs.length = 0
-    capturedProxyFetch.length = 0
+    capturedFactoryInputs.length = 0
   })
 
-  it('creates openai-compatible language models and filters auth header overrides', async () => {
+  it('creates openai-compatible language models through the provider factory', async () => {
     const registry = await createProviderRegistry(
       settings,
       undefined,
@@ -91,15 +42,14 @@ describe('provider registry', () => {
       stubFactory,
     )
     const result = registry.languageModel('openrouter', 'openrouter/chat', {
-      AUTHORIZATION: 'Bearer also-wrong',
-      'X-API-Key': 'also-wrong',
+      'X-Request': 'yes',
     })
 
     expect(result.model).toBeTruthy()
-    expect(registry.debugProviderConfig('openrouter')).toEqual({
-      baseURL: 'https://openrouter.ai/api/v1',
-      headers: { 'X-Test': 'yes' },
-      proxyEnabled: true,
+    expect(capturedFactoryInputs[0]).toMatchObject({
+      providerName: 'openrouter',
+      modelHeaders: { 'X-Request': 'yes' },
+      selectedApiKey: 'secret',
     })
   })
 
@@ -184,11 +134,94 @@ describe('provider registry', () => {
     const result = registry.languageModel('openrouter', 'openrouter/chat', {})
     expect(result.keySelection).toBeUndefined()
   })
+
+  it.each(['openai-compatible' as const, 'anthropic' as const, 'openai' as const])(
+    'dispatches %s providers to the matching factory adapter',
+    async (providerType) => {
+      const provider =
+        providerType === 'openai'
+          ? {
+              type: 'openai' as const,
+              apiKey: 'secret',
+              headers: {},
+              plugins: [],
+              models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
+            }
+          : providerType === 'anthropic'
+            ? {
+                type: 'anthropic' as const,
+                baseURL: 'https://api.anthropic.com/v1',
+                apiKey: 'secret',
+                headers: {},
+                plugins: [],
+                models: {
+                  chat: {
+                    upstreamModel: 'claude-sonnet-4-5',
+                    aliases: [],
+                    headers: {},
+                    plugins: [],
+                  },
+                },
+              }
+            : {
+                type: 'openai-compatible' as const,
+                baseURL: 'https://api.example.com/v1',
+                apiKey: 'secret',
+                headers: {},
+                plugins: [],
+                models: { chat: { upstreamModel: 'model', aliases: [], headers: {}, plugins: [] } },
+              }
+      const registry = await createProviderRegistry(
+        makeSettings({ provider }),
+        undefined,
+        mockLogger,
+        undefined,
+        undefined,
+        stubFactory,
+      )
+
+      registry.languageModel('provider', provider.models.chat!.upstreamModel, {})
+
+      expect(capturedFactoryInputs[0]!.kind).toBe(providerType)
+    },
+  )
+
+  it('does not compose auth fetch until the passthrough transport seam needs fetch', async () => {
+    let composeCalls = 0
+    const authFetch = ((baseFetch?: typeof fetch) => {
+      composeCalls += 1
+      return baseFetch ?? globalThis.fetch
+    }) satisfies (baseFetch?: typeof fetch) => typeof fetch
+    const pluginRegistry: AuthFetchRegistry = {
+      async createAuthFetch(providerId) {
+        return providerId === 'openrouter' ? authFetch : undefined
+      },
+    }
+    const registry = await createProviderRegistry(
+      settings,
+      undefined,
+      mockLogger,
+      pluginRegistry,
+      undefined,
+      stubFactory,
+    )
+
+    registry.languageModel('openrouter', 'openrouter/chat', {})
+
+    expect(composeCalls).toBe(0)
+    expect(capturedFactoryInputs[0]!.customFetch).toBe(authFetch)
+
+    const transport = registry.passthroughTransport('openrouter')
+
+    expect(composeCalls).toBe(1)
+    expect(transport.fetch).toBeDefined()
+    expect(transport.apiKey).toBe('secret')
+  })
 })
 
 describe('shared ProxyAgent singleton', () => {
   afterEach(() => {
-    capturedProxyFetch.length = 0
+    capturedFactoryInputs.length = 0
     vi.restoreAllMocks()
   })
 
@@ -217,8 +250,8 @@ describe('shared ProxyAgent singleton', () => {
     expect(createProxyFetchSpy).toHaveBeenCalledTimes(1)
     expect(createProxyFetchSpy).toHaveBeenCalledWith('http://127.0.0.1:7890', false)
     // sharedProxyFetch 真正透传到 provider 工厂：每次 languageModel 都注入同一引用
-    expect(capturedProxyFetch).toHaveLength(3)
-    expect(capturedProxyFetch.every((f) => f === sharedFetch)).toBe(true)
+    expect(capturedFactoryInputs).toHaveLength(3)
+    expect(capturedFactoryInputs.every((input) => input.proxyFetch === sharedFetch)).toBe(true)
   })
 
   it('createProxyFetch is not called when no proxy is configured', async () => {

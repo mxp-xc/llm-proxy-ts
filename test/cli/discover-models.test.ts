@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const proxyFetchMock = vi.hoisted(() => vi.fn())
+const createProxyFetchMock = vi.hoisted(() => vi.fn(() => proxyFetchMock))
+
+vi.mock('../../src/providers/shared/provider-factory.js', () => ({
+  createProxyFetch: createProxyFetchMock,
+}))
+
 import {
   extractLimit,
   fetchUpstreamModels,
@@ -53,6 +61,12 @@ describe('fetchUpstreamModels', () => {
       ok: true,
       json: () => Promise.resolve(mockModelList),
     })
+    proxyFetchMock.mockReset()
+    proxyFetchMock.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockModelList),
+    })
+    createProxyFetchMock.mockClear()
     vi.stubGlobal('fetch', mockFetch)
   })
 
@@ -154,11 +168,38 @@ describe('fetchUpstreamModels', () => {
     const models = await fetchUpstreamModels({
       baseURL: 'https://api.example.com/v1',
       apiKey: 'test-key',
-      proxySettings: null,
+      proxySettings: { url: 'http://127.0.0.1:7890', verify: false },
     })
 
     expect(models).toHaveLength(3)
-    expect(mockFetch).toHaveBeenCalled()
+    expect(createProxyFetchMock).toHaveBeenCalledWith('http://127.0.0.1:7890', false)
+    expect(proxyFetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
+      }),
+    )
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('includes OpenAI organization and project headers when provided', async () => {
+    await fetchUpstreamModels({
+      baseURL: 'https://api.openai.com/v1',
+      apiKey: 'test-key',
+      proxySettings: null,
+      openAIOptions: { organization: 'org-test', project: 'proj-test' },
+    })
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.openai.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-key',
+          'OpenAI-Organization': 'org-test',
+          'OpenAI-Project': 'proj-test',
+        }),
+      }),
+    )
   })
 
   it('uses custom modelsEndpoint as relative path', async () => {

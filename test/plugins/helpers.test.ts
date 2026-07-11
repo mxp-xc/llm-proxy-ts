@@ -79,6 +79,30 @@ describe('createSimpleAuthFetch', () => {
     expect(url).toContain('access_token=abc123')
   })
 
+  it('should strip SDK placeholder auth headers for query-only credentials', async () => {
+    const ctx = makeCtx()
+    const authFetch = createSimpleAuthFetch(
+      async () => ({ query: { access_token: 'abc123' } }) satisfies SimpleAuthCredentials,
+      ctx,
+    )
+
+    const { fetch: baseFetch, calls } = captureFetch()
+    await authFetch(baseFetch)('https://api.example.com/v1/chat', {
+      headers: {
+        Authorization: 'Bearer oauth-placeholder',
+        'x-api-key': 'oauth-placeholder',
+      },
+    })
+
+    expect(calls).toHaveLength(1)
+    const input = calls[0]!.input
+    const url = typeof input === 'string' ? input : input.toString()
+    expect(url).toContain('access_token=abc123')
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('Authorization')).toBeNull()
+    expect(headers.get('x-api-key')).toBeNull()
+  })
+
   it('should handle string URL input', async () => {
     const ctx = makeCtx()
     const authFetch = createSimpleAuthFetch(
@@ -123,6 +147,43 @@ describe('createSimpleAuthFetch', () => {
     expect(calls).toHaveLength(1)
     const headers = new Headers(calls[0]!.init?.headers)
     expect(headers.get('Authorization')).toBe('Bearer tok')
+  })
+
+  it('should preserve Request headers, overlay init headers, then inject credentials', async () => {
+    const ctx = makeCtx()
+    const authFetch = createSimpleAuthFetch(
+      async () =>
+        ({
+          headers: {
+            'X-Original': 'credential-wins',
+            'X-Credential': 'credential',
+          },
+        }) satisfies SimpleAuthCredentials,
+      ctx,
+    )
+
+    const { fetch: baseFetch, calls } = captureFetch()
+    const req = new Request('https://api.example.com/v1/chat', {
+      method: 'POST',
+      headers: {
+        'X-Original': 'request',
+        'X-Request-Only': 'request',
+      },
+    })
+
+    await authFetch(baseFetch)(req, {
+      headers: {
+        'X-Original': 'init',
+        'X-Init-Only': 'init',
+      },
+    })
+
+    expect(calls).toHaveLength(1)
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('X-Original')).toBe('credential-wins')
+    expect(headers.get('X-Request-Only')).toBe('request')
+    expect(headers.get('X-Init-Only')).toBe('init')
+    expect(headers.get('X-Credential')).toBe('credential')
   })
 
   it('should compose with a base fetch (proxy)', async () => {

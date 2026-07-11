@@ -1,3 +1,4 @@
+import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import type { ProxyPlugin, PluginContext, PluginResponse } from '../types.js'
 
 export interface VendorSseErrorConfig {
@@ -11,18 +12,28 @@ export interface VendorSseErrorResponse {
   body: unknown
 }
 
+interface NormalizedVendorSseErrorConfig {
+  maxPreviewEvents: number
+  maxPreviewBytes: number
+  rateLimitCodes: string[]
+}
+
+const DEFAULT_MAX_PREVIEW_EVENTS = 3
+const DEFAULT_MAX_PREVIEW_BYTES = 65536
+const DEFAULT_RATE_LIMIT_CODES = ['rate_limit', 'too_many_requests', 'rate_limit_error']
+
 export function inspectVendorSseError(
   config: VendorSseErrorConfig,
   chunk: unknown,
 ): VendorSseErrorResponse | undefined {
+  const normalized = normalizeVendorSseErrorConfig(config)
   const raw = extractRaw(chunk)
   if (!raw) {
     return undefined
   }
 
-  const preview = raw.slice(0, config.maxPreviewBytes ?? 65536)
-  const dataItems = extractSseData(preview).slice(0, config.maxPreviewEvents ?? 3)
-  const codes = config.rateLimitCodes ?? ['rate_limit', 'too_many_requests', 'rate_limit_error']
+  const preview = raw.slice(0, normalized.maxPreviewBytes)
+  const dataItems = extractSseData(preview, normalized.maxPreviewEvents)
 
   for (const data of dataItems) {
     if (data === '[DONE]') {
@@ -43,7 +54,10 @@ export function inspectVendorSseError(
 
     const code = safeString(error.code)
     const type = safeString(error.type)
-    if (!codes.includes(code ?? '') && !codes.includes(type ?? '')) {
+    if (
+      !normalized.rateLimitCodes.includes(code ?? '') &&
+      !normalized.rateLimitCodes.includes(type ?? '')
+    ) {
       continue
     }
 
@@ -63,12 +77,6 @@ export function inspectVendorSseError(
 }
 
 // ─── Built-in Plugin ─────────────────────────────────────────────
-
-const defaultVendorSseErrorConfig: VendorSseErrorConfig = {
-  maxPreviewEvents: 3,
-  maxPreviewBytes: 65536,
-  rateLimitCodes: ['rate_limit', 'too_many_requests', 'rate_limit_error'],
-}
 
 function isVendorSseErrorConfig(value: unknown): value is VendorSseErrorConfig {
   if (value === null || typeof value !== 'object') return false
@@ -90,7 +98,7 @@ export const vendorSseErrorPlugin: ProxyPlugin = {
   name: 'vendor_sse_error',
 
   inspectStreamChunk(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse> {
-    const config = isVendorSseErrorConfig(ctx.config) ? ctx.config : defaultVendorSseErrorConfig
+    const config = isVendorSseErrorConfig(ctx.config) ? ctx.config : {}
     const result = inspectVendorSseError(config, ctx.chunk)
     if (result) {
       return Promise.resolve(result)
@@ -100,6 +108,23 @@ export const vendorSseErrorPlugin: ProxyPlugin = {
 }
 
 // ─── Internal helpers ────────────────────────────────────────────
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return fallback
+  }
+  return Math.floor(value)
+}
+
+function normalizeVendorSseErrorConfig(
+  config: VendorSseErrorConfig,
+): NormalizedVendorSseErrorConfig {
+  return {
+    maxPreviewEvents: normalizePositiveInteger(config.maxPreviewEvents, DEFAULT_MAX_PREVIEW_EVENTS),
+    maxPreviewBytes: normalizePositiveInteger(config.maxPreviewBytes, DEFAULT_MAX_PREVIEW_BYTES),
+    rateLimitCodes: config.rateLimitCodes ?? DEFAULT_RATE_LIMIT_CODES,
+  }
+}
 
 function extractRaw(chunk: unknown): string | undefined {
   if (typeof chunk === 'string') {
@@ -122,12 +147,20 @@ function extractRaw(chunk: unknown): string | undefined {
   return undefined
 }
 
-function extractSseData(raw: string): string[] {
-  const lines = raw.split(/\r?\n/).filter((line) => line.startsWith('data:'))
-  if (lines.length === 0) {
+function extractSseData(raw: string, maxEvents: number): string[] {
+  const dataItems: string[] = []
+  const parser = createParser({
+    onEvent(event: EventSourceMessage) {
+      if (dataItems.length < maxEvents) {
+        dataItems.push(event.data)
+      }
+    },
+  })
+  parser.feed(raw)
+  if (dataItems.length === 0) {
     return [raw.trim()].filter(Boolean)
   }
-  return lines.map((line) => line.slice(5).trim()).filter(Boolean)
+  return dataItems
 }
 
 function extractError(value: unknown): Record<string, unknown> | undefined {

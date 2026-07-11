@@ -38,22 +38,20 @@ describe('token-store', () => {
       expect(store['my-provider']).toEqual(token)
     })
 
-    it('returns empty store for corrupted JSON', async () => {
+    it('throws for corrupted JSON', async () => {
       const path = join(tempDir, 'auth.json')
       const { writeFile } = await import('node:fs/promises')
       await writeFile(path, '{invalid json', 'utf8')
 
-      const data = await loadAuthFile(path)
-      expect(extractTokenStore(data)).toEqual({})
+      await expect(loadAuthFile(path)).rejects.toThrow(path)
     })
 
-    it('returns empty store for non-object JSON', async () => {
+    it('throws for non-object JSON', async () => {
       const path = join(tempDir, 'auth.json')
       const { writeFile } = await import('node:fs/promises')
       await writeFile(path, '[1,2,3]', 'utf8')
 
-      const data = await loadAuthFile(path)
-      expect(extractTokenStore(data)).toEqual({})
+      await expect(loadAuthFile(path)).rejects.toThrow(path)
     })
   })
 
@@ -77,6 +75,21 @@ describe('token-store', () => {
 
       const data = await loadAuthFile(path)
       expect(extractTokenStore(data)).toEqual(store)
+    })
+
+    it('supports concurrent saves to the same auth file', async () => {
+      const path = join(tempDir, 'auth.json')
+      const payloadA = {
+        providerA: makeToken({ accessToken: 'token-a' }),
+      }
+      const payloadB = {
+        providerB: makeToken({ accessToken: 'token-b' }),
+      }
+
+      await Promise.all([saveAuthFile(path, payloadA), saveAuthFile(path, payloadB)])
+
+      const data = await loadAuthFile(path)
+      expect([payloadA, payloadB]).toContainEqual(data)
     })
 
     it('overwrites existing store', async () => {

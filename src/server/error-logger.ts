@@ -91,7 +91,17 @@ export class ErrorLogger {
       const filePath = resolve(this.logDir, getErrorLogFileName())
       appendFileSync(filePath, `${line}\n`)
     } catch (err) {
-      fallbackLogger.error({ err }, 'error log write failed')
+      fallbackLogger.error(
+        {
+          err,
+          requestId: entry.requestId,
+          phase: entry.phase,
+          provider: entry.provider,
+          requestedModel: entry.requestedModel,
+          actualModel: entry.actualModel,
+        },
+        'error log write failed',
+      )
     }
   }
 }

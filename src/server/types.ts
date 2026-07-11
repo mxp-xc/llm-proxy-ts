@@ -3,7 +3,7 @@ import type { AISDKInput, ProxyStreamPart } from '../providers/shared/aisdk-type
 import type { Settings } from '../config.js'
 import type { TokenManager } from '../oauth/token-manager.js'
 import type { ProviderRegistry, KeySelection } from '../providers/registry.js'
-import type { PluginRegistry } from '../plugins/registry.js'
+import type { PipelinePluginRegistry } from '../plugins/registry.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import type pino from 'pino'
 import type { CodexCatalogCache } from '../codex-catalog.js'
@@ -31,14 +31,13 @@ export interface ModelGateway {
 
 export interface AppDependencies {
   settings: Settings
-  providerRegistry?: ProviderRegistry
+  providerRegistry: ProviderRegistry
   gateway?: ModelGateway
   logger?: pino.Logger
   tokenManager?: TokenManager
   nonce?: string
   getAuthStatuses?: () => ProviderAuthStatus[]
-  pluginRegistry?: PluginRegistry
-  authFilePath?: string
+  pluginRegistry?: PipelinePluginRegistry
   codexCatalogCache?: CodexCatalogCache
   errorLogger?: ErrorLogger
 }

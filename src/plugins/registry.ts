@@ -8,7 +8,7 @@ import type {
   DiscoveredModelList,
   ResolvedPlugin,
 } from './types.js'
-import type { Settings } from '../config.js'
+import type { PluginEntry, ScopedPluginEntry, Settings } from '../config.js'
 import { loadPlugin } from './loader.js'
 import { noopLogger } from '../types.js'
 import type { Logger } from '../types.js'
@@ -44,6 +44,11 @@ export function validatePluginConstraints(
   // 1. Global auth plugins must not target providers with oauth
   for (const rp of globalPlugins) {
     if (isAuthPlugin(rp.plugin)) {
+      if (rp.providers.length === 0) {
+        throw new Error(
+          `Auth plugin '${rp.plugin.name}' must target at least one provider via providers`,
+        )
+      }
       for (const providerId of rp.providers) {
         const provider = settings.providers[providerId]
         if (provider?.oauth) {
@@ -82,6 +87,37 @@ export function validatePluginConstraints(
 
 // ─── PluginRegistry ──────────────────────────────────────────────
 
+export interface AuthFetchRegistry {
+  createAuthFetch(
+    providerId: string,
+    logger?: Logger,
+    authFilePath?: string,
+  ): Promise<((baseFetch?: typeof fetch) => typeof fetch) | undefined>
+}
+
+export interface PipelinePluginRegistry {
+  getPipelinePlugins(providerId: string, modelKey: string): ResolvedPlugin[]
+}
+
+async function loadResolvedPlugin(
+  entry: PluginEntry | ScopedPluginEntry,
+  settingsDir: string,
+  providers: string[],
+  log: Logger,
+  logPayload: Record<string, unknown>,
+  message: string,
+): Promise<ResolvedPlugin> {
+  const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
+  const rp: ResolvedPlugin = {
+    plugin,
+    config: entry.config,
+    providers,
+    ...(modulePath !== undefined ? { modulePath } : {}),
+  }
+  log.info({ plugin: plugin.name, module: modulePath, ...logPayload }, message)
+  return rp
+}
+
 export class PluginRegistry {
   private readonly allResolvedCache: ResolvedPlugin[]
 
@@ -90,7 +126,6 @@ export class PluginRegistry {
     private readonly providerPlugins: Map<string, ResolvedPlugin[]>,
     private readonly modelPlugins: Map<string, Map<string, ResolvedPlugin[]>>,
     private readonly settings: Settings,
-    private readonly settingsDir: string,
   ) {
     this.allResolvedCache = this.computeAllResolved()
   }
@@ -104,27 +139,22 @@ export class PluginRegistry {
   static async fromSettings(
     settings: Settings,
     settingsDir: string,
-    authFilePath?: string,
     logger?: Logger,
   ): Promise<PluginRegistry> {
     const log = logger ?? noopLogger
 
     // 1. 加载全局插件（并行）
     const globalPlugins = await Promise.all(
-      settings.plugins.map(async (entry) => {
-        const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-        const rp: ResolvedPlugin = {
-          plugin,
-          config: entry.config,
-          providers: entry.providers,
-          ...(modulePath !== undefined ? { modulePath } : {}),
-        }
-        log.info(
-          { plugin: plugin.name, module: modulePath, providers: rp.providers },
+      settings.plugins.map((entry) =>
+        loadResolvedPlugin(
+          entry,
+          settingsDir,
+          entry.providers,
+          log,
+          { providers: entry.providers },
           'global plugin loaded',
-        )
-        return rp
-      }),
+        ),
+      ),
     )
 
     // 2. 加载 provider 级插件（provider 间并行，provider 内并行）
@@ -132,20 +162,16 @@ export class PluginRegistry {
     const providerResults = await Promise.all(
       Object.entries(settings.providers).map(async ([providerId, provider]) => {
         const resolved = await Promise.all(
-          provider.plugins.map(async (entry) => {
-            const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-            const rp: ResolvedPlugin = {
-              plugin,
-              config: entry.config,
-              providers: [providerId],
-              ...(modulePath !== undefined ? { modulePath } : {}),
-            }
-            log.info(
-              { plugin: plugin.name, module: modulePath, provider: providerId },
+          provider.plugins.map((entry) =>
+            loadResolvedPlugin(
+              entry,
+              settingsDir,
+              [providerId],
+              log,
+              { provider: providerId },
               'provider plugin loaded',
-            )
-            return rp
-          }),
+            ),
+          ),
         )
         return [providerId, resolved] as const
       }),
@@ -165,25 +191,16 @@ export class PluginRegistry {
             const resolved: ResolvedPlugin[] = []
             if (modelConfig.plugins && modelConfig.plugins.length > 0) {
               const loaded = await Promise.all(
-                modelConfig.plugins.map(async (entry) => {
-                  const { plugin, modulePath } = await loadPlugin(entry, settingsDir)
-                  const rp: ResolvedPlugin = {
-                    plugin,
-                    config: entry.config,
-                    providers: [providerId],
-                    ...(modulePath !== undefined ? { modulePath } : {}),
-                  }
-                  log.info(
-                    {
-                      plugin: plugin.name,
-                      module: modulePath,
-                      provider: providerId,
-                      model: modelKey,
-                    },
+                modelConfig.plugins.map((entry) =>
+                  loadResolvedPlugin(
+                    entry,
+                    settingsDir,
+                    [providerId],
+                    log,
+                    { provider: providerId, model: modelKey },
                     'model plugin loaded',
-                  )
-                  return rp
-                }),
+                  ),
+                ),
               )
               resolved.push(...loaded)
             }
@@ -208,7 +225,7 @@ export class PluginRegistry {
     // 4. 校验约束
     validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings)
 
-    return new PluginRegistry(globalPlugins, providerPlugins, modelPlugins, settings, settingsDir)
+    return new PluginRegistry(globalPlugins, providerPlugins, modelPlugins, settings)
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────
@@ -241,10 +258,16 @@ export class PluginRegistry {
   }
 
   /** 服务监听前调用所有插件的 beforeServerStart()。 */
-  async beforeServerStartAll(): Promise<void> {
+  async beforeServerStartAll(logger?: Logger): Promise<void> {
+    const log = logger ?? noopLogger
     for (const rp of this.allResolved()) {
       if (rp.plugin.beforeServerStart) {
-        await rp.plugin.beforeServerStart()
+        try {
+          await rp.plugin.beforeServerStart()
+        } catch (err) {
+          log.error({ err, plugin: rp.plugin.name }, 'plugin beforeServerStart failed')
+          throw err
+        }
       }
     }
   }
@@ -259,9 +282,12 @@ export class PluginRegistry {
         return rp.plugin.name
       }),
     )
-    for (const r of results) {
+    for (const [index, r] of results.entries()) {
       if (r.status === 'rejected') {
-        log.error({ err: r.reason }, 'plugin afterServerStart failed')
+        log.error(
+          { err: r.reason, plugin: callables[index]!.plugin.name },
+          'plugin afterServerStart failed',
+        )
       }
     }
   }
@@ -274,26 +300,8 @@ export class PluginRegistry {
     logger?: Logger,
     authFilePath?: string,
   ): Promise<((baseFetch?: typeof fetch) => typeof fetch) | undefined> {
-    const log = logger ?? noopLogger
-
-    for (const rp of this.globalPlugins) {
-      if (!isAuthPlugin(rp.plugin)) continue
-      if (!rp.providers.includes(providerId)) continue
-
-      const provider = this.settings.providers[providerId]
-      if (!provider) continue
-
-      const store = this.#resolveStore(authFilePath, rp)
-      const ctx: ProviderContext = {
-        id: providerId,
-        provider,
-        config: rp.config,
-        store,
-        log: log.child({ component: 'auth-plugin', plugin: rp.plugin.name, provider: providerId }),
-      }
-      return rp.plugin.createFetch(ctx)
-    }
-    return undefined
+    const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath)
+    return resolved ? resolved.rp.plugin.createFetch(resolved.ctx) : undefined
   }
 
   /** 为指定 provider 发现模型列表。 */
@@ -302,27 +310,10 @@ export class PluginRegistry {
     logger?: Logger,
     authFilePath?: string,
   ): Promise<DiscoveredModelList | undefined> {
-    const log = logger ?? noopLogger
-
-    for (const rp of this.globalPlugins) {
-      if (!isAuthPlugin(rp.plugin)) continue
-      if (!rp.providers.includes(providerId)) continue
-      if (!rp.plugin.discoverModels) continue
-
-      const provider = this.settings.providers[providerId]
-      if (!provider) continue
-
-      const store = this.#resolveStore(authFilePath, rp)
-      const ctx: ProviderContext = {
-        id: providerId,
-        provider,
-        config: rp.config,
-        store,
-        log: log.child({ component: 'auth-plugin', plugin: rp.plugin.name, provider: providerId }),
-      }
-      return rp.plugin.discoverModels(ctx)
-    }
-    return undefined
+    const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath, {
+      requireDiscoverModels: true,
+    })
+    return resolved?.rp.plugin.discoverModels?.(resolved.ctx)
   }
 
   // ─── Per-request pipeline ─────────────────────────────────────
@@ -333,7 +324,11 @@ export class PluginRegistry {
    */
   getPipelinePlugins(providerId: string, modelKey?: string): ResolvedPlugin[] {
     // 全局级只包含 ProxyPlugin
-    const globalLevel = this.globalPlugins.filter((rp) => isProxyPlugin(rp.plugin))
+    const globalLevel = this.globalPlugins.filter(
+      (rp) =>
+        isProxyPlugin(rp.plugin) &&
+        (rp.providers.length === 0 || rp.providers.includes(providerId)),
+    )
     const providerLevel = this.providerPlugins.get(providerId) ?? []
     const modelLevel =
       (modelKey ? this.modelPlugins.get(providerId)?.get(modelKey) : undefined) ?? []
@@ -356,6 +351,41 @@ export class PluginRegistry {
 
   #resolveStore(authFilePath: string | undefined, rp: ResolvedPlugin): PluginStore {
     return authFilePath ? createPluginStore(authFilePath, rp.plugin.name) : noopStore
+  }
+
+  #resolveAuthPluginContext(
+    providerId: string,
+    logger?: Logger,
+    authFilePath?: string,
+    options: { requireDiscoverModels?: boolean } = {},
+  ): { rp: ResolvedPlugin & { plugin: AuthPlugin }; ctx: ProviderContext } | undefined {
+    const log = logger ?? noopLogger
+
+    for (const rp of this.globalPlugins) {
+      if (!isAuthPlugin(rp.plugin)) continue
+      if (!rp.providers.includes(providerId)) continue
+      if (options.requireDiscoverModels && !rp.plugin.discoverModels) continue
+
+      const provider = this.settings.providers[providerId]
+      if (!provider) continue
+
+      const store = this.#resolveStore(authFilePath, rp)
+      return {
+        rp: rp as ResolvedPlugin & { plugin: AuthPlugin },
+        ctx: {
+          id: providerId,
+          provider,
+          config: rp.config,
+          store,
+          log: log.child({
+            component: 'auth-plugin',
+            plugin: rp.plugin.name,
+            provider: providerId,
+          }),
+        },
+      }
+    }
+    return undefined
   }
 
   private allResolved(): ResolvedPlugin[] {
@@ -426,13 +456,7 @@ function filterAfterStart(
 }
 
 function isProxyPlugin(plugin: Plugin): plugin is ProxyPlugin {
-  return (
-    typeof (plugin as ProxyPlugin).beforeRequest === 'function' ||
-    typeof (plugin as ProxyPlugin).beforeProviderCall === 'function' ||
-    typeof (plugin as ProxyPlugin).afterProviderResult === 'function' ||
-    typeof (plugin as ProxyPlugin).inspectStreamChunk === 'function' ||
-    typeof (plugin as ProxyPlugin).mapProviderError === 'function'
-  )
+  return typeof (plugin as ProxyPlugin).inspectStreamChunk === 'function'
 }
 
 // ─── No-op defaults ──────────────────────────────────────────────

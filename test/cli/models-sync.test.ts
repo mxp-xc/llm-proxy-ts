@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { OAuthError } from '../../src/oauth/index.js'
 import { discoverProviderModels } from '../../src/cli/models/discovery.js'
+import type { ModelDiscoveryRegistry } from '../../src/cli/models/discovery.js'
 import { makeSettings } from '../helpers/settings.js'
 import type {
   Settings,
@@ -10,7 +11,6 @@ import type {
 } from '../../src/config.js'
 import type { UpstreamModelResponse } from '../../src/cli/models/discover.js'
 import type { DiscoveredModelList } from '../../src/plugins/types.js'
-import type { PluginRegistry } from '../../src/plugins/registry.js'
 import type { TokenManager } from '../../src/oauth/index.js'
 
 const authFilePath = '/tmp/auth.json'
@@ -71,10 +71,10 @@ function fetchUpstreamMock(models: UpstreamModelResponse[] = upstreamModels) {
 /** Construct a minimal PluginRegistry-shaped mock. */
 function pluginRegistryMock(
   discover: (providerId: string) => Promise<DiscoveredModelList | undefined>,
-) {
+): ModelDiscoveryRegistry {
   return {
     discoverModels: vi.fn(discover),
-  } as unknown as PluginRegistry
+  }
 }
 
 /** Construct a minimal TokenManager-shaped mock. */

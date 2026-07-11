@@ -1,6 +1,5 @@
 import type { PluginStore } from './types.js'
-import type { AuthFileData } from '../oauth/token-store.js'
-import { PLUGINS_KEY, loadAuthFile, saveAuthFile } from '../oauth/token-store.js'
+import { PLUGINS_KEY, loadAuthFile, updateAuthFile } from '../oauth/token-store.js'
 
 /**
  * 创建 PluginStore 实例，backed by auth.json 的 _plugins.{pluginName} 子树。
@@ -30,16 +29,17 @@ export function createPluginStore(authFilePath: string, pluginName: string): Plu
     },
 
     async set(data: Record<string, unknown>): Promise<void> {
-      const fileData = await loadAuthFile(authFilePath)
-      const plugins =
-        typeof fileData[PLUGINS_KEY] === 'object' && fileData[PLUGINS_KEY] !== null
-          ? { ...(fileData[PLUGINS_KEY] as Record<string, Record<string, unknown>>) }
-          : {}
+      await updateAuthFile(authFilePath, (fileData) => {
+        const plugins =
+          typeof fileData[PLUGINS_KEY] === 'object' && fileData[PLUGINS_KEY] !== null
+            ? { ...(fileData[PLUGINS_KEY] as Record<string, Record<string, unknown>>) }
+            : {}
 
-      plugins[pluginName] = data
-      fileData[PLUGINS_KEY] = plugins
+        plugins[pluginName] = data
+        fileData[PLUGINS_KEY] = plugins
 
-      await saveAuthFile(authFilePath, fileData)
+        return fileData
+      })
     },
   }
 }

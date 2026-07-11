@@ -71,6 +71,19 @@ describe('createPluginStore', () => {
     expect(disk._plugins['plugin-b'].token).toBe('bbb')
   })
 
+  it('should preserve concurrent writes from different plugins', async () => {
+    const filePath = await setupAuthFile()
+    const storeA = createPluginStore(filePath, 'plugin-a')
+    const storeB = createPluginStore(filePath, 'plugin-b')
+
+    await Promise.all([storeA.set({ token: 'aaa' }), storeB.set({ token: 'bbb' })])
+
+    const raw = await readFile(filePath, 'utf8')
+    const disk = JSON.parse(raw)
+    expect(disk._plugins['plugin-a'].token).toBe('aaa')
+    expect(disk._plugins['plugin-b'].token).toBe('bbb')
+  })
+
   it('should return empty object when no data exists', async () => {
     const filePath = await setupAuthFile()
     const store = createPluginStore(filePath, 'new-plugin')

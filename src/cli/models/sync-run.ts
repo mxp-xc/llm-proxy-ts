@@ -1,13 +1,14 @@
 import * as clack from '@clack/prompts'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { parse, type ParseError } from 'jsonc-parser'
+import { parse } from 'jsonc-parser'
 import { loadSettingsFromFile } from '../../config.js'
-import type { ModelRouteInput, Settings } from '../../config.js'
+import type { Settings } from '../../config.js'
 import { createTokenManagerIfNeeded } from '../../oauth/index.js'
 import { PluginRegistry } from '../../plugins/registry.js'
 import { applyMultipleProviderModels, writeSettingsFile } from './settings-writer.js'
 import { discoverProviderModels, type ProviderModelsResult } from './discovery.js'
+import { getInitialModelSelections, planModelSyncChanges, type ModelSyncPlan } from './sync-plan.js'
 
 export interface ModelsSyncOptions {
   settingsPath: string
@@ -52,8 +53,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   }
 
   // 解析原始 JSONC 以获取未解析 env 占位符的 apiKey
-  const rawErrors: ParseError[] = []
-  const rawParsed = parse(rawText, rawErrors, { allowTrailingComma: true }) as unknown
+  const rawParsed = parse(rawText, undefined, { allowTrailingComma: true }) as unknown
 
   // 初始化插件注册表（如果有插件配置）
   const settingsDir = dirname(settingsPath)
@@ -61,7 +61,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   let pluginRegistry: PluginRegistry | undefined
   if (settings.plugins.length > 0) {
     try {
-      pluginRegistry = await PluginRegistry.fromSettings(settings, settingsDir, authFilePath)
+      pluginRegistry = await PluginRegistry.fromSettings(settings, settingsDir)
       await pluginRegistry.initAll(undefined, authFilePath)
     } catch (err) {
       clack.log.warn(
@@ -150,29 +150,17 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
   }
 
   // 4. 选择模型
-  const changes: Array<{
-    providerName: string
-    newModels: Record<string, ModelRouteInput>
-    added: number
-    kept: number
-    removed: number
-  }> = []
+  const changes: Array<ModelSyncPlan & { providerName: string }> = []
 
   for (const { providerName, models, existingModels } of results) {
-    const existingKeys = Object.keys(existingModels)
-
     const options = models.map((model) => ({
       value: model.id,
       label: model.id,
     }))
-
-    const initialValues: string[] = []
-    for (const key of existingKeys) {
-      const upstreamModel = existingModels[key]?.upstreamModel
-      if (upstreamModel && models.some((m) => m.id === upstreamModel)) {
-        initialValues.push(upstreamModel)
-      }
-    }
+    const initialValues = getInitialModelSelections({
+      existingModels,
+      discoveredModels: models,
+    })
 
     const selected = await clack.autocompleteMultiselect({
       message: `Select models for ${providerName} (${models.length} available)`,
@@ -187,37 +175,14 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
       return
     }
 
-    const selectedIds = new Set(selected as string[])
+    const plan = planModelSyncChanges({
+      existingModels,
+      discoveredModels: models,
+      selectedIds: selected as string[],
+    })
+    const { added, kept, removed } = plan
 
-    // 按 id 查找 discovered model（含 limit 信息）
-    const discoveredById = new Map(models.map((m) => [m.id, m]))
-
-    const newModels: Record<string, ModelRouteInput> = {}
-    let kept = 0
-    let added = 0
-
-    for (const modelId of selectedIds) {
-      const existingEntry = Object.entries(existingModels).find(
-        ([, config]) => config.upstreamModel === modelId,
-      )
-
-      if (existingEntry) {
-        newModels[existingEntry[0]] = existingEntry[1]
-        kept++
-      } else {
-        const discovered = discoveredById.get(modelId)
-        const entry: ModelRouteInput = { upstreamModel: modelId }
-        if (discovered?.limit) {
-          entry.limit = discovered.limit
-        }
-        newModels[modelId] = entry
-        added++
-      }
-    }
-
-    const removed = existingKeys.length - kept
-
-    changes.push({ providerName, newModels, added, kept, removed })
+    changes.push({ providerName, ...plan })
 
     const parts: string[] = []
     if (added > 0) parts.push(`+${added} new`)

@@ -1,5 +1,5 @@
+import { randomUUID } from 'node:crypto'
 import { readFile, writeFile, rename } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
 import type { OAuthToken, TokenStore } from './types.js'
@@ -18,25 +18,37 @@ export interface AuthFileData {
 /** `_plugins` 子树的键名 */
 export const PLUGINS_KEY = '_plugins'
 
+const authFileLocks = new Map<string, Promise<void>>()
+
 /**
  * 从 auth.json 文件加载完整数据。
- * 文件不存在返回空对象；JSON 损坏返回空对象。
+ * 文件不存在返回空对象；JSON 损坏或非对象会抛错，避免后续写回覆盖未知数据。
  */
 export async function loadAuthFile(filePath: string): Promise<AuthFileData> {
-  if (!existsSync(filePath)) {
-    return {}
+  let raw: string
+  try {
+    raw = await readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return {}
+    }
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to read auth file '${filePath}': ${message}`)
   }
 
+  let parsed: unknown
   try {
-    const raw = await readFile(filePath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as AuthFileData
-    }
-    return {}
-  } catch {
-    return {}
+    parsed = JSON.parse(raw) as unknown
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Failed to parse auth file '${filePath}': ${message}`)
   }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Auth file '${filePath}' must contain a JSON object`)
+  }
+
+  return parsed as AuthFileData
 }
 
 /**
@@ -46,11 +58,30 @@ export async function loadAuthFile(filePath: string): Promise<AuthFileData> {
 export async function saveAuthFile(filePath: string, data: AuthFileData): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
 
-  const tmpPath = join(dirname(filePath), `.auth.json.tmp-${process.pid}`)
+  const tmpPath = join(dirname(filePath), `.auth.json.tmp-${process.pid}-${randomUUID()}`)
   const content = `${JSON.stringify(data, null, 2)}\n`
 
   await writeFile(tmpPath, content, 'utf8')
   await rename(tmpPath, filePath)
+}
+
+export async function updateAuthFile(
+  filePath: string,
+  updater: (data: AuthFileData) => AuthFileData | Promise<AuthFileData>,
+): Promise<void> {
+  const previous = authFileLocks.get(filePath) ?? Promise.resolve()
+  const next = previous.then(async () => {
+    const current = await loadAuthFile(filePath)
+    const updated = await updater(current)
+    await saveAuthFile(filePath, updated)
+  })
+  const tracked = next.finally(() => {
+    if (authFileLocks.get(filePath) === tracked) {
+      authFileLocks.delete(filePath)
+    }
+  })
+  authFileLocks.set(filePath, tracked)
+  await next
 }
 
 /**
@@ -90,4 +121,8 @@ export function mergeTokenStore(data: AuthFileData, store: TokenStore): AuthFile
     }
   }
   return result
+}
+
+export async function saveTokenStore(filePath: string, store: TokenStore): Promise<void> {
+  await updateAuthFile(filePath, (data) => mergeTokenStore(data, store))
 }

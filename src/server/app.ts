@@ -1,15 +1,13 @@
 import { Hono } from 'hono'
 import type { Settings, TokenManager, AuthStatus } from '../index.js'
 import {
-  OAuthError,
   listModels,
-  RoutingError,
   RoutingTable,
   openaiCompatibleStrategy,
   openaiResponsesStrategy,
   anthropicStrategy,
 } from '../index.js'
-import type { ProviderRegistry, PluginRegistry, KeySelection } from '../index.js'
+import type { ProviderRegistry, KeySelection } from '../index.js'
 import pino from 'pino'
 import { logger as defaultLogger, requestId, LOG_DIR } from './logging.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
@@ -34,6 +32,43 @@ interface HealthResponse {
   auth?: Record<string, { status: string; loginUrl?: string | undefined }>
 }
 
+function wrapStreamWithTerminalLog<T>(
+  body: ReadableStream<T>,
+  logCompleted: () => void,
+): ReadableStream<T> {
+  const reader = body.getReader()
+  let logged = false
+  const logOnce = () => {
+    if (logged) return
+    logged = true
+    logCompleted()
+  }
+
+  return new ReadableStream<T>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          logOnce()
+          controller.close()
+          return
+        }
+        controller.enqueue(value)
+      } catch (err) {
+        logOnce()
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason)
+      } finally {
+        logOnce()
+      }
+    },
+  })
+}
+
 export function createApp({
   settings,
   tokenManager,
@@ -43,38 +78,17 @@ export function createApp({
   nonce,
   getAuthStatuses,
   pluginRegistry,
-  authFilePath,
   codexCatalogCache,
   errorLogger,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
-  if (!providerRegistry) {
-    throw new Error(
-      'providerRegistry is required — construct it with createProviderRegistry() before calling createApp()',
-    )
-  }
-  const resolvedRegistry = providerRegistry
-
-  function resolveModel(
-    providerName: string,
-    upstreamModel: string,
-    headers: Record<string, string>,
-    c: import('hono').Context<AppEnv>,
-  ): import('ai').LanguageModel {
-    const result = resolvedRegistry.languageModel(providerName, upstreamModel, headers)
-    if (result.keySelection) {
-      c.set('keySelection', result.keySelection)
-    }
-    return result.model
-  }
 
   const protocolCtx: ProtocolContext = {
     routingTable,
     settings,
     gateway,
-    resolveModel,
-    selectApiKey: (providerName) => resolvedRegistry.selectApiKey(providerName),
+    providerRegistry,
     errorLogger:
       errorLogger ??
       new ErrorLogger({
@@ -89,12 +103,6 @@ export function createApp({
   // modelsById 直接复用 modelsList 已产出的同一批 OpenAIModel 对象,避免重复枚举。
   const modelsList = listModels(settings)
   const modelsById = new Map(modelsList.data.map((m) => [m.id, m]))
-
-  // 挂载 OAuth 回调路由
-  if (tokenManager && nonce) {
-    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce })
-    app.route('/oauth', oauthApp)
-  }
 
   app.use('*', async (c, next) => {
     const id = requestId()
@@ -131,12 +139,7 @@ export function createApp({
     const isSSE = c.res.headers.get('content-type')?.includes('text/event-stream')
     if (isSSE && c.res.body instanceof ReadableStream) {
       const body = c.res.body
-      const transform = new TransformStream<Uint8Array, Uint8Array>({
-        flush() {
-          logCompleted()
-        },
-      })
-      c.res = new Response(body.pipeThrough(transform), {
+      c.res = new Response(wrapStreamWithTerminalLog(body, logCompleted), {
         status: c.res.status,
         statusText: c.res.statusText,
         headers: c.res.headers,
@@ -145,6 +148,38 @@ export function createApp({
       logCompleted()
     }
     c.header('x-request-id', id)
+  })
+
+  // 挂载 OAuth 回调路由。必须位于 request middleware 之后,确保 /oauth 也有 requestId/logger。
+  if (tokenManager && nonce) {
+    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce, logger })
+    app.route('/oauth', oauthApp)
+  }
+
+  app.onError((err, c) => {
+    const reqLogger = c.get('logger') ?? logger
+    reqLogger.error(
+      {
+        err,
+        method: c.req.method,
+        path: c.req.path,
+        provider: c.get('provider'),
+        requestedModel: c.get('requestedModel'),
+        actualModel: c.get('actualModel'),
+        keySelection: c.get('keySelection'),
+      },
+      'request failed',
+    )
+    return c.json(
+      {
+        error: {
+          type: 'internal_error',
+          code: 'internal_server_error',
+          message: 'Internal server error',
+        },
+      },
+      500,
+    )
   })
 
   app.get('/health', (c) => {

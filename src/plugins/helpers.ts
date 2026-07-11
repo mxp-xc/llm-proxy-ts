@@ -69,8 +69,14 @@ export function createSimpleAuthFetch(
       }
     }
 
-    // 构建 headers
-    const headers = new Headers(init?.headers)
+    // 构建 headers: Request headers < init.headers < credentials.headers.
+    const headers = input instanceof Request ? new Headers(input.headers) : new Headers()
+    if (init?.headers !== undefined) {
+      for (const [key, value] of new Headers(init.headers)) {
+        headers.set(key, value)
+      }
+    }
+    stripSdkPlaceholderHeaders(headers)
     if (credentials.headers) {
       for (const [key, value] of Object.entries(credentials.headers)) {
         headers.set(key, value)
@@ -79,5 +85,17 @@ export function createSimpleAuthFetch(
 
     const fetchFn = baseFetch ?? globalThis.fetch
     return fetchFn(reconstructedInput, { ...init, headers })
+  }
+}
+
+function stripSdkPlaceholderHeaders(headers: Headers): void {
+  const authorization = headers.get('authorization')
+  if (authorization?.includes('oauth-placeholder')) {
+    headers.delete('authorization')
+  }
+
+  const apiKey = headers.get('x-api-key')
+  if (apiKey?.includes('oauth-placeholder')) {
+    headers.delete('x-api-key')
   }
 }

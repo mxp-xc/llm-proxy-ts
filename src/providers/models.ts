@@ -1,5 +1,4 @@
 import type { Settings } from '../config.js'
-import { isFlatLookupEnabled } from '../config-helpers.js'
 import {
   enumerateModelEntries,
   type ModelLimit,
@@ -23,42 +22,5 @@ export function listModels(settings: Settings): OpenAIModelList {
 }
 
 export function getModel(settings: Settings, modelId: string): OpenAIModel | null {
-  const slashIndex = modelId.indexOf('/')
-
-  // provider/<modelKey 或 alias-name> 格式
-  if (slashIndex > 0) {
-    const providerName = modelId.slice(0, slashIndex)
-    const requestedModel = modelId.slice(slashIndex + 1)
-    if (!requestedModel) {
-      return null
-    }
-
-    const provider = settings.providers[providerName]
-    if (provider?.models[requestedModel]) {
-      return makeModel(modelId, providerName, provider.models[requestedModel].limit)
-    }
-    for (const model of Object.values(provider?.models ?? {})) {
-      if (model.aliases.some((a) => a.name === requestedModel)) {
-        return makeModel(modelId, providerName, model.limit)
-      }
-    }
-    return null
-  }
-
-  // 扁平名称查找 — modelKey/alias 裸名在 provider/model/alias 级 flat 任一启用时生效
-  for (const [providerName, provider] of Object.entries(settings.providers)) {
-    const providerFlat = isFlatLookupEnabled(provider, settings)
-
-    for (const [modelKey, model] of Object.entries(provider.models)) {
-      const modelFlat = providerFlat || !!model.flat
-      if (modelFlat && modelKey === modelId) {
-        return makeModel(modelId, providerName, model.limit)
-      }
-      if (model.aliases.some((a) => (modelFlat || a.flat) && a.name === modelId)) {
-        return makeModel(modelId, providerName, model.limit)
-      }
-    }
-  }
-
-  return null
+  return new Map(listModels(settings).data.map((model) => [model.id, model])).get(modelId) ?? null
 }

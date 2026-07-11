@@ -2,6 +2,9 @@ import { Hono } from 'hono'
 import type { Settings, OAuthConfig } from '../../config.js'
 import type { TokenManager } from '../../oauth/token-manager.js'
 import { isRecord } from '../../providers/protocol-types.js'
+import { noopLogger, type Logger } from '../../types.js'
+import type { AppEnv } from '../types.js'
+import { buildOAuthCallbackUrl } from './urls.js'
 
 /**
  * OAuth 回调路由的依赖项。
@@ -10,6 +13,7 @@ export interface OAuthCallbackDeps {
   settings: Settings
   tokenManager: TokenManager
   nonce: string
+  logger?: Logger
 }
 
 /**
@@ -18,9 +22,9 @@ export interface OAuthCallbackDeps {
  * - GET /oauth/login/:provider — 重定向到授权 URL
  * - GET /oauth/callback — 接收授权码，交换 token
  */
-export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono {
-  const app = new Hono()
-  const { settings, tokenManager, nonce } = deps
+export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
+  const app = new Hono<AppEnv>()
+  const { settings, tokenManager, nonce, logger = noopLogger } = deps
 
   app.get('/login/:provider', (c) => {
     const providerName = c.req.param('provider')
@@ -64,8 +68,7 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono {
       )
     }
 
-    const redirectUri =
-      oauth.redirectUri ?? `http://127.0.0.1:${settings.service.port}/oauth/callback`
+    const redirectUri = buildOAuthCallbackUrl(settings, oauth)
     const state = encodeState(providerName, nonce)
     const scope =
       oauth.scopes.length > 0 ? `&scope=${encodeURIComponent(oauth.scopes.join(' '))}` : ''
@@ -105,13 +108,14 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono {
     }
 
     const oauth: OAuthConfig = provider.oauth
-    const redirectUri =
-      oauth.redirectUri ?? `http://127.0.0.1:${settings.service.port}/oauth/callback`
+    const redirectUri = buildOAuthCallbackUrl(settings, oauth)
 
     try {
       await tokenManager.exchangeCode(providerName, oauth, code, redirectUri)
       return c.html(renderSuccessPage(providerName))
     } catch (err) {
+      const log = c.get('logger') ?? logger
+      log.error({ err, provider: providerName }, 'oauth code exchange failed')
       const message = err instanceof Error ? err.message : String(err)
       return c.html(renderErrorPage('exchange_failed', message))
     }

@@ -1,14 +1,14 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { settingsSchema } from '../../src/config.js'
 import {
   ErrorLogger,
   getErrorLogFileName,
   type ErrorLogEntry,
 } from '../../src/server/error-logger.js'
-import { cleanOldLogs } from '../../src/server/logging.js'
+import { cleanOldLogs, logger as fallbackLogger } from '../../src/server/logging.js'
 
 let tmpLogDir: string
 beforeAll(() => {
@@ -103,13 +103,25 @@ describe('ErrorLogger', () => {
   })
 
   it('does not throw when file write fails (logs fallback)', () => {
+    const errorSpy = vi.spyOn(fallbackLogger, 'error').mockImplementation(() => undefined)
     const logger = new ErrorLogger({
       logDir: '/nonexistent/path/that/cannot/be/created',
       enabled: true,
       maxBodyLength: 262144,
     })
-    // 不应抛出
     expect(() => logger.log({ ...baseEntry, requestId: 'req-fallback' })).not.toThrow()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.anything(),
+        requestId: 'req-fallback',
+        phase: 'generate',
+        provider: 'test-provider',
+        requestedModel: 'test-model',
+        actualModel: 'upstream-model',
+      }),
+      'error log write failed',
+    )
+    errorSpy.mockRestore()
   })
 })
 

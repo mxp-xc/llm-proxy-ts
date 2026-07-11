@@ -13,6 +13,7 @@
 ## 文件结构
 
 **新增：**
+
 - `src/server/error-logger.ts` — `ErrorLogger` 类：截断、脱敏、序列化、追加写入 NDJSON；导出 `ErrorLogEntry` 类型与 `ERROR_LOG_RETENTION_DAYS` 常量
 - `src/server/tee-stream.ts` — `teeStream` async generator：yield chunk 同时 push 引用到 buffer
 - `test/server/error-logger.test.ts` — ErrorLogger 单元测试（截断、脱敏、轮转、enabled 开关）
@@ -20,6 +21,7 @@
 - `test/server/error-logging-integration.test.ts` — 端到端集成测试（四类异常场景）
 
 **修改：**
+
 - `src/config.ts` — 新增 `errorLoggingSchema`，挂到 `settingsSchema`；导出 `ErrorLoggingConfig` 类型
 - `src/server/logging.ts` — `cleanOldLogs` 扩展支持 `errors-*.ndjson` 30 天轮转
 - `src/server/types.ts` — `AppDependencies` 新增 `errorLogger?` 字段
@@ -33,6 +35,7 @@
 ### Task 1: 配置 schema — errorLogging
 
 **Files:**
+
 - Modify: `src/config.ts:178-200`（`settingsSchema` 定义处）
 - Test: `test/server/error-logger.test.ts`（后续 Task 创建，本 Task 仅验证 schema）
 
@@ -73,10 +76,12 @@ Expected: FAIL — `parsed.errorLogging` 为 `undefined`
 在 `src/config.ts` 的 `settingsSchema` 定义之前（约第 178 行 `providerConfigSchema` 之后）添加：
 
 ```ts
-export const errorLoggingSchema = z.object({
-  enabled: z.boolean().default(true),
-  maxBodyLength: z.number().int().positive().default(262144),
-}).default({})
+export const errorLoggingSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    maxBodyLength: z.number().int().positive().default(262144),
+  })
+  .default({})
 
 export type ErrorLoggingConfig = z.infer<typeof errorLoggingSchema>
 ```
@@ -115,6 +120,7 @@ git commit -m "feat(config): add errorLogging settings schema"
 ### Task 2: teeStream 包装器
 
 **Files:**
+
 - Create: `src/server/tee-stream.ts`
 - Test: `test/server/tee-stream.test.ts`
 
@@ -218,6 +224,7 @@ git commit -m "feat(server): add teeStream chunk buffer wrapper"
 ### Task 3: ErrorLogger 模块 — 截断、脱敏、落盘
 
 **Files:**
+
 - Create: `src/server/error-logger.ts`
 - Test: `test/server/error-logger.test.ts`（追加到 Task 1 创建的文件）
 
@@ -454,6 +461,7 @@ git commit -m "feat(server): add ErrorLogger with truncation, redaction, NDJSON 
 ### Task 4: cleanOldLogs 轮转扩展 — errors 文件 30 天
 
 **Files:**
+
 - Modify: `src/server/logging.ts:155-172`（`cleanOldLogs` 函数）
 - Test: `test/server/error-logger.test.ts`（追加轮转测试）
 
@@ -552,6 +560,7 @@ git commit -m "feat(logging): extend cleanOldLogs for 30-day error log rotation"
 ### Task 5: AppDependencies 与 createApp 装配
 
 **Files:**
+
 - Modify: `src/server/types.ts:35-47`（`AppDependencies` 接口）
 - Modify: `src/server/app.ts`（`createApp` 解构与 `ErrorLogger` 创建）
 
@@ -586,7 +595,9 @@ import { ErrorLogger } from './error-logger.js'
 在 `createApp` 函数体内、`const protocolCtx` 定义之前（约第 70 行）添加 `ErrorLogger` 单例创建：
 
 ```ts
-  const resolvedErrorLogger = errorLogger ?? new ErrorLogger({
+const resolvedErrorLogger =
+  errorLogger ??
+  new ErrorLogger({
     logDir: process.env.LLM_PROXY_LOG_DIR ?? resolve(process.cwd(), 'logs'),
     enabled: settings.errorLogging.enabled,
     maxBodyLength: settings.errorLogging.maxBodyLength,
@@ -606,7 +617,7 @@ import type { ErrorLogger } from './error-logger.js'
 在 `ProtocolContext` 接口末尾（`resolveModel` 之后）添加：
 
 ```ts
-  errorLogger: ErrorLogger
+errorLogger: ErrorLogger
 ```
 
 在 `src/server/app.ts` 的 `protocolCtx` 对象字面量中添加：
@@ -637,6 +648,7 @@ git commit -m "feat(server): wire ErrorLogger into AppDependencies and ProtocolC
 ### Task 6: handle-protocol 接入 — 非流式 generate 错误落盘
 
 **Files:**
+
 - Modify: `src/server/handle-protocol.ts`（`handleUpstreamError` 函数 + generate catch 分支）
 - Test: `test/server/error-logging-integration.test.ts`
 
@@ -657,10 +669,15 @@ import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
 
 const tmpLogRoot = mkdtempSync(join(tmpdir(), 'errint-'))
-afterAll(() => { rmSync(tmpLogRoot, { recursive: true, force: true }) })
+afterAll(() => {
+  rmSync(tmpLogRoot, { recursive: true, force: true })
+})
 
 let dirCounter = 0
-function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOverrides?: Partial<Settings>) {
+function makeAppWithErrors(
+  gateway: ReturnType<typeof makeGateway>,
+  settingsOverrides?: Partial<Settings>,
+) {
   // 每次调用用独立子目录，避免测试间共享错误日志文件导致计数断言失败
   const tmpLogDir = join(tmpLogRoot, `t${dirCounter++}`)
   const settings = makeSettings(
@@ -671,7 +688,9 @@ function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOver
         apiKey: 'secret',
         headers: {},
         plugins: [],
-        models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
+        models: {
+          chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
+        },
       },
     },
     { requestTimeoutMs: 30000, ...settingsOverrides },
@@ -681,7 +700,10 @@ function makeAppWithErrors(gateway: ReturnType<typeof makeGateway>, settingsOver
     enabled: settings.errorLogging.enabled,
     maxBodyLength: settings.errorLogging.maxBodyLength,
   })
-  return { app: createApp({ settings, gateway, providerRegistry: stubRegistry, errorLogger }), tmpLogDir }
+  return {
+    app: createApp({ settings, gateway, providerRegistry: stubRegistry, errorLogger }),
+    tmpLogDir,
+  }
 }
 
 function readErrors(tmpLogDir: string): any[] {
@@ -700,7 +722,9 @@ function readErrors(tmpLogDir: string): any[] {
 describe('error logging integration', () => {
   it('logs request + null response when non-streaming generate fails', async () => {
     const gateway = makeGateway({
-      async generate() { throw new Error('upstream generate failed') },
+      async generate() {
+        throw new Error('upstream generate failed')
+      },
     })
     const { app, tmpLogDir } = makeAppWithErrors(gateway)
 
@@ -817,6 +841,7 @@ git commit -m "feat(server): log request+response on non-streaming generate erro
 ### Task 7: handle-protocol 接入 — 流式错误落盘
 
 **Files:**
+
 - Modify: `src/server/handle-protocol.ts`（流式路径 + streamOnly 路径）
 - Test: `test/server/error-logging-integration.test.ts`（追加流式测试）
 
@@ -867,7 +892,9 @@ describe('error logging integration — streaming', () => {
 
   it('logs empty response array when acquireStream fails before first chunk', async () => {
     const gateway = makeGateway({
-      stream() { throw new Error('connection refused') },
+      stream() {
+        throw new Error('connection refused')
+      },
     })
     const { app, tmpLogDir } = makeAppWithErrors(gateway)
 
@@ -883,7 +910,9 @@ describe('error logging integration — streaming', () => {
 
     expect(response.status).toBe(502)
     const records = readErrors(tmpLogDir)
-    const record = records.find((r) => r.phase === 'stream' && r.error.message === 'connection refused')
+    const record = records.find(
+      (r) => r.phase === 'stream' && r.error.message === 'connection refused',
+    )
     expect(record).toBeDefined()
     expect(record.response).toEqual([])
   })
@@ -906,66 +935,62 @@ import { teeStream } from './tee-stream.js'
 修改流式路径（约第 130 行 `if (strategy.isStream(request))` 块内）。在 `acquireStream` 成功后、`renderStreamSSE` 之前插入 tee 包装，并修改 `onError` 回调闭包捕获 `request` 和 `buffer`：
 
 ```ts
-      const reqLogger = c.get('logger')
-      const enabled = ctx.settings.errorLogging.enabled
-      const buffer: ProxyStreamPart[] = []
-      const teedStream = enabled
-        ? teeStream(acquired.stream, buffer)
-        : acquired.stream
-      return new Response(
-        readableStreamFromAsyncIterable(
-          strategy.renderStreamSSE({
-            model: requestModel,
-            stream: teedStream,
-            ...(customToolNames && { customToolNames }),
-            ...(customToolShimmed && { customToolShimmed }),
-            ...(toolSearchShimmed && { toolSearchShimmed }),
-            ...(namespaceFlatMap && { namespaceFlatMap }),
-          }),
-          (error) => {
-            reqLogger.error({ err: error }, 'stream consumption failed')
-            ctx.errorLogger.log({
-              requestId: c.get('requestId'),
-              phase: 'stream',
-              provider: c.get('provider') ?? '',
-              requestedModel: c.get('requestedModel') ?? '',
-              actualModel: c.get('actualModel') ?? '',
-              error: {
-                name: error instanceof Error ? error.name : 'Error',
-                message: error instanceof Error ? error.message : String(error),
-                ...(error instanceof Error && error.stack && { stack: error.stack }),
-              },
-              request,
-              response: enabled ? buffer : [],
-            })
-          },
-        ),
-        { headers: { 'content-type': 'text/event-stream' } },
-      )
+const reqLogger = c.get('logger')
+const enabled = ctx.settings.errorLogging.enabled
+const buffer: ProxyStreamPart[] = []
+const teedStream = enabled ? teeStream(acquired.stream, buffer) : acquired.stream
+return new Response(
+  readableStreamFromAsyncIterable(
+    strategy.renderStreamSSE({
+      model: requestModel,
+      stream: teedStream,
+      ...(customToolNames && { customToolNames }),
+      ...(customToolShimmed && { customToolShimmed }),
+      ...(toolSearchShimmed && { toolSearchShimmed }),
+      ...(namespaceFlatMap && { namespaceFlatMap }),
+    }),
+    (error) => {
+      reqLogger.error({ err: error }, 'stream consumption failed')
+      ctx.errorLogger.log({
+        requestId: c.get('requestId'),
+        phase: 'stream',
+        provider: c.get('provider') ?? '',
+        requestedModel: c.get('requestedModel') ?? '',
+        actualModel: c.get('actualModel') ?? '',
+        error: {
+          name: error instanceof Error ? error.name : 'Error',
+          message: error instanceof Error ? error.message : String(error),
+          ...(error instanceof Error && error.stack && { stack: error.stack }),
+        },
+        request,
+        response: enabled ? buffer : [],
+      })
+    },
+  ),
+  { headers: { 'content-type': 'text/event-stream' } },
+)
 ```
 
 修改 streamOnly 路径（约第 170 行）。在 `acquireStream` 成功后插入 tee 包装，并在 catch 中落盘：
 
 ```ts
-      const enabled = ctx.settings.errorLogging.enabled
-      const buffer: ProxyStreamPart[] = []
-      const teedStream = enabled
-        ? teeStream(acquired.stream, buffer)
-        : acquired.stream
-      try {
-        const collected = await withRequestTimeout(
-          collectStreamResult(teedStream),
-          ctx.settings.requestTimeoutMs,
-          abortController,
-        )
-        // ... 原有 renderResult 逻辑不变 ...
-      } catch (error) {
-        return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only', {
-          errorLogger: ctx.errorLogger,
-          request,
-          response: enabled ? buffer : [],
-        })
-      }
+const enabled = ctx.settings.errorLogging.enabled
+const buffer: ProxyStreamPart[] = []
+const teedStream = enabled ? teeStream(acquired.stream, buffer) : acquired.stream
+try {
+  const collected = await withRequestTimeout(
+    collectStreamResult(teedStream),
+    ctx.settings.requestTimeoutMs,
+    abortController,
+  )
+  // ... 原有 renderResult 逻辑不变 ...
+} catch (error) {
+  return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only', {
+    errorLogger: ctx.errorLogger,
+    request,
+    response: enabled ? buffer : [],
+  })
+}
 ```
 
 修改流式路径的 `acquireStream` catch 分支（约第 162 行），传入空 buffer：
@@ -997,6 +1022,7 @@ git commit -m "feat(server): log request+buffered chunks on streaming errors"
 ### Task 8: 超时场景落盘验证
 
 **Files:**
+
 - Test: `test/server/error-logging-integration.test.ts`（追加超时测试）
 
 - [ ] **Step 1: 写超时测试**
@@ -1051,6 +1077,7 @@ git commit -m "test(server): verify error logging on request timeout"
 ### Task 9: enabled=false 与脱敏集成验证
 
 **Files:**
+
 - Test: `test/server/error-logging-integration.test.ts`（追加）
 
 - [ ] **Step 1: 写 enabled=false 测试**
@@ -1061,7 +1088,9 @@ git commit -m "test(server): verify error logging on request timeout"
 describe('error logging integration — disabled', () => {
   it('writes nothing when errorLogging.enabled is false', async () => {
     const gateway = makeGateway({
-      async generate() { throw new Error('should not be logged') },
+      async generate() {
+        throw new Error('should not be logged')
+      },
     })
     const { app, tmpLogDir } = makeAppWithErrors(gateway, {
       errorLogging: { enabled: false, maxBodyLength: 262144 },
@@ -1091,7 +1120,9 @@ describe('error logging integration — disabled', () => {
 describe('error logging integration — redaction', () => {
   it('redacts authorization field from logged request body', async () => {
     const gateway = makeGateway({
-      async generate() { throw new Error('redact test') },
+      async generate() {
+        throw new Error('redact test')
+      },
     })
     const { app, tmpLogDir } = makeAppWithErrors(gateway)
 
@@ -1129,6 +1160,7 @@ git commit -m "test(server): verify disabled flag and authorization redaction"
 ### Task 10: schema 重新生成与最终验证
 
 **Files:**
+
 - Modify: `config/settings.schema.json`（自动生成）
 
 - [ ] **Step 1: 重新生成 JSON schema**

@@ -154,6 +154,36 @@ describe('OAuth callback', () => {
       expect(html).toContain('oauth-provider')
     })
 
+    it('logs full error object when authorization code exchange fails', async () => {
+      const exchangeError = new Error('exchange exploded')
+      const tokenManager = {
+        exchangeCode: vi.fn().mockRejectedValue(exchangeError),
+      } as unknown as TokenManager
+      const logger = {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        fatal: vi.fn(),
+        child: vi.fn(),
+      }
+      logger.child.mockReturnValue(logger)
+
+      const state = Buffer.from(JSON.stringify({ provider: 'oauth-provider', nonce })).toString(
+        'base64url',
+      )
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
+      const res = await app.request(`/callback?code=auth-code-123&state=${state}`)
+
+      expect(res.status).toBe(200)
+      const html = await res.text()
+      expect(html).toContain('Authentication Failed')
+      expect(html).toContain('exchange_failed')
+      expect(logger.error).toHaveBeenCalledWith(
+        { err: exchangeError, provider: 'oauth-provider' },
+        'oauth code exchange failed',
+      )
+    })
+
     it('rejects invalid state (wrong nonce)', async () => {
       const tokenManager = TokenManager.fromFile(authFilePath)
       await tokenManager.load()

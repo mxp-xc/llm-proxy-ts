@@ -29,9 +29,9 @@
 
 ### 代码（2 个文件）
 
-| 文件 | 改动 |
-|---|---|
-| `package.json` | `generate:schema` / `models:sync` 的 `tsx`→`bun`；devDeps 移除 `tsx`；加 `"packageManager": "bun@1.3.14"` |
+| 文件               | 改动                                                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `package.json`     | `generate:schema` / `models:sync` 的 `tsx`→`bun`；devDeps 移除 `tsx`；加 `"packageManager": "bun@1.3.14"`                                                                            |
 | `src/cli/serve.ts` | 移除 `hasBun()` 与 tsx 回退分支，`runner` 直接为 `'bun'`，`args` 简化为 `opts.watch ? ['--watch', serverPath] : [serverPath]`；移除 `spawnSync` 导入，保留 `spawn`（CLI 子进程隔离） |
 
 ### 配置（5 项）
@@ -60,12 +60,12 @@
 
 ## 风险
 
-| 风险 | 说明 | 应对 |
-|---|---|---|
+| 风险                 | 说明                                                                                   | 应对                                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | esbuild install 脚本 | bun 默认不跑依赖 `postinstall`（除非 `trustedDependencies` 声明）。vitest 依赖 esbuild | esbuild 通过 `optionalDependencies`（如 `@esbuild/win32-x64`）提供原生包，通常不需 postinstall。若步骤 3 报 esbuild 错误，在 `package.json` 加 `"trustedDependencies": ["esbuild"]` |
-| `bun.lock` 格式 | bun ≥1.1 生成文本 `bun.lock` | 当前 bun 1.3.14，已满足 |
-| vitest worker 兼容 | vitest 默认用 worker_threads pool | 步骤 3 覆盖；若挂，vitest config 加 `pool: 'forks'` |
-| `bun test` 误触 | 手敲 `bun test` 跑 bun 原生 test runner | 文档统一写 `bun run test` |
+| `bun.lock` 格式      | bun ≥1.1 生成文本 `bun.lock`                                                           | 当前 bun 1.3.14，已满足                                                                                                                                                             |
+| vitest worker 兼容   | vitest 默认用 worker_threads pool                                                      | 步骤 3 覆盖；若挂，vitest config 加 `pool: 'forks'`                                                                                                                                 |
+| `bun test` 误触      | 手敲 `bun test` 跑 bun 原生 test runner                                                | 文档统一写 `bun run test`                                                                                                                                                           |
 
 ## 回滚
 

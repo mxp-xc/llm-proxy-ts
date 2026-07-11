@@ -1,6 +1,6 @@
 import { createProxyFetch } from '../../providers/shared/provider-factory.js'
 import type { ModelLimit } from '../../providers/model-types.js'
-import type { Settings } from '../../config.js'
+import type { OpenAIProviderConfig, Settings } from '../../config.js'
 import type { DiscoveredModelList } from '../../plugins/types.js'
 
 /** 上游 /models 端点返回的单个模型对象（原始格式） */
@@ -55,6 +55,8 @@ export interface DiscoverModelsOptions {
   authMode?: 'bearer' | 'anthropic'
   /** anthropic-version header 值，仅 authMode='anthropic' 时生效，默认 '2023-06-01' */
   anthropicVersion?: string | undefined
+  /** OpenAI provider options mirrored by the SDK path. */
+  openAIOptions?: Pick<NonNullable<OpenAIProviderConfig['options']>, 'organization' | 'project'>
 }
 
 /**
@@ -97,6 +99,7 @@ export async function fetchUpstreamModels({
   oauthToken,
   authMode = 'bearer',
   anthropicVersion,
+  openAIOptions,
 }: DiscoverModelsOptions): Promise<UpstreamModelResponse[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
@@ -122,6 +125,12 @@ export async function fetchUpstreamModels({
   // 3. anthropic 方案需要 anthropic-version header
   if (authMode === 'anthropic') {
     headers['anthropic-version'] = anthropicVersion ?? '2023-06-01'
+  }
+  if (openAIOptions?.organization !== undefined) {
+    headers['OpenAI-Organization'] = openAIOptions.organization
+  }
+  if (openAIOptions?.project !== undefined) {
+    headers['OpenAI-Project'] = openAIOptions.project
   }
 
   // 4. 拉取模型列表；Anthropic /v1/models 用 has_more + last_id 分页，需循环取全（OpenAI 单页即终）

@@ -3,6 +3,7 @@ import { classifyStatus } from '../../oauth/token-manager.js'
 import type { TokenManager } from '../../oauth/token-manager.js'
 import type { AuthStatus } from '../../oauth/types.js'
 import { logger } from '../logging.js'
+import { buildOAuthLoginUrl } from './urls.js'
 
 export interface ProviderAuthStatus {
   provider: string
@@ -42,14 +43,14 @@ async function resolveProviderAuthStatus(
       logger.info({ provider: name }, 'oauth token refreshed')
       return { provider: name, status: 'valid' }
     } catch (err) {
-      const loginUrl = buildLoginUrl(settings, name)
+      const loginUrl = buildOAuthLoginUrl(settings, name)
       logger.warn({ provider: name, loginUrl, err }, 'oauth token refresh failed — login required')
       return { provider: name, status: 'needs_login', loginUrl }
     }
   }
 
   // needs_login
-  const loginUrl = buildLoginUrl(settings, name)
+  const loginUrl = buildOAuthLoginUrl(settings, name)
   logger.warn({ provider: name, loginUrl }, 'oauth login required — visit the URL to authenticate')
   return { provider: name, status: 'needs_login', loginUrl }
 }
@@ -108,13 +109,9 @@ export async function refreshAuthStatuses(
     return {
       provider: name,
       status: 'needs_login' as const,
-      loginUrl: buildLoginUrl(settings, name),
+      loginUrl: buildOAuthLoginUrl(settings, name),
     }
   })
-}
-
-function buildLoginUrl(settings: Settings, providerName: string): string {
-  return `http://127.0.0.1:${settings.service.port}/oauth/login/${providerName}`
 }
 
 /**

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import pino from 'pino'
 import { createApp } from '../../src/server/app.js'
-import type { Settings } from '../../src/index.js'
+import type { Settings, TokenManager } from '../../src/index.js'
+import type { ProviderRegistry } from '../../src/providers/registry.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
-import { stubRegistry } from '../helpers/registry.js'
+import { createProviderRegistryStub, stubRegistry } from '../helpers/registry.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
 
 /** 构造一个 pino logger，将 JSON 日志行收集到 logs 数组，便于断言 phase 字段。 */
@@ -167,18 +168,12 @@ describe('chat endpoint', () => {
     const app = createApp({
       settings: openrouterSettings,
       gateway,
-      providerRegistry: {
+      providerRegistry: createProviderRegistryStub({
         languageModel(providerName, upstreamModel) {
           modelSelections.push(`${providerName}/${upstreamModel}`)
           return { model: { providerName, upstreamModel } as never }
         },
-        selectApiKey() {
-          return { apiKey: undefined }
-        },
-        debugProviderConfig() {
-          throw new Error('not used')
-        },
-      },
+      }),
     })
 
     const response = await app.request('/v1/chat/completions', {
@@ -435,9 +430,7 @@ describe('streamOnly provider', () => {
         openrouter: {
           ...openrouterSettings.providers.openrouter!,
           options: { streamOnly: true },
-          plugins: [
-            { name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] },
-          ],
+          plugins: [{ name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] } }],
         },
       },
     }
@@ -812,6 +805,46 @@ describe('messages endpoint', () => {
 // ── logging ─────────────────────────────────────────────────────
 
 describe('request logging', () => {
+  it('covers OAuth routes with request id and terminal logging', async () => {
+    const { logger, logs } = capturingPino()
+    const settings = makeSettings({
+      oauth: {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: null,
+        headers: {},
+        plugins: [],
+        models: { chat: { upstreamModel: 'model-x', aliases: [], headers: {}, plugins: [] } },
+        oauth: {
+          flow: 'authorization_code',
+          clientId: 'client-id',
+          clientSecret: 'client-secret',
+          tokenUrl: 'https://auth.example.com/token',
+          authorizationUrl: 'https://auth.example.com/authorize',
+          scopes: [],
+        },
+      },
+    })
+    const app = createApp({
+      settings,
+      providerRegistry: stubRegistry,
+      logger,
+      tokenManager: {} as TokenManager,
+      nonce: 'nonce',
+    })
+
+    const response = await app.request('/oauth/login/oauth')
+
+    expect(response.status).toBe(302)
+    expect(response.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ msg: 'request received', path: '/oauth/login/oauth' }),
+        expect.objectContaining({ msg: 'request completed', path: '/oauth/login/oauth' }),
+      ]),
+    )
+  })
+
   it('logs "request received" (not "request started")', async () => {
     const { logger, logs } = capturingPino()
     const gateway = makeGateway({
@@ -934,6 +967,111 @@ describe('request logging', () => {
     // Stream has a 60ms delay, durationMs should reflect real consumption time
     expect(completed?.durationMs).toBeGreaterThanOrEqual(50)
   })
+
+  it('logs "request completed" when an SSE stream errors during consumption', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream() {
+        return breakingAfterFirstChunk() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+
+    await expect(response.text()).rejects.toThrow('stream broke after first chunk')
+
+    const completed = logs.filter((e) => e.msg === 'request completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]).toMatchObject({
+      status: 200,
+      provider: 'openrouter',
+      requestedModel: 'openrouter/chat',
+      actualModel: 'openrouter/chat',
+    })
+  })
+
+  it('logs keySelection for generated responses', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        return { text: 'hi', finishReason: 'stop' } as GenerateTextReturn
+      },
+    })
+    const providerRegistry: ProviderRegistry = createProviderRegistryStub({
+      languageModel() {
+        return { model: {} as never, keySelection: { index: 1, count: 2 } }
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    })
+
+    const completed = logs.find((e) => e.msg === 'request completed')
+    expect(completed?.keySelection).toEqual({ index: 1, count: 2 })
+  })
+
+  it('logs keySelection for passthrough responses', async () => {
+    const { logger, logs } = capturingPino()
+    const settings = makeSettings({
+      openai: {
+        type: 'openai',
+        baseURL: 'http://mock-upstream/v1',
+        apiKey: 'sk-test',
+        headers: {},
+        plugins: [],
+        models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
+      },
+    })
+    const providerRegistry: ProviderRegistry = {
+      languageModel() {
+        throw new Error('languageModel should not be called for passthrough')
+      },
+      passthroughTransport() {
+        return {
+          apiKey: 'sk-test',
+          keySelection: { index: 0, count: 1 },
+          fetch: async () => new Response(JSON.stringify({ id: 'resp_1', output: [] })),
+        }
+      },
+    }
+    const app = createApp({ settings, providerRegistry, logger })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi' }),
+    })
+
+    expect(response.status).toBe(200)
+    const completed = logs.find((e) => e.msg === 'request completed')
+    expect(completed?.keySelection).toEqual({ index: 0, count: 1 })
+  })
 })
 
 async function* throwingFirstChunk(): AsyncIterable<unknown> {
@@ -950,6 +1088,11 @@ async function* delayedSecondChunk(): AsyncIterable<unknown> {
   yield { type: 'text-delta', text: 'first' }
   await new Promise((resolve) => setTimeout(resolve, 50))
   yield { type: 'finish', finishReason: 'stop' }
+}
+
+async function* breakingAfterFirstChunk(): AsyncIterable<unknown> {
+  yield { type: 'text-delta', text: 'first' }
+  throw new Error('stream broke after first chunk')
 }
 
 async function* textDeltaStream(text: string): AsyncIterable<unknown> {

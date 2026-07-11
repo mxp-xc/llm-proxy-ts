@@ -52,8 +52,8 @@ const functionCallOutputSchema = z.object({
 })
 
 // 多轮对话中 Codex 回传的推理项（type: 'reasoning'），含 summary / content /
-// encrypted_content。AI SDK 不支持 OpenAI 加密推理透传，mapping 阶段跳过；
-// 这里先放行，避免 input 校验失败（400）。
+// encrypted_content。这里先放行，mapping 阶段会在 OpenAI provider path 中
+// 通过 providerOptions.openai.reasoningEncryptedContent 透传 encrypted_content。
 const reasoningItemSchema = z.object({ type: z.literal('reasoning') }).passthrough()
 
 // custom_tool_call / custom_tool_call_output：Codex apply_patch 等 freeform custom tool 的
@@ -75,15 +75,23 @@ const customToolCallOutputSchema = z
   })
   .passthrough()
 
+function hasToolSearchId(value: {
+  call_id?: string | undefined
+  id?: string | undefined
+}): boolean {
+  return value.call_id !== undefined || value.id !== undefined
+}
+
 const toolSearchCallSchema = z
   .object({
     type: z.literal('tool_search_call'),
     call_id: z.string().min(1).optional(),
     id: z.string().min(1).optional(),
     execution: z.string().optional(),
-    arguments: z.unknown().optional(),
+    arguments: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough()
+  .refine(hasToolSearchId, { message: 'tool_search_call requires call_id or id' })
 
 const toolSearchOutputSchema = z
   .object({
@@ -93,6 +101,7 @@ const toolSearchOutputSchema = z
     tools: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .passthrough()
+  .refine(hasToolSearchId, { message: 'tool_search_output requires call_id or id' })
 
 // 多轮对话中 Codex 回传的 hosted web_search 调用项（type: 'web_search_call'）。
 // AI SDK 不处理历史 web_search_call input；mapping 阶段跳过。这里放行避免 400。
@@ -174,9 +183,11 @@ export function validateOpenAIResponsesRequest(value: unknown): OpenAIResponsesR
   // zod 的 .optional() 不接受 null，mapping 层的 !== undefined 也不防 null。
   // 在此统一剔除顶层 null 值，使其与 undefined 等价，避免 schema 400 或 mapping 500。
   if (isRecord(value)) {
-    for (const key of Object.keys(value)) {
-      if (value[key] === null) delete value[key]
+    const normalized = { ...value }
+    for (const key of Object.keys(normalized)) {
+      if (normalized[key] === null) delete normalized[key]
     }
+    return openAIResponsesRequestSchema.parse(normalized)
   }
   return openAIResponsesRequestSchema.parse(value)
 }
@@ -214,18 +225,62 @@ type ToolSearchOutputTool = {
   tools?: ToolSearchOutputTool[]
 }
 
+type DiscoveredToolSearchFunction = {
+  name: string
+  namespace?: string
+  namespaceDescription?: string
+  description?: string
+  parameters?: Record<string, unknown>
+}
+
 /** 把 codex 的 {name, namespace} 还原成 GLM 期望的拍平 toolName。
  *  namespace 存在时 `${namespace}__${name}`，否则原 name。请求侧历史 function_call 映射、
- *  collectNamespaceFlatMap 拍平、Task 2 toolSet 加入均复用此函数，保证拼接规则一致。 */
+ *  collectNamespaceFlatMap 拍平、toolSet 构建均复用此函数，保证拼接规则一致。 */
 function flattenToolName(name: string, namespace: string | undefined): string {
   return namespace ? `${namespace}__${name}` : name
+}
+
+function collectDiscoveredToolSearchFunctions(
+  request: OpenAIResponsesRequest,
+): DiscoveredToolSearchFunction[] {
+  const discovered: DiscoveredToolSearchFunction[] = []
+  if (!Array.isArray(request.input)) return discovered
+
+  for (const item of request.input) {
+    if (!('type' in item) || item.type !== 'tool_search_output') continue
+    const tsOut = item as { tools?: ToolSearchOutputTool[] }
+    if (!Array.isArray(tsOut.tools)) continue
+    for (const tool of tsOut.tools) {
+      if (tool.type === 'namespace') {
+        if (!tool.name || !Array.isArray(tool.tools)) continue
+        for (const sub of tool.tools) {
+          if (!sub.name || sub.type !== 'function') continue
+          discovered.push({
+            name: sub.name,
+            namespace: tool.name,
+            ...(tool.description !== undefined && { namespaceDescription: tool.description }),
+            ...(sub.description !== undefined && { description: sub.description }),
+            ...(sub.parameters !== undefined && { parameters: sub.parameters }),
+          })
+        }
+      } else if (tool.type === 'function' && tool.name) {
+        discovered.push({
+          name: tool.name,
+          ...(tool.description !== undefined && { description: tool.description }),
+          ...(tool.parameters !== undefined && { parameters: tool.parameters }),
+        })
+      }
+    }
+  }
+
+  return discovered
 }
 
 /** 收集 namespace 拍平映射：flatName → {namespace, name}。
  *  来源：(1) 顶层 tools / input.additional_tools 的 namespace 工具；
  *  (2) input 历史的 tool_search_output 里的 namespace/顶层 function。
  *  用于响应侧把 GLM 返回的拍平 toolName 拆回 codex 期望的 {name, namespace} 分离字段。 */
-export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap {
+function collectNamespaceFlatMap(request: OpenAIResponsesRequest): NamespaceFlatMap {
   const map: NamespaceFlatMap = new Map()
   const add = (namespace: string | undefined, name: string) => {
     const flatName = flattenToolName(name, namespace)
@@ -243,24 +298,8 @@ export function collectNamespaceFlatMap(request: OpenAIResponsesRequest): Namesp
     }
   }
 
-  // (2) input 历史的 tool_search_output
-  if (Array.isArray(request.input)) {
-    for (const item of request.input) {
-      if (!('type' in item) || item.type !== 'tool_search_output') continue
-      const tsOut = item as { tools?: ToolSearchOutputTool[] }
-      if (!Array.isArray(tsOut.tools)) continue
-      for (const t of tsOut.tools) {
-        if (t.type === 'namespace') {
-          if (!t.name || !Array.isArray(t.tools)) continue
-          for (const sub of t.tools) {
-            if (!sub.name || sub.type !== 'function') continue
-            add(t.name, sub.name)
-          }
-        } else if (t.type === 'function') {
-          if (t.name) add(undefined, t.name)
-        }
-      }
-    }
+  for (const tool of collectDiscoveredToolSearchFunctions(request)) {
+    add(tool.namespace, tool.name)
   }
 
   return map
@@ -375,6 +414,298 @@ function shimCustomToolAsFunction(tool: {
   return def
 }
 
+function mapNamedFunctionTool(
+  name: string,
+  source: { description?: string; parameters?: Record<string, unknown> },
+): ToolSet[string] {
+  return mapResponsesFunctionTool({
+    type: 'function',
+    name,
+    ...(source.description !== undefined && { description: source.description }),
+    ...(source.parameters !== undefined && { parameters: source.parameters }),
+  })
+}
+
+function addSelectableTool(
+  toolSet: ToolSet,
+  selectableToolNames: Set<string>,
+  name: string,
+  def: ToolSet[string],
+): void {
+  if (name in toolSet) {
+    throw new Error(`Duplicate tool name '${name}'`)
+  }
+  toolSet[name] = def
+  selectableToolNames.add(name)
+}
+
+function addDiscoveredToolSearchOutputTools(input: {
+  request: OpenAIResponsesRequest
+  toolSet: ToolSet
+  selectableToolNames: Set<string>
+  nativeResponses: boolean
+}): void {
+  const { request, toolSet, selectableToolNames, nativeResponses } = input
+
+  for (const discovered of collectDiscoveredToolSearchFunctions(request)) {
+    if (discovered.namespace) {
+      if (nativeResponses) {
+        if (discovered.name in toolSet) continue // 幂等
+        const def = mapNamedFunctionTool(discovered.name, discovered)
+        def.providerOptions = {
+          openai: {
+            namespace: {
+              name: discovered.namespace,
+              ...(discovered.namespaceDescription !== undefined && {
+                description: discovered.namespaceDescription,
+              }),
+            },
+          },
+        }
+        addSelectableTool(toolSet, selectableToolNames, discovered.name, def)
+      } else {
+        const flatName = flattenToolName(discovered.name, discovered.namespace)
+        if (flatName in toolSet) continue // 幂等
+        addSelectableTool(
+          toolSet,
+          selectableToolNames,
+          flatName,
+          mapNamedFunctionTool(flatName, discovered),
+        )
+      }
+    } else {
+      if (discovered.name in toolSet) continue // 幂等
+      addSelectableTool(
+        toolSet,
+        selectableToolNames,
+        discovered.name,
+        mapNamedFunctionTool(discovered.name, discovered),
+      )
+    }
+  }
+}
+
+function buildResponsesToolInput(
+  request: OpenAIResponsesRequest,
+  providerType?: string,
+): Pick<AISDKInput, 'tools' | 'toolChoice'> {
+  const nativeResponses = providerType === 'openai'
+  const input: Pick<AISDKInput, 'tools' | 'toolChoice'> = {}
+
+  // tools — function tool 直接映射；custom grammar tool（如 apply_patch）仅 openai provider 透传
+  // toolSet 提升到 if 外，供下方 tool_choice 校验复用（包含 flattened MCP 工具名）。
+  // selectableToolNames 记录可被 tool_choice 选中的 tool（function/custom/flatten），
+  // 不含 hosted tool（web_search/tool_search 由 provider 执行，不可 function-select）。
+  const toolSet: ToolSet = {}
+  const selectableToolNames = new Set<string>()
+  const requestTools = getRequestTools(request)
+  if (requestTools.length > 0) {
+    for (const tool of requestTools) {
+      if (tool.type === 'function') {
+        const fnTool = tool as ResponsesFunctionTool
+        addSelectableTool(
+          toolSet,
+          selectableToolNames,
+          fnTool.name,
+          mapResponsesFunctionTool(fnTool),
+        )
+      } else if (providerType === 'openai' && tool.type === 'custom') {
+        // apply_patch 等 custom grammar tool：@ai-sdk/openai customTool 透传（仅 openai provider，
+        // openai-compatible 会丢弃 provider tool）。必须保持 type:'custom'，不可降级为 function tool
+        // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
+        const customTool = tool as { name?: string; description?: string; format?: unknown }
+        if (customTool.name) {
+          // v4: customTool args 不含 name（name 来自 toolSet key，prepareResponsesTools
+          // 序列化时用 tool.name → {type:'custom', name: 'apply_patch'}）
+          const args: Parameters<typeof openai.tools.customTool>[0] = {}
+          if (customTool.description !== undefined) args.description = customTool.description
+          if (customTool.format !== undefined) {
+            args.format = customTool.format as Exclude<
+              Parameters<typeof openai.tools.customTool>[0]['format'],
+              undefined
+            >
+          }
+          addSelectableTool(
+            toolSet,
+            selectableToolNames,
+            customTool.name,
+            openai.tools.customTool(args) as ToolSet[string],
+          )
+        }
+      } else if (providerType !== 'openai' && tool.type === 'custom') {
+        const customTool = tool as { name?: string; description?: string; format?: unknown }
+        if (customTool.name) {
+          addSelectableTool(
+            toolSet,
+            selectableToolNames,
+            customTool.name,
+            shimCustomToolAsFunction(customTool),
+          )
+        }
+      } else if (tool.type === 'namespace') {
+        // namespace tool：Codex 把 MCP server 的工具包成 {type:'namespace', name, tools:[function...]}。
+        // openai 上游原生支持 namespace：子工具用原名注册 + providerOptions.openai.namespace，
+        // SDK 自动组装为上游 {type:'namespace', name, tools:[...]}（@ai-sdk/openai@3.0.69+）。
+        // 非 openai 上游（Chat Completions/Anthropic 协议无 namespace）：flatten 成顶层 function tool，
+        // name 用 mcp__<server>__<tool> 匹配 Codex 扁平回路命名（codex issue #20652）。
+        const nsTool = tool as {
+          name?: string
+          description?: string
+          tools?: ResponsesFunctionTool[]
+        }
+        if (nsTool.name && Array.isArray(nsTool.tools)) {
+          for (const subTool of nsTool.tools) {
+            // Fix 4: 校验 subTool.name，避免 malformed sub-tool 变成 `mcp__x__undefined`
+            if (!subTool.name) continue
+            // 只展开 function 子工具；非 function（如 custom）子工具跳过，避免被当 function 注册
+            if ((subTool as { type?: string }).type !== 'function') continue
+            if (nativeResponses) {
+              const def = mapResponsesFunctionTool(subTool)
+              def.providerOptions = {
+                openai: {
+                  namespace: {
+                    name: nsTool.name,
+                    ...(nsTool.description !== undefined && { description: nsTool.description }),
+                  },
+                },
+              }
+              addSelectableTool(toolSet, selectableToolNames, subTool.name, def)
+            } else {
+              const flatName = flattenToolName(subTool.name, nsTool.name)
+              addSelectableTool(
+                toolSet,
+                selectableToolNames,
+                flatName,
+                mapResponsesFunctionTool({ ...subTool, name: flatName }),
+              )
+            }
+          }
+        }
+      } else if (providerType === 'openai' && tool.type === 'web_search') {
+        // web_search hosted tool：@ai-sdk/openai webSearch helper 透传（仅 openai provider，
+        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
+        // 已知限制：helper schema 不认 search_content_types / index_gated_web_access，被丢弃。
+        // filters.allowed_domains → allowedDomains、user_location → userLocation（snake→camel）。
+        const wsTool = tool as {
+          external_web_access?: boolean
+          search_context_size?: 'low' | 'medium' | 'high'
+          filters?: { allowed_domains?: string[] }
+          user_location?: {
+            type?: string
+            country?: string
+            region?: string
+            city?: string
+            timezone?: string
+          }
+        }
+        type WebSearchArgs = NonNullable<Parameters<typeof openai.tools.webSearch>[0]>
+        const args: WebSearchArgs = {}
+        if (wsTool.external_web_access !== undefined)
+          args.externalWebAccess = wsTool.external_web_access
+        if (wsTool.search_context_size !== undefined)
+          args.searchContextSize = wsTool.search_context_size
+        if (wsTool.filters !== undefined) {
+          const allowedDomains = wsTool.filters.allowed_domains
+          const filters: NonNullable<WebSearchArgs['filters']> = {}
+          if (allowedDomains !== undefined) filters.allowedDomains = allowedDomains
+          args.filters = filters
+        }
+        if (wsTool.user_location !== undefined) {
+          // Codex 发送 user_location（type 通常为 "approximate"）；helper schema 要求 type: "approximate"
+          // 字面量。逐字段映射以兼容 exactOptionalPropertyTypes。
+          const ul = wsTool.user_location
+          const userLocation: NonNullable<WebSearchArgs['userLocation']> = { type: 'approximate' }
+          if (ul.country !== undefined) userLocation.country = ul.country
+          if (ul.region !== undefined) userLocation.region = ul.region
+          if (ul.city !== undefined) userLocation.city = ul.city
+          if (ul.timezone !== undefined) userLocation.timezone = ul.timezone
+          args.userLocation = userLocation
+        }
+        toolSet['web_search'] = openai.tools.webSearch(args) as ToolSet[string]
+      } else if (providerType === 'openai' && tool.type === 'tool_search') {
+        // tool_search hosted tool：@ai-sdk/openai toolSearch helper 透传（仅 openai provider，
+        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
+        const tsTool = tool as {
+          execution?: string
+          description?: string
+          parameters?: Record<string, unknown>
+        }
+        type ToolSearchArgs = NonNullable<Parameters<typeof openai.tools.toolSearch>[0]>
+        const args: ToolSearchArgs = {}
+        if (tsTool.execution === 'server' || tsTool.execution === 'client')
+          args.execution = tsTool.execution
+        if (tsTool.description !== undefined) args.description = tsTool.description
+        if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
+        toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
+      } else if (providerType !== 'openai' && tool.type === 'tool_search') {
+        const tsTool = tool as {
+          execution?: string
+          description?: string
+          parameters?: Record<string, unknown>
+        }
+        if (tsTool.execution === 'client') {
+          toolSet['tool_search'] = mapToolToAISDK(
+            tsTool.parameters ?? { type: 'object', properties: {} },
+            tsTool.description,
+          )
+          selectableToolNames.add('tool_search')
+        }
+      }
+    }
+  }
+
+  // tool_search_output 历史发现的 namespace/顶层 function 工具，拍平加入 toolSet（幂等、追加末尾）。
+  // codex 不把 tool_search 动态发现的工具放进顶层 tools[]（依赖 OpenAI 服务端从历史注册），
+  // GLM 无此 hosted 机制 → 必须由代理把发现的工具加入 tools[] 才能被调用。幂等保缓存前缀稳定。
+  // 注意：此段在 if (request.tools) 块外，确保 request.tools 为 undefined 时仍扫描。
+  addDiscoveredToolSearchOutputTools({ request, toolSet, selectableToolNames, nativeResponses })
+
+  // toolSet 赋值（从 if(request.tools) 块内移出，使 tool_search_output 发现的工具能赋给 input.tools）
+  const hasBuiltTools = Object.keys(toolSet).length > 0
+  if (hasBuiltTools) input.tools = toolSet
+
+  // tool_choice — validate against built toolSet (includes flattened MCP names like
+  // mcp__server__tool). Fix 5: 之前只查 request.tools（不含 namespace 内嵌的 flattened 名），
+  // 导致 tool_choice 引用 flattened MCP 工具名时静默回退 'auto'。
+  // 仅当声明了 tools（toolSet 非空）时才校验；未声明 tools 时直接映射（保留原行为）。
+  if (request.tool_choice) {
+    if (typeof request.tool_choice === 'object' && hasBuiltTools) {
+      const functionName = request.tool_choice.name
+      // 只允许选中 function/custom/flatten 工具；hosted tool（web_search/tool_search）
+      // 由 provider 执行不可 function-select，引用它们或未知名时回退 'auto'
+      if (!selectableToolNames.has(functionName)) {
+        input.toolChoice = 'auto'
+      } else {
+        input.toolChoice = mapResponsesToolChoice(request.tool_choice)
+      }
+    } else {
+      input.toolChoice = mapResponsesToolChoice(request.tool_choice)
+    }
+  }
+
+  return input
+}
+
+function pushToolResultMessage(
+  messages: ProtocolMessage[],
+  toolCallId: string,
+  toolName: string,
+  output: unknown,
+): void {
+  const value = typeof output === 'string' ? output : JSON.stringify(output)
+  messages.push({
+    role: 'tool',
+    content: [
+      {
+        type: 'tool-result',
+        toolCallId,
+        toolName,
+        output: { type: 'text', value },
+      },
+    ],
+  })
+}
+
 // ─── Mapping ────────────────────────────────────────────────
 
 const mappedResponsesRequestKeys = new Set([
@@ -456,18 +787,12 @@ export function mapResponsesRequestToAISDKInput(
           ],
         })
       } else if ('type' in item && item.type === 'function_call_output') {
-        const output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
-        messages.push({
-          role: 'tool',
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: item.call_id,
-              toolName: callIdToName.get(item.call_id) ?? item.call_id,
-              output: { type: 'text', value: output },
-            },
-          ],
-        })
+        pushToolResultMessage(
+          messages,
+          item.call_id,
+          callIdToName.get(item.call_id) ?? item.call_id,
+          item.output,
+        )
       } else if ('type' in item && item.type === 'custom_tool_call') {
         // custom_tool_call（apply_patch 等 freeform tool 的上轮调用）→ assistant tool-call
         const ctc = item as {
@@ -500,23 +825,21 @@ export function mapResponsesRequestToAISDKInput(
         })
       } else if ('type' in item && item.type === 'custom_tool_call_output') {
         // custom_tool_call_output → tool-result（复用 function_call_output 逻辑）
-        const output = typeof item.output === 'string' ? item.output : JSON.stringify(item.output)
-        messages.push({
-          role: 'tool',
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: item.call_id,
-              toolName: callIdToName.get(item.call_id) ?? item.call_id,
-              output: { type: 'text', value: output },
-            },
-          ],
-        })
+        pushToolResultMessage(
+          messages,
+          item.call_id,
+          callIdToName.get(item.call_id) ?? item.call_id,
+          item.output,
+        )
       } else if ('type' in item && item.type === 'tool_search_call') {
-        const tsCall = item as { call_id?: string; id?: string; arguments?: unknown }
+        const tsCall = item as {
+          call_id?: string
+          id?: string
+          arguments?: Record<string, unknown>
+        }
         const callId = tsCall.call_id ?? tsCall.id ?? ''
         callIdToName.set(callId, 'tool_search')
-        const tsInput = (tsCall.arguments ?? {}) as Record<string, unknown>
+        const tsInput = tsCall.arguments ?? {}
         messages.push({
           role: 'assistant',
           content: [
@@ -527,18 +850,7 @@ export function mapResponsesRequestToAISDKInput(
         const tsOut = item as { call_id?: string; id?: string; tools?: unknown[] }
         const callId = tsOut.call_id ?? tsOut.id ?? ''
         const toolName = callIdToName.get(callId) ?? 'tool_search'
-        const output = JSON.stringify(tsOut.tools ?? [])
-        messages.push({
-          role: 'tool',
-          content: [
-            {
-              type: 'tool-result',
-              toolCallId: callId,
-              toolName,
-              output: { type: 'text', value: output },
-            },
-          ],
-        })
+        pushToolResultMessage(messages, callId, toolName, tsOut.tools ?? [])
       } else if ('type' in item && item.type === 'agent_message') {
         const agentMessage = item as z.infer<typeof agentMessageSchema>
         messages.push({
@@ -602,235 +914,7 @@ export function mapResponsesRequestToAISDKInput(
   if (request.top_p !== undefined) input.topP = request.top_p
   if (request.max_output_tokens !== undefined) input.maxOutputTokens = request.max_output_tokens
 
-  // tools — function tool 直接映射；custom grammar tool（如 apply_patch）仅 openai provider 透传
-  // toolSet 提升到 if 外，供下方 tool_choice 校验复用（包含 flattened MCP 工具名）。
-  // selectableToolNames 记录可被 tool_choice 选中的 tool（function/custom/flatten），
-  // 不含 hosted tool（web_search/tool_search 由 provider 执行，不可 function-select）。
-  const toolSet: ToolSet = {}
-  const selectableToolNames = new Set<string>()
-  const requestTools = getRequestTools(request)
-  if (requestTools.length > 0) {
-    for (const tool of requestTools) {
-      if (tool.type === 'function') {
-        const fnTool = tool as ResponsesFunctionTool
-        toolSet[fnTool.name] = mapResponsesFunctionTool(fnTool)
-        selectableToolNames.add(fnTool.name)
-      } else if (providerType === 'openai' && tool.type === 'custom') {
-        // apply_patch 等 custom grammar tool：@ai-sdk/openai customTool 透传（仅 openai provider，
-        // openai-compatible 会丢弃 provider tool）。必须保持 type:'custom'，不可降级为 function tool
-        // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
-        const customTool = tool as { name?: string; description?: string; format?: unknown }
-        if (customTool.name) {
-          // v4: customTool args 不含 name（name 来自 toolSet key，prepareResponsesTools
-          // 序列化时用 tool.name → {type:'custom', name: 'apply_patch'}）
-          const args: Parameters<typeof openai.tools.customTool>[0] = {}
-          if (customTool.description !== undefined) args.description = customTool.description
-          if (customTool.format !== undefined) {
-            args.format = customTool.format as Exclude<
-              Parameters<typeof openai.tools.customTool>[0]['format'],
-              undefined
-            >
-          }
-          toolSet[customTool.name] = openai.tools.customTool(args) as ToolSet[string]
-          selectableToolNames.add(customTool.name)
-        }
-      } else if (providerType !== 'openai' && tool.type === 'custom') {
-        const customTool = tool as { name?: string; description?: string; format?: unknown }
-        if (customTool.name) {
-          toolSet[customTool.name] = shimCustomToolAsFunction(customTool)
-          selectableToolNames.add(customTool.name)
-        }
-      } else if (tool.type === 'namespace') {
-        // namespace tool：Codex 把 MCP server 的工具包成 {type:'namespace', name, tools:[function...]}。
-        // openai 上游原生支持 namespace：子工具用原名注册 + providerOptions.openai.namespace，
-        // SDK 自动组装为上游 {type:'namespace', name, tools:[...]}（@ai-sdk/openai@3.0.69+）。
-        // 非 openai 上游（Chat Completions/Anthropic 协议无 namespace）：flatten 成顶层 function tool，
-        // name 用 mcp__<server>__<tool> 匹配 Codex 扁平回路命名（codex issue #20652）。
-        const nsTool = tool as {
-          name?: string
-          description?: string
-          tools?: ResponsesFunctionTool[]
-        }
-        if (nsTool.name && Array.isArray(nsTool.tools)) {
-          for (const subTool of nsTool.tools) {
-            // Fix 4: 校验 subTool.name，避免 malformed sub-tool 变成 `mcp__x__undefined`
-            if (!subTool.name) continue
-            // 只展开 function 子工具；非 function（如 custom）子工具跳过，避免被当 function 注册
-            if ((subTool as { type?: string }).type !== 'function') continue
-            if (nativeResponses) {
-              const def = mapResponsesFunctionTool(subTool)
-              def.providerOptions = {
-                openai: {
-                  namespace: {
-                    name: nsTool.name,
-                    ...(nsTool.description !== undefined && { description: nsTool.description }),
-                  },
-                },
-              }
-              toolSet[subTool.name] = def
-              selectableToolNames.add(subTool.name)
-            } else {
-              const flatName = flattenToolName(subTool.name, nsTool.name)
-              toolSet[flatName] = mapResponsesFunctionTool({ ...subTool, name: flatName })
-              selectableToolNames.add(flatName)
-            }
-          }
-        }
-      } else if (providerType === 'openai' && tool.type === 'web_search') {
-        // web_search hosted tool：@ai-sdk/openai webSearch helper 透传（仅 openai provider，
-        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
-        // 已知限制：helper schema 不认 search_content_types / index_gated_web_access，被丢弃。
-        // filters.allowed_domains → allowedDomains、user_location → userLocation（snake→camel）。
-        const wsTool = tool as {
-          external_web_access?: boolean
-          search_context_size?: 'low' | 'medium' | 'high'
-          filters?: { allowed_domains?: string[] }
-          user_location?: {
-            type?: string
-            country?: string
-            region?: string
-            city?: string
-            timezone?: string
-          }
-        }
-        type WebSearchArgs = NonNullable<Parameters<typeof openai.tools.webSearch>[0]>
-        const args: WebSearchArgs = {}
-        if (wsTool.external_web_access !== undefined)
-          args.externalWebAccess = wsTool.external_web_access
-        if (wsTool.search_context_size !== undefined)
-          args.searchContextSize = wsTool.search_context_size
-        if (wsTool.filters !== undefined) {
-          const allowedDomains = wsTool.filters.allowed_domains
-          const filters: NonNullable<WebSearchArgs['filters']> = {}
-          if (allowedDomains !== undefined) filters.allowedDomains = allowedDomains
-          args.filters = filters
-        }
-        if (wsTool.user_location !== undefined) {
-          // Codex 发送 user_location（type 通常为 "approximate"）；helper schema 要求 type: "approximate"
-          // 字面量。逐字段映射以兼容 exactOptionalPropertyTypes。
-          const ul = wsTool.user_location
-          const userLocation: NonNullable<WebSearchArgs['userLocation']> = { type: 'approximate' }
-          if (ul.country !== undefined) userLocation.country = ul.country
-          if (ul.region !== undefined) userLocation.region = ul.region
-          if (ul.city !== undefined) userLocation.city = ul.city
-          if (ul.timezone !== undefined) userLocation.timezone = ul.timezone
-          args.userLocation = userLocation
-        }
-        toolSet['web_search'] = openai.tools.webSearch(args) as ToolSet[string]
-      } else if (providerType === 'openai' && tool.type === 'tool_search') {
-        // tool_search hosted tool：@ai-sdk/openai toolSearch helper 透传（仅 openai provider，
-        // openai-compatible 走 Chat Completions 丢弃 hosted tool）。
-        const tsTool = tool as {
-          execution?: string
-          description?: string
-          parameters?: Record<string, unknown>
-        }
-        type ToolSearchArgs = NonNullable<Parameters<typeof openai.tools.toolSearch>[0]>
-        const args: ToolSearchArgs = {}
-        if (tsTool.execution === 'server' || tsTool.execution === 'client')
-          args.execution = tsTool.execution
-        if (tsTool.description !== undefined) args.description = tsTool.description
-        if (tsTool.parameters !== undefined) args.parameters = tsTool.parameters
-        toolSet['tool_search'] = openai.tools.toolSearch(args) as ToolSet[string]
-      } else if (providerType !== 'openai' && tool.type === 'tool_search') {
-        const tsTool = tool as {
-          execution?: string
-          description?: string
-          parameters?: Record<string, unknown>
-        }
-        if (tsTool.execution === 'client') {
-          toolSet['tool_search'] = mapToolToAISDK(
-            tsTool.parameters ?? { type: 'object', properties: {} },
-            tsTool.description,
-          )
-          selectableToolNames.add('tool_search')
-        }
-      }
-    }
-  }
-
-  // tool_search_output 历史发现的 namespace/顶层 function 工具，拍平加入 toolSet（幂等、追加末尾）。
-  // codex 不把 tool_search 动态发现的工具放进顶层 tools[]（依赖 OpenAI 服务端从历史注册），
-  // GLM 无此 hosted 机制 → 必须由代理把发现的工具加入 tools[] 才能被调用。幂等保缓存前缀稳定。
-  // 注意：此段在声明工具循环外，确保没有顶层 tools / additional_tools 时仍扫描。
-  if (Array.isArray(request.input)) {
-    for (const item of request.input) {
-      if (!('type' in item) || item.type !== 'tool_search_output') continue
-      const tsOut = item as { tools?: ToolSearchOutputTool[] }
-      if (!Array.isArray(tsOut.tools)) continue
-      for (const t of tsOut.tools) {
-        if (t.type === 'namespace') {
-          if (!t.name || !Array.isArray(t.tools)) continue
-          for (const sub of t.tools) {
-            if (!sub.name || sub.type !== 'function') continue
-            if (nativeResponses) {
-              if (sub.name in toolSet) continue // 幂等
-              const def = mapResponsesFunctionTool({
-                type: 'function',
-                name: sub.name,
-                ...(sub.description !== undefined && { description: sub.description }),
-                ...(sub.parameters !== undefined && { parameters: sub.parameters }),
-              })
-              def.providerOptions = {
-                openai: {
-                  namespace: {
-                    name: t.name,
-                    ...(t.description !== undefined && { description: t.description }),
-                  },
-                },
-              }
-              toolSet[sub.name] = def
-              selectableToolNames.add(sub.name)
-            } else {
-              const flatName = flattenToolName(sub.name, t.name)
-              if (flatName in toolSet) continue // 幂等
-              // 显式构型 type:'function'（sub 来自 passthrough record，type 非 'function' 字面量，
-              // spread 不保留字面量 → 需显式声明以满足 mapResponsesFunctionTool 的 ResponsesFunctionTool 类型）
-              toolSet[flatName] = mapResponsesFunctionTool({
-                type: 'function',
-                name: flatName,
-                ...(sub.description !== undefined && { description: sub.description }),
-                ...(sub.parameters !== undefined && { parameters: sub.parameters }),
-              })
-              selectableToolNames.add(flatName)
-            }
-          }
-        } else if (t.type === 'function') {
-          if (!t.name) continue
-          if (t.name in toolSet) continue // 幂等
-          toolSet[t.name] = mapResponsesFunctionTool({
-            type: 'function',
-            name: t.name,
-            ...(t.description !== undefined && { description: t.description }),
-            ...(t.parameters !== undefined && { parameters: t.parameters }),
-          })
-          selectableToolNames.add(t.name)
-        }
-      }
-    }
-  }
-
-  // toolSet 赋值（从 if(request.tools) 块内移出，使 tool_search_output 发现的工具能赋给 input.tools）
-  if (Object.keys(toolSet).length > 0) input.tools = toolSet
-
-  // tool_choice — validate against built toolSet (includes flattened MCP names like
-  // mcp__server__tool). Fix 5: 之前只查 request.tools（不含 namespace 内嵌的 flattened 名），
-  // 导致 tool_choice 引用 flattened MCP 工具名时静默回退 'auto'。
-  // 仅当声明了 tools（toolSet 非空）时才校验；未声明 tools 时直接映射（保留原行为）。
-  if (request.tool_choice) {
-    if (typeof request.tool_choice === 'object' && requestTools.length > 0) {
-      const functionName = request.tool_choice.name
-      // 只允许选中 function/custom/flatten 工具；hosted tool（web_search/tool_search）
-      // 由 provider 执行不可 function-select，引用它们或未知名时回退 'auto'
-      if (!selectableToolNames.has(functionName)) {
-        input.toolChoice = 'auto'
-      } else {
-        input.toolChoice = mapResponsesToolChoice(request.tool_choice)
-      }
-    } else {
-      input.toolChoice = mapResponsesToolChoice(request.tool_choice)
-    }
-  }
+  Object.assign(input, buildResponsesToolInput(request, providerType))
 
   // providerOptions key 固定为 "openai"：
   // @ai-sdk/openai 始终读此 key（Responses 模式期望 camelCase 字段）；

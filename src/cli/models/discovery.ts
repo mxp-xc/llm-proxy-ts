@@ -2,8 +2,8 @@ import { resolveEnvPlaceholders } from '../../config.js'
 import type { ModelRouteInput, ProviderConfig, Settings } from '../../config.js'
 import { isRecord } from '../../providers/protocol-types.js'
 import type { TokenManager } from '../../oauth/index.js'
-import type { PluginRegistry } from '../../plugins/registry.js'
-import type { DiscoveredModel } from '../../plugins/types.js'
+import type { DiscoveredModel, DiscoveredModelList } from '../../plugins/types.js'
+import type { Logger } from '../../types.js'
 import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover.js'
 
 export interface ProviderModelsResult {
@@ -21,12 +21,20 @@ export type DiscoverResult =
   | { ok: ProviderModelsResult }
   | { skipped: { providerName: string; reason: DiscoverSkipReason; message: string } }
 
+export interface ModelDiscoveryRegistry {
+  discoverModels(
+    providerId: string,
+    logger?: Logger,
+    authFilePath?: string,
+  ): Promise<DiscoveredModelList | undefined>
+}
+
 export interface DiscoverInput {
   providerName: string
   provider: ProviderConfig
   settings: Settings
   rawParsed: unknown
-  pluginRegistry?: PluginRegistry
+  pluginRegistry?: ModelDiscoveryRegistry
   tokenManager?: TokenManager
   authFilePath: string
   fetchUpstream?: typeof fetchUpstreamModels
@@ -130,6 +138,7 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
       provider.type === 'anthropic' ? provider.options?.anthropicVersion : undefined
     const modelsEndpoint =
       provider.type === 'openai-compatible' ? provider.options?.modelsEndpoint : undefined
+    const openAIOptions = provider.type === 'openai' ? provider.options : undefined
 
     const openaiModels = await fetchUpstream({
       baseURL,
@@ -140,6 +149,7 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
       oauthToken,
       authMode,
       anthropicVersion,
+      ...(openAIOptions !== undefined ? { openAIOptions } : {}),
     })
     const models = openAIToDiscoveredModels(openaiModels).models
     return { ok: { providerName, models, existingModels: provider.models, source: 'http' } }

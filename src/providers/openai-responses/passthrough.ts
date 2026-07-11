@@ -1,7 +1,8 @@
-import { sanitizeHeaders, createProxyFetch } from '../shared/provider-factory.js'
+import { sanitizeHeaders } from '../shared/provider-factory.js'
 import { openAIErrorFormat } from '../shared/error-format.js'
-import { withRequestTimeout, RequestTimeoutError } from '../../server/stream-utils.js'
-import type { Settings } from '../../config.js'
+import { withRequestTimeout, RequestTimeoutError } from '../../request-timeout.js'
+import { OAuthError } from '../../oauth/types.js'
+import type { OpenAIProviderConfig } from '../../config.js'
 import type { PassthroughInput } from '../shared/strategy.js'
 import type { OpenAIResponsesRequest } from './protocol.js'
 
@@ -13,21 +14,6 @@ const SKIP_RESPONSE_HEADERS = new Set([
   'transfer-encoding',
   'connection',
 ])
-
-/** settings.proxy 不可变（无 hot-reload），module-level 缓存 ProxyAgent fetch，
- *  避免 per-request new ProxyAgent。 */
-const proxyFetchCache = new Map<string, typeof fetch>()
-
-function getPassthroughFetch(settings: Settings): typeof fetch {
-  if (!settings.proxy) return globalThis.fetch
-  const key = `${settings.proxy.url}|${settings.proxy.verify}`
-  let fetchFn = proxyFetchCache.get(key)
-  if (!fetchFn) {
-    fetchFn = createProxyFetch(settings.proxy.url, settings.proxy.verify)
-    proxyFetchCache.set(key, fetchFn)
-  }
-  return fetchFn
-}
 
 /**
  * 构造上游请求头：仅 content-type + accept + provider/model 配置头 + Authorization。
@@ -42,10 +28,17 @@ function buildUpstreamHeaders(
   routeHeaders: Record<string, string>,
   apiKey: string | undefined,
   isStream: boolean,
+  openAIOptions: OpenAIProviderConfig['options'] | undefined,
 ): Headers {
   const headers = new Headers()
   headers.set('content-type', 'application/json')
   if (isStream) headers.set('accept', 'text/event-stream')
+  if (openAIOptions?.organization !== undefined) {
+    headers.set('OpenAI-Organization', openAIOptions.organization)
+  }
+  if (openAIOptions?.project !== undefined) {
+    headers.set('OpenAI-Project', openAIOptions.project)
+  }
   // provider/model 配置头（sanitize 去敏感：authorization/api-key 等）
   for (const [key, value] of Object.entries(sanitizeHeaders(routeHeaders))) {
     headers.set(key, value)
@@ -87,7 +80,7 @@ function safeUrl(url: string): string {
 export async function passthroughOpenAIResponses(
   input: PassthroughInput<OpenAIResponsesRequest>,
 ): Promise<Response | undefined> {
-  const { c, route, rawBody, upstreamModel, settings, selectApiKey, abortController } = input
+  const { route, rawBody, upstreamModel, settings, passthroughTransport, abortController } = input
 
   if (route.provider.type !== 'openai') return undefined
 
@@ -101,12 +94,16 @@ export async function passthroughOpenAIResponses(
     rawBody != null && typeof rawBody === 'object' ? (rawBody as Record<string, unknown>) : {}
   const body = JSON.stringify({ ...bodyObj, model: upstreamModel })
 
-  const { apiKey, keySelection } = selectApiKey(route.providerName)
-  if (keySelection) c.set('keySelection', keySelection)
+  const { fetch: fetchFn, apiKey, keySelection } = passthroughTransport(route.providerName)
+  if (keySelection) input.setKeySelection(keySelection)
 
-  const headers = buildUpstreamHeaders(route.headers, apiKey, input.request.stream ?? false)
-  const fetchFn = getPassthroughFetch(settings)
-  const logger = c.get('logger')
+  const headers = buildUpstreamHeaders(
+    route.headers,
+    apiKey,
+    input.request.stream ?? false,
+    provider.options,
+  )
+  const { logger } = input
 
   try {
     const upstream = await withRequestTimeout(
@@ -123,8 +120,10 @@ export async function passthroughOpenAIResponses(
     // 后端非 2xx：原生错误格式透传（status + body），codex 拿到与直连一致的错误
     if (!upstream.ok) {
       const errBody = await upstream.text()
+      const error = new Error(`Passthrough upstream returned ${upstream.status}`)
       logger.error(
         {
+          err: error,
           status: upstream.status,
           provider: route.providerName,
           url: safeUrl(url),
@@ -145,15 +144,27 @@ export async function passthroughOpenAIResponses(
       headers: filterResponseHeaders(upstream.headers),
     })
   } catch (error) {
+    if (error instanceof OAuthError && error.code === 'auth_required') {
+      logger.error(
+        { err: error, provider: route.providerName, url: safeUrl(url) },
+        'passthrough oauth required',
+      )
+      const { body: errBody, status } = openAIErrorFormat.oauth(error.message, input.loginUrl)
+      return Response.json(errBody, { status })
+    }
     if (error instanceof RequestTimeoutError) {
+      logger.error(
+        { err: error, provider: route.providerName, url: safeUrl(url) },
+        'passthrough fetch timed out',
+      )
       const { body: errBody, status } = openAIErrorFormat.timeout()
-      return c.json(errBody, status as 504)
+      return Response.json(errBody, { status })
     }
     logger.error(
       { err: error, provider: route.providerName, url: safeUrl(url) },
       'passthrough fetch failed',
     )
     const { body: errBody, status } = openAIErrorFormat.upstream()
-    return c.json(errBody, status as 502)
+    return Response.json(errBody, { status })
   }
 }

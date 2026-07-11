@@ -16,7 +16,7 @@ function makeAuthPlugin(name: string): AuthPlugin {
 function makeProxyPlugin(name: string): ProxyPlugin {
   return {
     name,
-    async beforeRequest() {},
+    async inspectStreamChunk() {},
   }
 }
 
@@ -73,6 +73,28 @@ describe('validatePluginConstraints', () => {
     expect(() =>
       validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
     ).not.toThrow()
+  })
+
+  it('throws when auth plugin has no provider targets', () => {
+    const settings = makeSettings({
+      'my-provider': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: 'test',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+    })
+
+    const authPlugin = makeAuthPlugin('my-auth')
+    const globalPlugins = [makeResolvedPlugin(authPlugin, [])]
+    const providerPlugins = new Map<string, ResolvedPlugin[]>()
+    const modelPlugins = new Map<string, Map<string, ResolvedPlugin[]>>()
+
+    expect(() =>
+      validatePluginConstraints(globalPlugins, providerPlugins, modelPlugins, settings),
+    ).toThrow(/must target at least one provider/)
   })
 
   it('throws when auth plugin targets a provider with oauth', () => {

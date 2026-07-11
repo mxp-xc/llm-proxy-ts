@@ -1,6 +1,15 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { ProxyAgent, request } from 'undici'
-import type { OpenAICompatibleProviderConfig } from '../../config.js'
+import type { OpenAICompatibleProviderConfig, ProviderConfig } from '../../config.js'
+
+export interface ProviderBuildInput<TProvider extends ProviderConfig = ProviderConfig> {
+  providerName: string
+  provider: TProvider
+  modelHeaders: Record<string, string>
+  selectedApiKey: string | undefined
+  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined
+  proxyFetch: typeof fetch | undefined
+}
 
 export function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
   const sensitiveHeaders = new Set([
@@ -17,13 +26,9 @@ export function sanitizeHeaders(headers: Record<string, string>): Record<string,
 }
 
 export function createOpenAICompatibleProvider(
-  providerName: string,
-  provider: OpenAICompatibleProviderConfig,
-  modelHeaders: Record<string, string>,
-  selectedApiKey: string | undefined,
-  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-  proxyFetch: typeof fetch | undefined,
+  input: ProviderBuildInput<OpenAICompatibleProviderConfig>,
 ) {
+  const { providerName, provider, modelHeaders, selectedApiKey, customFetch, proxyFetch } = input
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
   const options: Parameters<typeof createOpenAICompatible>[0] = {
     name: providerName,
@@ -82,38 +87,37 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
   })
 
   return async (input, init) => {
+    const requestInput = input instanceof Request ? input : undefined
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
     const options: Parameters<typeof request>[1] = { dispatcher }
+    const method = init?.method ?? requestInput?.method
+    const body = init?.body ?? requestInput?.body
+    const requestHeaders = mergeFetchHeaders(requestInput?.headers, init?.headers)
+    const signal = init?.signal ?? requestInput?.signal
 
-    if (init?.method !== undefined) {
-      options.method = init.method
+    if (method !== undefined) {
+      options.method = method
     }
 
-    if (init?.body !== undefined && init.body !== null) {
+    if (body !== undefined && body !== null) {
       // web BodyInit (ReadableStream, Blob, ArrayBuffer, etc.) 与 undici body
       // (string | Buffer | Uint8Array | Readable | null | FormData) 部分重叠；
       // 实际调用路径由 AI SDK 发起，只会传入重叠范围内的值。
       // 两个 FormData 声明（DOM vs undici）Symbol.toStringTag 不同，需经 unknown 桥接。
-      options.body = init.body as unknown as NonNullable<typeof options.body>
+      options.body = body as unknown as NonNullable<typeof options.body>
     }
 
-    if (init?.headers !== undefined) {
+    if (requestHeaders !== undefined) {
       // 将 web HeadersInit (Headers | string[][] | Record<string, string>)
       // 转为 undici 接受的 OutgoingHttpHeaders (Record<string, string | string[] | undefined>)
-      if (init.headers instanceof Headers) {
-        options.headers = Object.fromEntries(init.headers.entries())
-      } else if (Array.isArray(init.headers)) {
-        options.headers = Object.fromEntries(init.headers as [string, string][])
-      } else {
-        options.headers = init.headers as Record<string, string | string[]>
-      }
+      options.headers = Object.fromEntries(requestHeaders.entries())
     }
 
     // 透传 AbortSignal：客户端断开 / 请求超时时中断上游 undici request，
     // 释放 socket、停止上游计费（undici request 原生支持 signal）。
-    if (init?.signal !== undefined) {
-      options.signal = init.signal
+    if (signal !== undefined) {
+      options.signal = signal
     }
 
     const response = await request(url, options)
@@ -121,12 +125,12 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
     // 将 undici headers 转为干净的 Headers 对象：
     // undici 内部 headers 携带 Symbol 键（如 Symbol(sensitiveHeaders)），
     // 直接传给 new Response() 会在迭代时触发 ByteString 转换错误。
-    const headers = new Headers()
+    const responseHeaders = new Headers()
     for (const [key, value] of Object.entries(response.headers)) {
       if (typeof value === 'string') {
-        headers.append(key, value)
+        responseHeaders.append(key, value)
       } else if (Array.isArray(value)) {
-        for (const v of value) headers.append(key, v)
+        for (const v of value) responseHeaders.append(key, v)
       }
     }
 
@@ -134,7 +138,18 @@ export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetc
     // 两者不重叠但运行时 Node 会将 Readable 适配为 web ReadableStream。
     return new Response(response.body as unknown as ReadableStream, {
       status: response.statusCode,
-      headers,
+      headers: responseHeaders,
     })
   }
+}
+
+function mergeFetchHeaders(base?: Headers, override?: HeadersInit): Headers | undefined {
+  if (!base && override === undefined) return undefined
+  const headers = new Headers(base)
+  if (override !== undefined) {
+    for (const [key, value] of new Headers(override)) {
+      headers.set(key, value)
+    }
+  }
+  return headers
 }

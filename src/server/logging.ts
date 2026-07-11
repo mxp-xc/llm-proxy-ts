@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { Writable } from 'node:stream'
 import pino from 'pino'
+import { safeProxyHost, safeProxyUrl } from '../proxy-url.js'
 
 // --- Environment variable configuration ---
 
@@ -13,13 +14,17 @@ const LOG_RETENTION_DAYS = 7
 
 // --- Redaction ---
 
-const secretKeys = new Set([
+const sensitiveFieldNames = [
+  'apiKey',
   'apikey',
   'api_key',
+  'api-key',
   'authorization',
   'x-api-key',
   'proxy-authorization',
-])
+]
+const secretKeys = new Set(sensitiveFieldNames.map((key) => key.toLowerCase()))
+const redactPaths = sensitiveFieldNames.flatMap((key) => [key, `*.${key}`])
 
 // --- Plain text log format ---
 
@@ -205,7 +210,7 @@ export function createLogger(options?: pino.LoggerOptions): pino.Logger {
     name: 'llm-proxy',
     timestamp: pino.stdTimeFunctions.isoTime,
     redact: {
-      paths: ['apiKey', '*.apiKey', 'authorization', '*.authorization'],
+      paths: redactPaths,
       censor: '[REDACTED]',
     },
     ...options,
@@ -231,14 +236,12 @@ export function createLogger(options?: pino.LoggerOptions): pino.Logger {
     streams.push({ level: 'trace' as pino.Level, stream: plainTextStream(fileStream) })
 
     return pino(pinoOptions, pino.multistream(streams))
-  } catch {
+  } catch (err) {
     // Fallback: if transport pipeline fails (e.g. worker thread unavailable),
     // fall back to simple stdout logger so the server can still start.
-    return pino({
-      level: LOG_LEVEL,
-      name: 'llm-proxy',
-      ...options,
-    })
+    const fallback = pino(pinoOptions)
+    fallback.error({ err }, 'logger initialization failed; using stdout fallback')
+    return fallback
   }
 }
 
@@ -267,15 +270,4 @@ export function redact(value: unknown): unknown {
   return value
 }
 
-export function safeProxyHost(proxyUrl: string): string {
-  return new URL(proxyUrl).host
-}
-
-/**
- * 将代理 URL 规范化为结构化 URL 形式 `protocol://host:port`，剥离用户名/密码等敏感信息。
- * 用于日志输出，例如 `http://127.0.0.1:9000`。
- */
-export function safeProxyUrl(proxyUrl: string): string {
-  const url = new URL(proxyUrl)
-  return `${url.protocol}//${url.host}`
-}
+export { safeProxyHost, safeProxyUrl }

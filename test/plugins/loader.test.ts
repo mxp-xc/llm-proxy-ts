@@ -39,7 +39,7 @@ describe('loadPlugin', () => {
     `,
     )
 
-    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)
+    const result = await loadPlugin({ module: filePath }, tempDir)
 
     expect(result.plugin.name).toBe('test-plugin')
     expect(result.modulePath).toBe(filePath)
@@ -54,9 +54,9 @@ describe('loadPlugin', () => {
     `,
     )
 
-    await expect(
-      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
-    ).rejects.toThrow(/must export a default object|must have a non-empty string 'name' property/)
+    await expect(loadPlugin({ module: filePath }, tempDir)).rejects.toThrow(
+      /must export a default object|must have a non-empty string 'name' property/,
+    )
   })
 
   it('should reject modules without name property', async () => {
@@ -74,9 +74,9 @@ describe('loadPlugin', () => {
     `,
     )
 
-    await expect(
-      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
-    ).rejects.toThrow(/must have a non-empty string 'name' property/)
+    await expect(loadPlugin({ module: filePath }, tempDir)).rejects.toThrow(
+      /must have a non-empty string 'name' property/,
+    )
   })
 
   it('should reject modules without any hook', async () => {
@@ -89,12 +89,12 @@ describe('loadPlugin', () => {
     `,
     )
 
-    await expect(
-      loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir),
-    ).rejects.toThrow(/must implement at least one hook/)
+    await expect(loadPlugin({ module: filePath }, tempDir)).rejects.toThrow(
+      /must implement at least one hook/,
+    )
   })
 
-  it('should reject modules with invalid validateConfig (not a function)', async () => {
+  it('should load modules with hooks and ignore non-hook validateConfig', async () => {
     const filePath = await writePluginFile(
       'bad-validate.mjs',
       `
@@ -114,7 +114,7 @@ describe('loadPlugin', () => {
     // The new loader no longer validates validateConfig specifically;
     // it just checks that at least one hook is present. Since createFetch
     // is a hook, this module loads successfully — validateConfig is ignored.
-    const result = await loadPlugin({ module: filePath, config: {}, providers: [] }, tempDir)
+    const result = await loadPlugin({ module: filePath }, tempDir)
     expect(result.plugin.name).toBe('bad-validate')
   })
 
@@ -144,7 +144,7 @@ describe('loadPlugin', () => {
     )
 
     const result = await loadPlugin(
-      { module: './plugins/relative-plugin.mjs', config: {}, providers: [] },
+      { module: './plugins/relative-plugin.mjs' },
       tempDir ?? pluginDir,
     )
 
@@ -167,10 +167,7 @@ describe('loadPlugin', () => {
     `,
     )
 
-    const result = await loadPlugin(
-      { module: filePath, config: {}, providers: [] },
-      '/irrelevant/basedir',
-    )
+    const result = await loadPlugin({ module: filePath }, '/irrelevant/basedir')
 
     expect(result.plugin.name).toBe('absolute-plugin')
   })
@@ -179,18 +176,15 @@ describe('loadPlugin', () => {
     // The static built-in registry ships vendor_sse_error; loading it by name
     // exercises the same built-in lookup path that previously relied on
     // runtime registerBuiltInPlugin.
-    const result = await loadPlugin(
-      { name: 'vendor_sse_error', config: {}, providers: [] },
-      tempDir,
-    )
+    const result = await loadPlugin({ name: 'vendor_sse_error' }, tempDir)
     expect(result.plugin.name).toBe('vendor_sse_error')
     expect(result.modulePath).toBeUndefined()
   })
 
   it('should reject unknown built-in plugin name', async () => {
-    await expect(
-      loadPlugin({ name: 'nonexistent-plugin', config: {}, providers: [] }, tempDir),
-    ).rejects.toThrow(/Unknown built-in plugin/)
+    await expect(loadPlugin({ name: 'nonexistent-plugin' }, tempDir)).rejects.toThrow(
+      /Unknown built-in plugin/,
+    )
   })
 })
 

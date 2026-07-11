@@ -36,21 +36,26 @@ export async function inspectFirstStreamChunk(
   }
 
   if (inspectors.length > 0) {
-    for (const rp of inspectors) {
-      const plugin = rp.plugin as ProxyPlugin
-      const result = await plugin.inspectStreamChunk!({
-        requestId: ctx.requestId,
-        settings: ctx.settings,
-        provider: ctx.provider,
-        config: rp.config,
-        chunk: first.value,
-      })
-      if (isPluginResponse(result)) {
-        return {
-          error: result,
-          stream: replayStream(undefined, iterator, plugins, ctx),
+    try {
+      for (const rp of inspectors) {
+        const plugin = rp.plugin as ProxyPlugin
+        const result = await plugin.inspectStreamChunk!({
+          requestId: ctx.requestId,
+          settings: ctx.settings,
+          provider: ctx.provider,
+          config: rp.config,
+          chunk: first.value,
+        })
+        if (isPluginResponse(result)) {
+          await iterator.return?.()
+          return {
+            error: result,
+          }
         }
       }
+    } catch (err) {
+      await iterator.return?.()
+      throw err
     }
   }
 
@@ -71,7 +76,13 @@ async function* replayStream(
     if (next.done) {
       return
     }
-    const error = await inspectStreamChunk(plugins, next.value, ctx)
+    let error: PluginResponse | undefined
+    try {
+      error = await inspectStreamChunk(plugins, next.value, ctx)
+    } catch (err) {
+      await iterator.return?.()
+      throw err
+    }
     if (error) {
       yield { type: 'openai-error', body: error.body }
       await iterator.return?.()

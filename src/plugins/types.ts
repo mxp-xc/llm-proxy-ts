@@ -35,15 +35,6 @@ export interface PluginResponse {
   headers?: Record<string, string>
 }
 
-export interface ProviderCallPatch {
-  headers?: Record<string, string>
-  providerOptions?: Record<string, unknown>
-}
-
-export interface ProviderResultPatch {
-  body?: unknown
-}
-
 // ─── Contexts ────────────────────────────────────────────────────
 
 /** 插件初始化上下文（per-plugin，生命周期 hook 使用） */
@@ -78,7 +69,7 @@ export interface PluginContext {
 /** 基础插件接口：所有插件共享 */
 export interface Plugin {
   name: string
-  /** 初始化插件实例。校验配置、准备状态。应快速完成。抛错则阻止启动。 */
+  /** 初始化插件实例。应快速完成；PluginRegistry.initAll 会记录 init 错误并继续启动。 */
   init?(ctx: PluginInitContext): Promise<void>
   /** 服务监听端口前调用。可执行阻塞操作如 OAuth 登录。抛错则阻止启动。 */
   beforeServerStart?(): Promise<void>
@@ -86,13 +77,9 @@ export interface Plugin {
   afterServerStart?(): Promise<void>
 }
 
-/** 管道能力：请求拦截、流检查等 */
+/** 管道能力：检查上游流 chunk 并可短路为插件响应。 */
 export interface ProxyPlugin extends Plugin {
-  beforeRequest?(ctx: PluginContext): Promise<void | PluginResponse>
-  beforeProviderCall?(ctx: PluginContext): Promise<void | ProviderCallPatch>
-  afterProviderResult?(ctx: PluginContext): Promise<void | ProviderResultPatch>
   inspectStreamChunk?(ctx: PluginContext & { chunk: unknown }): Promise<void | PluginResponse>
-  mapProviderError?(ctx: PluginContext & { error: unknown }): Promise<void | PluginResponse>
 }
 
 /** 认证 + models 能力：自定义 fetch wrapper、模型发现 */

@@ -32,12 +32,7 @@ async function main(): Promise<void> {
   const settingsDir = dirname(settingsPath)
 
   // 加载插件
-  const pluginRegistry = await PluginRegistry.fromSettings(
-    settings,
-    settingsDir,
-    authFilePath,
-    logger,
-  )
+  const pluginRegistry = await PluginRegistry.fromSettings(settings, settingsDir, logger)
 
   // 初始化插件
   await pluginRegistry.initAll(logger, authFilePath)
@@ -51,7 +46,7 @@ async function main(): Promise<void> {
   }
 
   // 插件 beforeServerStart（可阻塞启动，如 OAuth 登录）
-  await pluginRegistry.beforeServerStartAll()
+  await pluginRegistry.beforeServerStartAll(logger)
 
   // OAuth 状态容器：后台刷新回填，/health 通过 getter 懒读取。
   // 正确性不依赖此预刷新：请求路径的 createOAuthFetch 会独立 ensureValidToken。
@@ -59,7 +54,6 @@ async function main(): Promise<void> {
 
   const app = createApp({
     settings,
-    authFilePath,
     pluginRegistry,
     providerRegistry: await createProviderRegistry(
       settings,

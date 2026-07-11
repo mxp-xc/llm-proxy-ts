@@ -17,10 +17,22 @@ import { stubRegistry } from '../helpers/registry.js'
 describe('logging redaction', () => {
   it('redacts known secret fields recursively', () => {
     expect(
-      redact({ apiKey: 'secret', nested: { authorization: 'Bearer token' }, ok: 'value' }),
+      redact({
+        apiKey: 'secret',
+        'x-api-key': 'secret',
+        'proxy-authorization': 'Basic secret',
+        nested: { authorization: 'Bearer token', 'api-key': 'secret', api_key: 'secret' },
+        ok: 'value',
+      }),
     ).toEqual({
       apiKey: '[REDACTED]',
-      nested: { authorization: '[REDACTED]' },
+      'x-api-key': '[REDACTED]',
+      'proxy-authorization': '[REDACTED]',
+      nested: {
+        authorization: '[REDACTED]',
+        'api-key': '[REDACTED]',
+        api_key: '[REDACTED]',
+      },
       ok: 'value',
     })
   })
@@ -62,6 +74,83 @@ describe('vendor_sse_error', () => {
       },
     })
     expect(JSON.stringify(result)).not.toContain('secret text')
+  })
+
+  it('parses multi-line SSE data events', () => {
+    const result = inspectVendorSseError(
+      { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['rate_limit'] },
+      {
+        rawValue:
+          'data: {"error":{"message":"secret text",\n' +
+          'data: "code":"rate_limit","type":"rate_limit_error"}}\n\n',
+      },
+    )
+
+    expect(result?.status).toBe(429)
+    expect(JSON.stringify(result)).not.toContain('secret text')
+  })
+
+  it('ignores SSE comments before rate-limit events', () => {
+    const result = inspectVendorSseError(
+      { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['rate_limit'] },
+      {
+        rawValue:
+          ': keepalive\n' +
+          'event: message\n' +
+          'data: {"error":{"code":"rate_limit","type":"rate_limit_error"}}\n\n',
+      },
+    )
+
+    expect(result).toMatchObject({ status: 429 })
+  })
+
+  it('preserves raw JSON fallback when the chunk is not SSE', () => {
+    const result = inspectVendorSseError(
+      { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['rate_limit'] },
+      '{"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}',
+    )
+
+    expect(result).toMatchObject({ status: 429 })
+    expect(JSON.stringify(result)).not.toContain('secret text')
+  })
+
+  it('ignores malformed event data without throwing', () => {
+    expect(() =>
+      inspectVendorSseError(
+        { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['rate_limit'] },
+        'data: {"error":\n\n',
+      ),
+    ).not.toThrow()
+  })
+
+  it('normalizes invalid preview limits to safe defaults', () => {
+    const rateLimitChunk = {
+      rawValue:
+        'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n',
+    }
+
+    expect(
+      inspectVendorSseError(
+        {
+          maxPreviewEvents: 0,
+          maxPreviewBytes: Number.POSITIVE_INFINITY,
+          rateLimitCodes: ['rate_limit'],
+        },
+        rateLimitChunk,
+      ),
+    ).toMatchObject({ status: 429 })
+  })
+
+  it('honors explicit non-matching rate-limit code lists', () => {
+    const result = inspectVendorSseError(
+      { maxPreviewEvents: 3, maxPreviewBytes: 65536, rateLimitCodes: ['quota_exceeded'] },
+      {
+        rawValue:
+          'data: {"error":{"message":"secret text","code":"rate_limit","type":"rate_limit_error"}}\n\n',
+      },
+    )
+
+    expect(result).toBeUndefined()
   })
 
   it('does not call the gateway when a stream error is detected before sending headers', async () => {
@@ -191,9 +280,7 @@ const testSettings = makeSettings({
     baseURL: 'https://openrouter.ai/api/v1',
     apiKey: 'secret',
     headers: {},
-    plugins: [
-      { name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] }, providers: [] },
-    ],
+    plugins: [{ name: 'vendor_sse_error', config: { rateLimitCodes: ['rate_limit'] } }],
     models: { chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] } },
   },
 })

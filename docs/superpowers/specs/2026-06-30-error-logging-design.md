@@ -57,8 +57,8 @@ logging.ts (轮转扩展)
     "message": "...",
     "stack": "..."
   },
-  "request": { },
-  "response": { }
+  "request": {},
+  "response": {}
 }
 ```
 
@@ -114,8 +114,8 @@ const teedStream = teeStream(acquired.stream, buffer)
 {
   "errorLogging": {
     "enabled": true,
-    "maxBodyLength": 262144
-  }
+    "maxBodyLength": 262144,
+  },
 }
 ```
 

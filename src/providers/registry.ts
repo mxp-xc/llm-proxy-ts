@@ -6,13 +6,13 @@ import type { OpenAIProviderConfig } from '../config.js'
 import type { TokenManager } from '../oauth/index.js'
 import { noopLogger } from '../types.js'
 import type { Logger } from '../types.js'
-import type { PluginRegistry } from '../plugins/registry.js'
+import type { AuthFetchRegistry } from '../plugins/registry.js'
 import {
   createOpenAICompatibleProvider,
   createProxyFetch,
-  sanitizeHeaders,
+  type ProviderBuildInput,
 } from './shared/provider-factory.js'
-import { safeProxyUrl } from '../server/logging.js'
+import { safeProxyUrl } from '../proxy-url.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
 import { createOpenAIProvider } from './openai/provider.js'
 
@@ -28,30 +28,15 @@ import { createOpenAIProvider } from './openai/provider.js'
  */
 export interface ProviderFactory {
   createOpenAICompatible(
-    providerName: string,
-    provider: OpenAICompatibleProviderConfig,
-    modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
+    input: ProviderBuildInput<OpenAICompatibleProviderConfig>,
   ): (upstreamModel: string) => LanguageModel
 
   createAnthropic(
-    providerName: string,
-    provider: AnthropicProviderConfig,
-    modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
+    input: ProviderBuildInput<AnthropicProviderConfig>,
   ): (upstreamModel: string) => LanguageModel
 
   createOpenAI(
-    providerName: string,
-    provider: OpenAIProviderConfig,
-    modelHeaders: Record<string, string>,
-    selectedApiKey: string | undefined,
-    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-    proxyFetch: typeof fetch | undefined,
+    input: ProviderBuildInput<OpenAIProviderConfig>,
   ): (upstreamModel: string) => LanguageModel
 }
 
@@ -59,15 +44,8 @@ export interface ProviderFactory {
 const defaultFactory: ProviderFactory = {
   createOpenAICompatible: createOpenAICompatibleProvider,
   createAnthropic: createAnthropicProvider,
-  createOpenAI(providerName, provider, modelHeaders, selectedApiKey, customFetch, proxyFetch) {
-    const openaiProvider = createOpenAIProvider(
-      providerName,
-      provider,
-      modelHeaders,
-      selectedApiKey,
-      customFetch,
-      proxyFetch,
-    )
+  createOpenAI(input) {
+    const openaiProvider = createOpenAIProvider(input)
     return (upstreamModel) => openaiProvider.responses(upstreamModel)
   },
 }
@@ -82,27 +60,33 @@ export interface LanguageModelResult {
   keySelection?: KeySelection
 }
 
+export interface ProviderPassthroughTransport {
+  fetch: typeof fetch
+  apiKey?: string | undefined
+  keySelection?: KeySelection
+}
+
+interface ResolvedProviderTransport {
+  apiKey: string | undefined
+  keySelection?: KeySelection
+  customFetch?: ((baseFetch?: typeof fetch) => typeof fetch) | undefined
+}
+
 export interface ProviderRegistry {
   languageModel(
     providerName: string,
     upstreamModel: string,
     modelHeaders: Record<string, string>,
   ): LanguageModelResult
-  /** 按 providerName 选 API key（复用内部轮询状态）。
-   *  供 passthrough 透传路径注入 Authorization，与 AI SDK 路径共享 keySelection 轮询。 */
-  selectApiKey(providerName: string): { apiKey: string | undefined; keySelection?: KeySelection }
-  debugProviderConfig(providerName: string): {
-    baseURL: string
-    headers: Record<string, string>
-    proxyEnabled: boolean
-  }
+  /** 供 passthrough 透传路径复用 registry 内部 auth/proxy composition。 */
+  passthroughTransport(providerName: string): ProviderPassthroughTransport
 }
 
 export async function createProviderRegistry(
   settings: Settings,
   tokenManager?: TokenManager,
   logger?: Logger,
-  pluginRegistry?: PluginRegistry,
+  pluginRegistry?: AuthFetchRegistry,
   authFilePath?: string,
   factory?: ProviderFactory,
 ): Promise<ProviderRegistry> {
@@ -144,12 +128,63 @@ export async function createProviderRegistry(
     }
   }
 
+  const toKeySelection = (
+    selection: ReturnType<typeof selectApiKey>,
+  ): { apiKey: string | undefined; keySelection?: KeySelection } => {
+    if (!selection) return { apiKey: undefined }
+    return {
+      apiKey: selection.apiKey,
+      keySelection: { index: selection.index, count: selection.count },
+    }
+  }
+
+  const resolveProviderTransport = (
+    providerName: string,
+    provider: ProviderConfig,
+  ): ResolvedProviderTransport => {
+    const authFetch = authFetchMap.get(providerName)
+    if (authFetch) {
+      const selection = toKeySelection(selectApiKey(providerName, provider.apiKey, apiKeyIndexes))
+      return { ...selection, customFetch: authFetch }
+    }
+
+    if (provider.oauth && tokenManager) {
+      const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
+      return { apiKey: undefined, customFetch: oauthFetch }
+    }
+
+    const selection = toKeySelection(selectApiKey(providerName, provider.apiKey, apiKeyIndexes))
+    return selection
+  }
+
+  const resolvePassthroughTransport = (
+    providerName: string,
+    provider: ProviderConfig,
+  ): ProviderPassthroughTransport => {
+    const baseFetch = sharedProxyFetch ?? globalThis.fetch
+    const transport = resolveProviderTransport(providerName, provider)
+    return {
+      apiKey: transport.apiKey,
+      ...(transport.keySelection ? { keySelection: transport.keySelection } : {}),
+      fetch: transport.customFetch ? transport.customFetch(baseFetch) : baseFetch,
+    }
+  }
+
+  const getProvider = (providerName: string): ProviderConfig => {
+    const provider = settings.providers[providerName]
+    if (!provider) {
+      throw new Error(`Unknown provider '${providerName}'`)
+    }
+    return provider
+  }
+
+  const passthroughTransport = (providerName: string): ProviderPassthroughTransport => {
+    return resolvePassthroughTransport(providerName, getProvider(providerName))
+  }
+
   return {
     languageModel(providerName, upstreamModel, modelHeaders) {
-      const provider = settings.providers[providerName]
-      if (!provider) {
-        throw new Error(`Unknown provider '${providerName}'`)
-      }
+      const provider = getProvider(providerName)
 
       const modelFactory = createProviderModelFactory(
         providerName,
@@ -158,66 +193,16 @@ export async function createProviderRegistry(
         providerFactory,
         sharedProxyFetch,
       )
-
-      // Auth 插件路径：使用预构建的 fetch wrapper，但保留内置 API Key 注入
-      const authFetch = authFetchMap.get(providerName)
-      if (authFetch) {
-        const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
-        const result: LanguageModelResult = {
-          model: modelFactory(selection?.apiKey, authFetch)(upstreamModel),
-        }
-        if (selection) {
-          result.keySelection = { index: selection.index, count: selection.count }
-        }
-        return result
-      }
-
-      // OAuth 路径：使用动态 fetch 注入 token
-      if (provider.oauth && tokenManager) {
-        const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
-        // OAuth fetch 自己注入 Authorization 头，apiKey 传 undefined 避免双重认证
-        return { model: modelFactory(undefined, oauthFetch)(upstreamModel) }
-      }
-
-      // 静态 API Key 路径
-      const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
+      const transport = resolveProviderTransport(providerName, provider)
       const result: LanguageModelResult = {
-        model: modelFactory(selection?.apiKey)(upstreamModel),
+        model: modelFactory(transport.apiKey, transport.customFetch)(upstreamModel),
       }
-      if (selection) {
-        result.keySelection = { index: selection.index, count: selection.count }
+      if (transport.keySelection) {
+        result.keySelection = transport.keySelection
       }
       return result
     },
-    selectApiKey(providerName) {
-      const provider = settings.providers[providerName]
-      if (!provider) {
-        throw new Error(`Unknown provider '${providerName}'`)
-      }
-      const selection = selectApiKey(providerName, provider.apiKey, apiKeyIndexes)
-      if (!selection) return { apiKey: undefined }
-      return {
-        apiKey: selection.apiKey,
-        keySelection: { index: selection.index, count: selection.count },
-      }
-    },
-    debugProviderConfig(providerName) {
-      const provider = settings.providers[providerName]
-      if (!provider) {
-        throw new Error(`Unknown provider '${providerName}'`)
-      }
-
-      return {
-        baseURL:
-          provider.type === 'anthropic'
-            ? (provider.baseURL ?? 'https://api.anthropic.com/v1')
-            : provider.type === 'openai'
-              ? (provider.baseURL ?? 'https://api.openai.com/v1')
-              : provider.baseURL,
-        headers: sanitizeHeaders(provider.headers),
-        proxyEnabled: settings.proxy !== null,
-      }
-    },
+    passthroughTransport,
   }
 }
 
@@ -261,37 +246,36 @@ function createProviderModelFactory(
   selectedApiKey?: string,
   customFetch?: (baseFetch?: typeof fetch) => typeof fetch,
 ) => (upstreamModel: string) => LanguageModel {
-  if (provider.type === 'anthropic') {
-    return (selectedApiKey, customFetch) =>
-      providerFactory.createAnthropic(
-        providerName,
-        provider,
-        modelHeaders,
-        selectedApiKey,
-        customFetch,
-        proxyFetch,
-      )
+  const buildInput = <TProvider extends ProviderConfig>(
+    typedProvider: TProvider,
+    selectedApiKey: string | undefined,
+    customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
+  ): ProviderBuildInput<TProvider> => ({
+    providerName,
+    provider: typedProvider,
+    modelHeaders,
+    selectedApiKey,
+    customFetch,
+    proxyFetch,
+  })
+
+  switch (provider.type) {
+    case 'anthropic':
+      return (selectedApiKey, customFetch) =>
+        providerFactory.createAnthropic(buildInput(provider, selectedApiKey, customFetch))
+    case 'openai':
+      return (selectedApiKey, customFetch) =>
+        providerFactory.createOpenAI(buildInput(provider, selectedApiKey, customFetch))
+    case 'openai-compatible':
+      return (selectedApiKey, customFetch) =>
+        providerFactory.createOpenAICompatible(buildInput(provider, selectedApiKey, customFetch))
+    default:
+      return assertNever(provider)
   }
-  if (provider.type === 'openai') {
-    return (selectedApiKey, customFetch) =>
-      providerFactory.createOpenAI(
-        providerName,
-        provider,
-        modelHeaders,
-        selectedApiKey,
-        customFetch,
-        proxyFetch,
-      )
-  }
-  return (selectedApiKey, customFetch) =>
-    providerFactory.createOpenAICompatible(
-      providerName,
-      provider,
-      modelHeaders,
-      selectedApiKey,
-      customFetch,
-      proxyFetch,
-    )
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported provider type ${(value as { type?: string }).type}`)
 }
 
 function selectApiKey(

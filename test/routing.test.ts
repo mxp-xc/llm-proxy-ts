@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../src/index.js'
 import type { AliasEntry, ModelRouteConfig } from '../src/config.js'
+import type { PipelinePluginRegistry } from '../src/plugins/registry.js'
 import { RoutingError, RoutingTable } from '../src/routing.js'
 import { makeSettings } from './helpers/settings.js'
-
-// Import to register vendor_sse_error as a built-in plugin
-import '../src/plugins/builtins/vendor-sse-error.js'
 
 function settings(enableFlatModelLookup = false): Settings {
   return makeSettings(
@@ -15,13 +13,13 @@ function settings(enableFlatModelLookup = false): Settings {
         baseURL: 'https://openrouter.ai/api/v1',
         apiKey: 'secret',
         headers: { 'X-Provider': 'provider' },
-        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 3 }, providers: [] }],
+        plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 3 } }],
         models: {
           chat: {
             upstreamModel: 'openrouter/chat',
             aliases: [{ name: 'default', flat: false }],
             headers: { 'X-Model': 'model' },
-            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 }, providers: [] }],
+            plugins: [{ name: 'vendor_sse_error', config: { maxPreviewEvents: 1 } }],
           },
         },
       },
@@ -112,12 +110,12 @@ describe('RoutingTable', () => {
     expect(route.resolvedPlugins[0]!.config).toEqual({ maxPreviewEvents: 1 })
   })
 
-  it('stores pluginRegistry and uses it in resolve()', () => {
-    const mockPluginRegistry = {
+  it('uses PluginRegistry when resolving route plugins', () => {
+    const mockPluginRegistry: PipelinePluginRegistry = {
       getPipelinePlugins: (_providerId: string, _modelKey?: string) => [
         { plugin: { name: 'test-plugin' }, config: { from: 'registry' }, providers: [] },
       ],
-    } as unknown as import('../src/plugins/registry.js').PluginRegistry
+    }
     const table = RoutingTable.fromSettings(settings(), mockPluginRegistry)
     const route = table.resolve('openrouter/chat')
     // Should use PluginRegistry instead of resolveBuiltinPlugins

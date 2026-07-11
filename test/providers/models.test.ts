@@ -269,4 +269,16 @@ describe('getModel alias/flat', () => {
     const s = makeSettings({ p: P({ m: M('up', [{ name: 'a', flat: false }]) }) })
     expect(getModel(s, 'a')).toBeNull()
   })
+
+  it('uses the same last-wins flat selector semantics as listed models', () => {
+    const s = makeSettings({
+      p1: P({ m: M('up-1', [{ name: 'shared', flat: true }]) }),
+      p2: P({ m: M('up-2', [{ name: 'shared', flat: true }]) }),
+    })
+
+    expect(getModel(s, 'shared')).toMatchObject({
+      id: 'shared',
+      owned_by: 'p2',
+    })
+  })
 })

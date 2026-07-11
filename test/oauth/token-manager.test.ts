@@ -23,6 +23,19 @@ import {
   createMemoryPersistence,
 } from '../helpers/oauth.js'
 
+async function expectOAuthErrorCode(
+  promise: Promise<unknown>,
+  code: OAuthError['code'],
+): Promise<void> {
+  try {
+    await promise
+    throw new Error('Expected OAuthError')
+  } catch (error) {
+    expect(error).toBeInstanceOf(OAuthError)
+    expect((error as OAuthError).code).toBe(code)
+  }
+}
+
 describe('token-manager', () => {
   describe('isTokenValid', () => {
     it('returns true for valid token', () => {
@@ -118,6 +131,18 @@ describe('token-manager', () => {
 
       await expect(refreshAccessToken(authCodeConfig, 'rt', mockFetch)).rejects.toThrow(OAuthError)
     })
+
+    it('keeps refresh_failed for malformed token responses', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ expires_in: 3600 }),
+      })
+
+      await expectOAuthErrorCode(
+        refreshAccessToken(authCodeConfig, 'rt', mockFetch),
+        'refresh_failed',
+      )
+    })
   })
 
   describe('fetchClientCredentialsToken', () => {
@@ -174,6 +199,40 @@ describe('token-manager', () => {
           mockFetch,
         ),
       ).rejects.toThrow(OAuthError)
+    })
+
+    it('uses exchange_failed for malformed token responses', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ expires_in: 3600 }),
+      })
+
+      await expectOAuthErrorCode(
+        exchangeAuthorizationCode(
+          authCodeConfig,
+          'auth-code-123',
+          'http://localhost:8000/oauth/callback',
+          mockFetch,
+        ),
+        'exchange_failed',
+      )
+    })
+
+    it('uses exchange_failed when parsing token JSON fails', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.reject(new Error('invalid json')),
+      })
+
+      await expectOAuthErrorCode(
+        exchangeAuthorizationCode(
+          authCodeConfig,
+          'auth-code-123',
+          'http://localhost:8000/oauth/callback',
+          mockFetch,
+        ),
+        'exchange_failed',
+      )
     })
   })
 
@@ -384,6 +443,33 @@ describe('token-manager', () => {
       const data = await loadAuthFile(authFilePath)
       const store = extractTokenStore(data)
       expect(store['p']!.accessToken).toBe('new-access-token')
+    })
+
+    it('preserves plugin store data when saving tokens concurrently', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse()),
+      })
+      const manager = TokenManager.fromFile(authFilePath, mockFetch)
+      await manager.load()
+
+      const { createPluginStore } = await import('../../src/plugins/store-adapter.js')
+      const pluginStore = createPluginStore(authFilePath, 'plugin-a')
+
+      await Promise.all([
+        manager.exchangeCode(
+          'p',
+          authCodeConfig,
+          'auth-code-123',
+          'http://localhost:8000/oauth/callback',
+        ),
+        pluginStore.set({ cached: 'plugin-value' }),
+      ])
+
+      const { loadAuthFile, extractTokenStore } = await import('../../src/oauth/token-store.js')
+      const data = await loadAuthFile(authFilePath)
+      expect(extractTokenStore(data)['p']!.accessToken).toBe('new-access-token')
+      expect(data._plugins?.['plugin-a']).toEqual({ cached: 'plugin-value' })
     })
   })
 })

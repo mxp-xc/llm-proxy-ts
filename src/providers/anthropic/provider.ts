@@ -1,15 +1,10 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { sanitizeHeaders, applyProviderAuth } from '../shared/provider-factory.js'
 import type { AnthropicProviderConfig } from '../../config.js'
+import type { ProviderBuildInput } from '../shared/provider-factory.js'
 
-export function createAnthropicProvider(
-  providerName: string,
-  provider: AnthropicProviderConfig,
-  modelHeaders: Record<string, string>,
-  selectedApiKey: string | undefined,
-  customFetch: ((baseFetch?: typeof fetch) => typeof fetch) | undefined,
-  proxyFetch: typeof fetch | undefined,
-) {
+export function createAnthropicProvider(input: ProviderBuildInput<AnthropicProviderConfig>) {
+  const { providerName, provider, modelHeaders, selectedApiKey, customFetch, proxyFetch } = input
   const headers = sanitizeHeaders({ ...provider.headers, ...modelHeaders })
 
   if (provider.options?.anthropicVersion !== undefined) {
