@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Codex Profile E2E'
+  short_description: '通过 Codex profile 跑本地 proxy 端到端验证'
+  default_prompt: '为本地 proxy 运行一次 Codex profile E2E 验证。'
