@@ -1055,9 +1055,6 @@ describe('request logging', () => {
           keySelection: { index: 0, count: 1 },
         }
       },
-      passthroughTransport() {
-        throw new Error('passthroughTransport should not be called')
-      },
     }
     const gateway = makeGateway({
       async generate() {

@@ -191,11 +191,11 @@ export function filterOpenAIResponsesResponseHeaders(headers: unknown): Headers 
 }
 
 export function prepareOpenAIResponsesPassthroughExecution(
-  input: ExecutionOverrideInput<OpenAIResponsesRequest>,
+  input: ExecutionOverrideInput,
 ):
   | ExecutionOverrideConfig<OpenAIResponseStreamEvent, OpenAIResponse, ResponsesEnrichment>
   | undefined {
-  if (input.route.provider.type !== 'openai') return undefined
+  if (input.providerType !== 'openai') return undefined
 
   const fetchState: OpenAIResponsesPassthroughFetchState = {}
 

@@ -10,7 +10,7 @@ export interface RouteMatch {
   modelKey: string
   modelSelector: string
   upstreamModel: string
-  headers: Record<string, string>
+  modelHeaders: Record<string, string>
   resolvedPlugins: ResolvedPlugin[]
 }
 
@@ -67,7 +67,7 @@ export class RoutingTable {
       // 注册带前缀路由:modelKey 入口
       assertPrefixedUnique(entry.modelKey)
       prefixedRoutes.set(`${entry.providerName}/${entry.modelKey}`, route)
-      // 每个别名一条独立路由(modelSelector 不同),复用同一 resolvedPlugins/headers
+      // 每个别名一条独立路由(modelSelector 不同),复用同一 resolvedPlugins/modelHeaders
       for (const alias of entry.aliases) {
         assertPrefixedUnique(alias.name)
         prefixedRoutes.set(
@@ -187,7 +187,7 @@ function buildRoute(
     modelKey,
     modelSelector,
     upstreamModel: model.upstreamModel,
-    headers: { ...provider.headers, ...model.headers },
+    modelHeaders: { ...model.headers },
     resolvedPlugins,
   }
 }

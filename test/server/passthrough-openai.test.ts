@@ -64,9 +64,6 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
           keySelection: { index: 0, count: 1 },
         }
       },
-      passthroughTransport() {
-        throw new Error('native passthrough transport should not be used')
-      },
     }
     return { registry, languageModelCalls }
   }

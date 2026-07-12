@@ -186,7 +186,7 @@ describe('provider registry', () => {
     },
   )
 
-  it('does not compose auth fetch until the passthrough transport seam needs fetch', async () => {
+  it('does not compose auth fetch while creating language model factories', async () => {
     let composeCalls = 0
     const authFetch = ((baseFetch?: typeof fetch) => {
       composeCalls += 1
@@ -210,12 +210,6 @@ describe('provider registry', () => {
 
     expect(composeCalls).toBe(0)
     expect(capturedFactoryInputs[0]!.customFetch).toBe(authFetch)
-
-    const transport = registry.passthroughTransport('openrouter')
-
-    expect(composeCalls).toBe(1)
-    expect(transport.fetch).toBeDefined()
-    expect(transport.apiKey).toBe('secret')
   })
 
   it('composes request-scoped fetch inside auth fetch for language models', async () => {

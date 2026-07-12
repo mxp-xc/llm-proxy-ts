@@ -64,12 +64,6 @@ export interface LanguageModelOptions {
   customFetch?: ((baseFetch?: typeof fetch) => typeof fetch) | undefined
 }
 
-export interface ProviderPassthroughTransport {
-  fetch: typeof fetch
-  apiKey?: string | undefined
-  keySelection?: KeySelection
-}
-
 interface ResolvedProviderTransport {
   apiKey: string | undefined
   keySelection?: KeySelection
@@ -83,8 +77,6 @@ export interface ProviderRegistry {
     modelHeaders: Record<string, string>,
     options?: LanguageModelOptions,
   ): LanguageModelResult
-  /** 供 passthrough 透传路径复用 registry 内部 auth/proxy composition。 */
-  passthroughTransport(providerName: string): ProviderPassthroughTransport
 }
 
 export async function createProviderRegistry(
@@ -162,29 +154,12 @@ export async function createProviderRegistry(
     return selection
   }
 
-  const resolvePassthroughTransport = (
-    providerName: string,
-    provider: ProviderConfig,
-  ): ProviderPassthroughTransport => {
-    const baseFetch = sharedProxyFetch ?? globalThis.fetch
-    const transport = resolveProviderTransport(providerName, provider)
-    return {
-      apiKey: transport.apiKey,
-      ...(transport.keySelection ? { keySelection: transport.keySelection } : {}),
-      fetch: transport.customFetch ? transport.customFetch(baseFetch) : baseFetch,
-    }
-  }
-
   const getProvider = (providerName: string): ProviderConfig => {
     const provider = settings.providers[providerName]
     if (!provider) {
       throw new Error(`Unknown provider '${providerName}'`)
     }
     return provider
-  }
-
-  const passthroughTransport = (providerName: string): ProviderPassthroughTransport => {
-    return resolvePassthroughTransport(providerName, getProvider(providerName))
   }
 
   const composeFetchWrappers = (
@@ -217,7 +192,6 @@ export async function createProviderRegistry(
       }
       return result
     },
-    passthroughTransport,
   }
 }
 

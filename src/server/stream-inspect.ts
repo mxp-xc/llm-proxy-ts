@@ -22,6 +22,16 @@ function isPluginResponse(value: unknown): value is PluginResponse {
   )
 }
 
+function buildPluginContext(rp: ResolvedPlugin, ctx: StreamInspectContext, chunk: ProxyStreamPart) {
+  return {
+    requestId: ctx.requestId,
+    settings: ctx.settings,
+    provider: ctx.provider,
+    config: rp.config,
+    chunk,
+  }
+}
+
 export async function inspectFirstStreamChunk(
   plugins: ResolvedPlugin[],
   stream: AsyncIterable<ProxyStreamPart>,
@@ -39,13 +49,7 @@ export async function inspectFirstStreamChunk(
     try {
       for (const rp of inspectors) {
         const plugin = rp.plugin as ProxyPlugin
-        const result = await plugin.inspectStreamChunk!({
-          requestId: ctx.requestId,
-          settings: ctx.settings,
-          provider: ctx.provider,
-          config: rp.config,
-          chunk: first.value,
-        })
+        const result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, first.value))
         if (isPluginResponse(result)) {
           await iterator.return?.()
           return {
@@ -100,13 +104,7 @@ async function inspectStreamChunk(
   for (const rp of plugins) {
     if (!isProxyPluginWithInspect(rp.plugin)) continue
     const plugin = rp.plugin as ProxyPlugin
-    const result = await plugin.inspectStreamChunk!({
-      requestId: ctx.requestId,
-      settings: ctx.settings,
-      provider: ctx.provider,
-      config: rp.config,
-      chunk,
-    })
+    const result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, chunk))
     if (isPluginResponse(result)) {
       return result
     }

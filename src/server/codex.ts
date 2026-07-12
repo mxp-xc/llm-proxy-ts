@@ -4,6 +4,7 @@ import { openaiResponsesStrategy } from '../providers/openai-responses/strategy.
 import type { Settings } from '../config.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
+import { createProtocolRequestScope } from './hono-protocol-adapter.js'
 import type { AppEnv } from './types.js'
 import { buildCodexModelsResponse, CodexCatalogCache } from '../codex-catalog.js'
 import type { CodexModelInfo } from '../codex-types.js'
@@ -18,7 +19,9 @@ export function createCodexApp(deps: CodexAppDeps): Hono<AppEnv> {
   const { settings, protocolCtx, catalogCache } = deps
   const app = new Hono<AppEnv>()
 
-  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
+  app.post('/v1/responses', (c) =>
+    handleProtocolRequest(createProtocolRequestScope(c), openaiResponsesStrategy, protocolCtx),
+  )
 
   // settings 不可变(无 hot-reload),buildCodexModelsResponse 结果仅依赖 settings + catalog。
   // catalogCache.get() 自带懒加载缓存;成功构建后在此闭包缓存,后续 /v1/models 请求直接返回。

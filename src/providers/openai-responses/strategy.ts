@@ -1,5 +1,6 @@
 import type {
   ProtocolExecutionOverride,
+  ProtocolProviderAwareMapping,
   ProtocolRenderEnrichment,
   ProtocolStrategy,
 } from '../shared/strategy.js'
@@ -17,18 +18,15 @@ export const openaiResponsesStrategy: ProtocolStrategy<
   OpenAIResponse,
   ResponsesEnrichment
 > &
+  ProtocolProviderAwareMapping<OpenAIResponsesRequest> &
   ProtocolRenderEnrichment<OpenAIResponsesRequest, ResponsesEnrichment> &
-  ProtocolExecutionOverride<
-    OpenAIResponsesRequest,
-    OpenAIResponseStreamEvent,
-    OpenAIResponse,
-    ResponsesEnrichment
-  > = {
+  ProtocolExecutionOverride<OpenAIResponseStreamEvent, OpenAIResponse, ResponsesEnrichment> = {
   validate: validateOpenAIResponsesRequest,
   validationMessage: 'Invalid OpenAI Responses request',
   getModel: (req) => req.model,
   isStream: (req) => req.stream ?? false,
   mapToAISDKInput: mapResponsesRequestToAISDKInput,
+  mapToProviderAISDKInput: mapResponsesRequestToAISDKInput,
   prepareEnrichment: buildResponsesEnrichment,
   prepareExecution: prepareOpenAIResponsesPassthroughExecution,
   renderResult: renderOpenAIResponse,

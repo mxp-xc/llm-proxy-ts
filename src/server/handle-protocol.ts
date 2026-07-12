@@ -1,5 +1,4 @@
 import type { LanguageModel } from 'ai'
-import type { Context } from 'hono'
 import { OAuthError } from '../oauth/types.js'
 import { RoutingError } from '../routing.js'
 import { flattenUsage } from '../providers/shared/renderer-utils.js'
@@ -7,6 +6,7 @@ import { collectStreamResult } from '../providers/shared/stream-collector.js'
 import type {
   ExecutionOverrideConfig,
   ProtocolExecutionOverride,
+  ProtocolProviderAwareMapping,
   ProtocolRenderEnrichment,
   ProtocolStrategy,
 } from '../providers/shared/strategy.js'
@@ -15,8 +15,9 @@ import type { AISDKInput } from '../providers/shared/aisdk-types.js'
 import type { Settings } from '../config.js'
 import type { RoutingTable } from '../routing.js'
 import type { ResolvedPlugin } from '../plugins/registry.js'
-import type { AppEnv, ModelGateway } from './types.js'
+import type { ModelGateway, RequestLogContext } from './types.js'
 import type { ProviderRegistry } from '../providers/registry.js'
+import type { Logger } from '../types.js'
 import { RequestTimeoutError, withRequestTimeout } from '../request-timeout.js'
 import { inspectFirstStreamChunk, type StreamInspectContext } from './stream-inspect.js'
 import { readableStreamFromAsyncIterable } from './stream-utils.js'
@@ -28,8 +29,15 @@ export interface ProtocolContext {
   routingTable: RoutingTable
   settings: Settings
   gateway: ModelGateway
-  providerRegistry: Pick<ProviderRegistry, 'languageModel' | 'passthroughTransport'>
+  providerRegistry: Pick<ProviderRegistry, 'languageModel'>
   errorLogger: ErrorLogger
+}
+
+export interface ProtocolRequestScope {
+  requestId: string
+  logger: Logger
+  readJson(): Promise<unknown>
+  setRequestLogContext(context: RequestLogContext): void
 }
 
 interface AcquireStreamOptions {
@@ -45,9 +53,35 @@ interface AcquireStreamOptions {
   inspectCtx: StreamInspectContext
 }
 
+interface ProtocolRequestMetadata {
+  requestId: string
+  provider: string
+  requestedModel: string
+  actualModel: string
+}
+
+interface ExecutionRuntime {
+  gateway: ModelGateway
+  requestTimeoutMs: number
+  errorLogging: {
+    enabled: boolean
+    maxBodyLength: number
+  }
+  errorLogger: ErrorLogger
+}
+
+interface ExecutionRoute {
+  streamOnly: boolean
+  plugins: ResolvedPlugin[]
+}
+
 type AcquireStreamResult =
   | { stream: AsyncIterable<ProxyStreamPart> }
   | { rateLimitResponse: { body: unknown; status: number } }
+
+function jsonResponse(body: unknown, status?: number): Response {
+  return Response.json(body, status === undefined ? undefined : { status })
+}
 
 async function acquireStream(opts: AcquireStreamOptions): Promise<AcquireStreamResult> {
   const streamInput: Parameters<ModelGateway['stream']>[0] = {
@@ -196,12 +230,10 @@ function stringifyForPreview(value: unknown): string {
 
 function getExecutionOverrideCapability<TRequest, TSSEData, TResult, TEnrichment extends object>(
   strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>,
-): ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment> | undefined {
-  const candidate = strategy as Partial<
-    ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment>
-  >
+): ProtocolExecutionOverride<TSSEData, TResult, TEnrichment> | undefined {
+  const candidate = strategy as Partial<ProtocolExecutionOverride<TSSEData, TResult, TEnrichment>>
   return typeof candidate.prepareExecution === 'function'
-    ? (candidate as ProtocolExecutionOverride<TRequest, TSSEData, TResult, TEnrichment>)
+    ? (candidate as ProtocolExecutionOverride<TSSEData, TResult, TEnrichment>)
     : undefined
 }
 
@@ -214,17 +246,27 @@ function getRenderEnrichmentCapability<TRequest, TEnrichment extends object>(
     : undefined
 }
 
+function getProviderAwareMappingCapability<TRequest, TSSEData, TResult, TEnrichment extends object>(
+  strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>,
+): ProtocolProviderAwareMapping<TRequest> | undefined {
+  const candidate = strategy as Partial<ProtocolProviderAwareMapping<TRequest>>
+  return typeof candidate.mapToProviderAISDKInput === 'function'
+    ? (candidate as ProtocolProviderAwareMapping<TRequest>)
+    : undefined
+}
+
 interface ExecuteUpstreamOptions<TRequest, TSSEData, TResult, TEnrichment extends object> {
-  c: Context<AppEnv>
+  logger: Logger
   strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>
-  ctx: ProtocolContext
-  route: ReturnType<RoutingTable['resolve']>
+  runtime: ExecutionRuntime
+  route: ExecutionRoute
   model: LanguageModel
   callInput: AISDKInput
   requestModel: string
   request: TRequest
   enrichment: TEnrichment | undefined
   loginUrl: string
+  requestMetadata: ProtocolRequestMetadata
   abortController: AbortController
   inspectCtx: StreamInspectContext
   executionOverride?: ExecutionOverrideConfig<TSSEData, TResult, TEnrichment>
@@ -234,9 +276,9 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   opts: ExecuteUpstreamOptions<TRequest, TSSEData, TResult, TEnrichment>,
 ): Promise<Response> {
   const {
-    c,
+    logger,
     strategy,
-    ctx,
+    runtime,
     route,
     model,
     callInput,
@@ -244,6 +286,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
     request,
     enrichment,
     loginUrl,
+    requestMetadata,
     abortController,
     inspectCtx,
     executionOverride,
@@ -252,12 +295,12 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
 
   const acquireRoutedStream = () =>
     acquireStream({
-      gateway: ctx.gateway,
+      gateway: runtime.gateway,
       model,
       callInput,
       requestModel,
-      plugins: route.resolvedPlugins,
-      timeoutMs: ctx.settings.requestTimeoutMs,
+      plugins: route.plugins,
+      timeoutMs: runtime.requestTimeoutMs,
       abortController,
       formatErrors,
       inspectCtx,
@@ -277,14 +320,12 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
       const acquired = await acquireRoutedStream()
       if ('rateLimitResponse' in acquired) {
         const { body, status } = acquired.rateLimitResponse
-        return c.json(body, status as 429)
+        return jsonResponse(body, status)
       }
-      const reqLogger = c.get('logger')
-      const enabled = ctx.settings.errorLogging.enabled
       const { stream: teedStream, buffer } = bufferStreamForErrorLogging(
         acquired.stream,
-        enabled,
-        ctx.settings.errorLogging.maxBodyLength,
+        runtime.errorLogging.enabled,
+        runtime.errorLogging.maxBodyLength,
       )
       const preparedStreamResponse = await prepareStreamResponseHeaders(
         teedStream,
@@ -296,8 +337,15 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
             ...withEnrichment({ model: requestModel, stream: preparedStreamResponse.stream }),
           }),
           (error) => {
-            reqLogger.error({ err: error }, 'stream consumption failed')
-            writeProtocolErrorLog(c, ctx.errorLogger, error, 'stream', request, buffer)
+            logger.error({ err: error }, 'stream consumption failed')
+            writeProtocolErrorLog(
+              runtime.errorLogger,
+              requestMetadata,
+              error,
+              'stream',
+              request,
+              buffer,
+            )
           },
           abortController,
         ),
@@ -306,8 +354,9 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
         },
       )
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream', {
-        errorLogger: ctx.errorLogger,
+      return handleUpstreamError(error, formatErrors, loginUrl, 'stream', logger, {
+        errorLogger: runtime.errorLogger,
+        requestMetadata,
         request,
         response: [],
       })
@@ -315,24 +364,23 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   }
 
   // streamOnly: provider 仅支持流式 API，内部走 stream + 收集
-  if (route.provider.options?.streamOnly) {
-    const enabled = ctx.settings.errorLogging.enabled
+  if (route.streamOnly) {
     let buffer: unknown[] = []
     try {
       const acquired = await acquireRoutedStream()
       if ('rateLimitResponse' in acquired) {
         const { body, status } = acquired.rateLimitResponse
-        return c.json(body, status as 429)
+        return jsonResponse(body, status)
       }
       const buffered = bufferStreamForErrorLogging(
         acquired.stream,
-        enabled,
-        ctx.settings.errorLogging.maxBodyLength,
+        runtime.errorLogging.enabled,
+        runtime.errorLogging.maxBodyLength,
       )
       buffer = buffered.buffer
       const collected = await withRequestTimeout(
         collectStreamResult(buffered.stream),
-        ctx.settings.requestTimeoutMs,
+        runtime.requestTimeoutMs,
         abortController,
       )
       const renderInput: Parameters<typeof strategy.renderResult>[0] = withEnrichment({
@@ -343,10 +391,11 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
         ...(collected.toolCalls && { toolCalls: collected.toolCalls }),
       })
       if (collected.usage) renderInput.usage = collected.usage
-      return c.json(renderResult(renderInput))
+      return jsonResponse(renderResult(renderInput))
     } catch (error) {
-      return handleUpstreamError(c, error, formatErrors, loginUrl, 'stream-only', {
-        errorLogger: ctx.errorLogger,
+      return handleUpstreamError(error, formatErrors, loginUrl, 'stream-only', logger, {
+        errorLogger: runtime.errorLogger,
+        requestMetadata,
         request,
         response: buffer,
       })
@@ -365,8 +414,8 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
       generateInput.options = executionOverride.generateOptions
     }
     const result = await withRequestTimeout(
-      ctx.gateway.generate(generateInput),
-      ctx.settings.requestTimeoutMs,
+      runtime.gateway.generate(generateInput),
+      runtime.requestTimeoutMs,
       abortController,
     )
     const renderInput: Parameters<typeof strategy.renderResult>[0] = withEnrichment({
@@ -383,10 +432,11 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
       if (!headers.has('content-type')) headers.set('content-type', 'application/json')
       return new Response(JSON.stringify(renderResult(renderInput)), { headers })
     }
-    return c.json(renderResult(renderInput))
+    return jsonResponse(renderResult(renderInput))
   } catch (error) {
-    return handleUpstreamError(c, error, formatErrors, loginUrl, 'generate', {
-      errorLogger: ctx.errorLogger,
+    return handleUpstreamError(error, formatErrors, loginUrl, 'generate', logger, {
+      errorLogger: runtime.errorLogger,
+      requestMetadata,
       request,
       response: null,
     })
@@ -399,7 +449,7 @@ export async function handleProtocolRequest<
   TResult,
   TEnrichment extends object,
 >(
-  c: Context<AppEnv>,
+  requestScope: ProtocolRequestScope,
   strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>,
   ctx: ProtocolContext,
 ): Promise<Response> {
@@ -409,12 +459,12 @@ export async function handleProtocolRequest<
   let request: TRequest
   let rawBody: unknown
   try {
-    rawBody = await c.req.json()
+    rawBody = await requestScope.readJson()
     request = strategy.validate(rawBody)
   } catch (error) {
-    c.get('logger').error({ err: error, phase: 'validation' }, 'request validation failed')
+    requestScope.logger.error({ err: error, phase: 'validation' }, 'request validation failed')
     const { body, status } = formatErrors.validation(strategy.validationMessage)
-    return c.json(body, status as 400)
+    return jsonResponse(body, status)
   }
 
   // 2. Resolve route
@@ -425,36 +475,47 @@ export async function handleProtocolRequest<
   } catch (error) {
     if (error instanceof RoutingError) {
       const { body, status } = formatErrors.routing(error)
-      return c.json(body, status as 404)
+      return jsonResponse(body, status)
     }
     throw error
   }
 
-  c.set('provider', route.providerName)
-  c.set('requestedModel', requestModel)
-  c.set('actualModel', route.upstreamModel)
+  const requestLogContext: RequestLogContext = {
+    provider: route.providerName,
+    requestedModel: requestModel,
+    actualModel: route.upstreamModel,
+  }
+  requestScope.setRequestLogContext(requestLogContext)
+  const requestMetadata: ProtocolRequestMetadata = {
+    requestId: requestScope.requestId,
+    provider: route.providerName,
+    requestedModel: requestModel,
+    actualModel: route.upstreamModel,
+  }
 
-  c.get('logger').info(
+  requestScope.logger.info(
     { requestModel, upstreamModel: route.upstreamModel, provider: route.providerName },
     'route resolved',
   )
 
   const loginUrl = buildOAuthLoginUrl(ctx.settings, route.providerName)
+  const providerType = route.provider.type
 
   // 3. Prepare execution override（例如 openai-responses + openai 上游的 AI SDK raw renderer）
   const abortController = new AbortController()
   const executionOverride = getExecutionOverrideCapability(strategy)?.prepareExecution({
-    route,
-    request,
+    providerType,
     rawBody,
-    upstreamModel: route.upstreamModel,
   })
 
   // 4. Map to AI SDK input + compute strategy-local enrichment
-  const callInput = strategy.mapToAISDKInput(request, route.provider.type)
+  const providerAwareMapping = getProviderAwareMappingCapability(strategy)
+  const callInput =
+    providerAwareMapping?.mapToProviderAISDKInput(request, providerType) ??
+    strategy.mapToAISDKInput(request)
   const enrichment = getRenderEnrichmentCapability(strategy)?.prepareEnrichment(
     request,
-    route.provider.type,
+    providerType,
   )
 
   // 5. Get LanguageModel + delegate execution to executeUpstream
@@ -463,16 +524,16 @@ export async function handleProtocolRequest<
     const modelResult = ctx.providerRegistry.languageModel(
       route.providerName,
       route.upstreamModel,
-      route.headers,
+      route.modelHeaders,
       executionOverride?.languageModelOptions,
     )
     model = modelResult.model
     if (modelResult.keySelection) {
-      c.set('keySelection', modelResult.keySelection)
+      requestLogContext.keySelection = modelResult.keySelection
     }
   } catch (error) {
     if (error instanceof OAuthError && error.code === 'auth_required') {
-      c.get('logger').error(
+      requestScope.logger.error(
         {
           err: error,
           phase: 'resolve-model',
@@ -483,27 +544,41 @@ export async function handleProtocolRequest<
         'model resolution failed',
       )
       const { body, status } = formatErrors.oauth(error.message, loginUrl)
-      return c.json(body, status as 503)
+      return jsonResponse(body, status)
     }
     throw error
   }
   const inspectCtx: StreamInspectContext = {
-    requestId: c.get('requestId'),
+    requestId: requestScope.requestId,
     settings: ctx.settings,
     provider: { id: route.providerName, provider: route.provider },
   }
+  const runtime: ExecutionRuntime = {
+    gateway: ctx.gateway,
+    requestTimeoutMs: ctx.settings.requestTimeoutMs,
+    errorLogging: {
+      enabled: ctx.settings.errorLogging.enabled,
+      maxBodyLength: ctx.settings.errorLogging.maxBodyLength,
+    },
+    errorLogger: ctx.errorLogger,
+  }
+  const executionRoute: ExecutionRoute = {
+    streamOnly: route.provider.options?.streamOnly === true,
+    plugins: route.resolvedPlugins,
+  }
 
   return executeUpstream({
-    c,
+    logger: requestScope.logger,
     strategy,
-    ctx,
-    route,
+    runtime,
+    route: executionRoute,
     model,
     callInput,
     requestModel,
     request,
     enrichment,
     loginUrl,
+    requestMetadata,
     abortController,
     inspectCtx,
     ...(executionOverride !== undefined ? { executionOverride } : {}),
@@ -512,47 +587,48 @@ export async function handleProtocolRequest<
 
 interface ErrorLogContext {
   errorLogger: ErrorLogger
+  requestMetadata: ProtocolRequestMetadata
   request: unknown
   response: unknown[] | null
 }
 
 function writeProtocolErrorLog(
-  c: Context<AppEnv>,
   errorLogger: ErrorLogger,
+  metadata: ProtocolRequestMetadata,
   error: unknown,
   phase: ErrorPhase,
   request: unknown,
   response: unknown[] | null,
 ): void {
   errorLogger.log({
-    requestId: c.get('requestId'),
+    requestId: metadata.requestId,
     phase,
-    provider: c.get('provider') ?? '',
-    requestedModel: c.get('requestedModel') ?? '',
-    actualModel: c.get('actualModel') ?? '',
+    provider: metadata.provider,
+    requestedModel: metadata.requestedModel,
+    actualModel: metadata.actualModel,
     error: normalizeErrorForLog(error),
     request,
     response,
   })
 }
 
-export function handleUpstreamError(
-  c: Context<AppEnv>,
+function handleUpstreamError(
   error: unknown,
   formatErrors: ProtocolErrorFormatter,
   loginUrl: string,
   phase: ErrorPhase,
+  logger: Logger,
   errorLogCtx?: ErrorLogContext,
 ): Response {
-  c.get('logger').error({ err: error, phase }, 'upstream request failed')
+  logger.error({ err: error, phase }, 'upstream request failed')
   if (error instanceof OAuthError && error.code === 'auth_required') {
     const { body, status } = formatErrors.oauth(error.message, loginUrl)
-    return c.json(body, status as 503)
+    return jsonResponse(body, status)
   }
   if (errorLogCtx) {
     writeProtocolErrorLog(
-      c,
       errorLogCtx.errorLogger,
+      errorLogCtx.requestMetadata,
       error,
       phase,
       errorLogCtx.request,
@@ -561,8 +637,8 @@ export function handleUpstreamError(
   }
   if (error instanceof RequestTimeoutError) {
     const { body, status } = formatErrors.timeout()
-    return c.json(body, status as 504)
+    return jsonResponse(body, status)
   }
   const { body, status } = formatErrors.upstream()
-  return c.json(body, status as 502)
+  return jsonResponse(body, status)
 }

@@ -60,13 +60,17 @@ export interface AppDependencies {
   errorLogger?: ErrorLogger
 }
 
+export interface RequestLogContext {
+  provider: string
+  requestedModel: string
+  actualModel: string
+  keySelection?: KeySelection
+}
+
 export type AppEnv = {
   Variables: {
     requestId: string
     logger: pino.Logger
-    requestedModel?: string
-    actualModel?: string
-    provider?: string
-    keySelection?: KeySelection
+    requestLogContext?: RequestLogContext
   }
 }

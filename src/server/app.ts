@@ -16,6 +16,7 @@ import { CodexCatalogCache } from '../codex-catalog.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
+import { createProtocolRequestScope } from './hono-protocol-adapter.js'
 import { defaultGateway } from './gateway.js'
 import { ErrorLogger } from './error-logger.js'
 import type { ModelGateway, AppDependencies, AppEnv } from './types.js'
@@ -121,16 +122,17 @@ export function createApp({
     // 无需延迟。
     const logCompleted = () => {
       const duration = performance.now() - start
+      const requestLogContext = c.get('requestLogContext')
       reqLogger.info(
         {
           method: c.req.method,
           path: c.req.path,
           status: c.res.status,
           durationMs: Math.round(duration),
-          provider: c.get('provider'),
-          requestedModel: c.get('requestedModel'),
-          actualModel: c.get('actualModel'),
-          keySelection: c.get('keySelection'),
+          provider: requestLogContext?.provider,
+          requestedModel: requestLogContext?.requestedModel,
+          actualModel: requestLogContext?.actualModel,
+          keySelection: requestLogContext?.keySelection,
         },
         'request completed',
       )
@@ -158,15 +160,16 @@ export function createApp({
 
   app.onError((err, c) => {
     const reqLogger = c.get('logger') ?? logger
+    const requestLogContext = c.get('requestLogContext')
     reqLogger.error(
       {
         err,
         method: c.req.method,
         path: c.req.path,
-        provider: c.get('provider'),
-        requestedModel: c.get('requestedModel'),
-        actualModel: c.get('actualModel'),
-        keySelection: c.get('keySelection'),
+        provider: requestLogContext?.provider,
+        requestedModel: requestLogContext?.requestedModel,
+        actualModel: requestLogContext?.actualModel,
+        keySelection: requestLogContext?.keySelection,
       },
       'request failed',
     )
@@ -224,10 +227,14 @@ export function createApp({
   })
 
   app.post('/v1/chat/completions', (c) =>
-    handleProtocolRequest(c, openaiCompatibleStrategy, protocolCtx),
+    handleProtocolRequest(createProtocolRequestScope(c), openaiCompatibleStrategy, protocolCtx),
   )
-  app.post('/v1/messages', (c) => handleProtocolRequest(c, anthropicStrategy, protocolCtx))
-  app.post('/v1/responses', (c) => handleProtocolRequest(c, openaiResponsesStrategy, protocolCtx))
+  app.post('/v1/messages', (c) =>
+    handleProtocolRequest(createProtocolRequestScope(c), anthropicStrategy, protocolCtx),
+  )
+  app.post('/v1/responses', (c) =>
+    handleProtocolRequest(createProtocolRequestScope(c), openaiResponsesStrategy, protocolCtx),
+  )
 
   // 进程级共享 cache(等价原模块级单例),在 createApp 作用域 new 一次,绝不在 per-request 路径 new
   const catalogCache = codexCatalogCache ?? new CodexCatalogCache()

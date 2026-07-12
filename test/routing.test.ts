@@ -29,14 +29,14 @@ function settings(enableFlatModelLookup = false): Settings {
 }
 
 describe('RoutingTable', () => {
-  it('resolves provider/model selectors and merged route data', () => {
+  it('resolves provider/model selectors and model route data', () => {
     const table = RoutingTable.fromSettings(settings())
     const route = table.resolve('openrouter/chat')
 
     expect(route.providerName).toBe('openrouter')
     expect(route.modelKey).toBe('chat')
     expect(route.upstreamModel).toBe('openrouter/chat')
-    expect(route.headers).toEqual({ 'X-Provider': 'provider', 'X-Model': 'model' })
+    expect(route.modelHeaders).toEqual({ 'X-Model': 'model' })
     // Without a PluginRegistry, resolveBuiltinPlugins resolves vendor_sse_error
     expect(route.resolvedPlugins).toHaveLength(1)
     expect(route.resolvedPlugins[0]!.plugin.name).toBe('vendor_sse_error')

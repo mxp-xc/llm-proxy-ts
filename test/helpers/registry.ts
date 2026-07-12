@@ -10,9 +10,6 @@ export function createProviderRegistryStub(
     languageModel() {
       return { model: {} as never }
     },
-    passthroughTransport() {
-      return { fetch: globalThis.fetch, apiKey: undefined }
-    },
     ...overrides,
   }
 }
