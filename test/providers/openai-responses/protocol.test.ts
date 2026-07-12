@@ -363,23 +363,35 @@ describe('mapResponsesRequestToAISDKInput', () => {
     expect(result.messages.map((m) => m.role)).toEqual(['assistant', 'user'])
   })
 
-  it('maps input_image content to text placeholder (ProtocolMessagePart has no image variant)', () => {
+  it('preserves input_image URL content as a file part', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',
       input: [
         {
           type: 'message',
           role: 'user',
-          content: [{ type: 'input_image', image_url: 'https://example.com/img.png' }],
+          content: [
+            { type: 'input_image', image_url: 'https://example.com/img.png', detail: 'high' },
+          ],
         },
       ],
     })
     expect(result.messages).toEqual([
-      { role: 'user', content: [{ type: 'text', text: 'https://example.com/img.png' }] },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: { type: 'url', url: new URL('https://example.com/img.png') },
+            providerOptions: { openai: { imageDetail: 'high' } },
+          },
+        ],
+      },
     ])
   })
 
-  it('extracts URL from input_image image_url object', () => {
+  it('preserves input_image image_url object as a file part', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',
       input: [
@@ -396,7 +408,43 @@ describe('mapResponsesRequestToAISDKInput', () => {
       ],
     })
     expect(result.messages).toEqual([
-      { role: 'user', content: [{ type: 'text', text: 'https://example.com/img.png' }] },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: { type: 'url', url: new URL('https://example.com/img.png') },
+            providerOptions: { openai: { imageDetail: 'auto' } },
+          },
+        ],
+      },
+    ])
+  })
+
+  it('preserves input_image data URLs as image file parts instead of text', () => {
+    const imageUrl = 'data:image/png;base64,iVBORw0KGgo='
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+      ],
+    })
+    expect(result.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: { type: 'url', url: new URL(imageUrl) },
+          },
+        ],
+      },
     ])
   })
 

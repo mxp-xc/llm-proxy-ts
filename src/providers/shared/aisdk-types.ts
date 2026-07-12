@@ -1,8 +1,9 @@
-import type { ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from 'ai'
+import type { FilePart, ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from 'ai'
 
 /** 协议映射器产生的消息内容分片 */
 export type ProtocolMessagePart =
   | { type: 'text'; text: string }
+  | FilePart
   | { type: 'reasoning'; text: string; providerOptions?: Record<string, Record<string, unknown>> }
   | {
       type: 'tool-call'

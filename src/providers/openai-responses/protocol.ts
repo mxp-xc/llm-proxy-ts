@@ -1,4 +1,4 @@
-import { type ToolSet, jsonSchema } from 'ai'
+import { type FilePart, type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
@@ -326,26 +326,73 @@ function extractTextFromContent(content: EasyInputContent): string {
     .join('\n')
 }
 
+function buildInputImageProviderOptions(
+  item: Record<string, unknown>,
+  imageUrl: unknown,
+): FilePart['providerOptions'] | undefined {
+  const detail =
+    typeof item.detail === 'string'
+      ? item.detail
+      : isRecord(imageUrl) && typeof imageUrl.detail === 'string'
+        ? imageUrl.detail
+        : undefined
+  return detail ? { openai: { imageDetail: detail } } : undefined
+}
+
+function hasUrlScheme(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)
+}
+
+function mapInputImageContent(item: Record<string, unknown>): ProtocolMessagePart {
+  const imageUrl = item.image_url
+  const resolvedUrl =
+    typeof imageUrl === 'string'
+      ? imageUrl
+      : isRecord(imageUrl) && typeof imageUrl.url === 'string'
+        ? imageUrl.url
+        : typeof item.url === 'string'
+          ? item.url
+          : undefined
+  const providerOptions = buildInputImageProviderOptions(item, imageUrl)
+  const withProviderOptions = providerOptions ? { providerOptions } : {}
+
+  if (resolvedUrl) {
+    if (hasUrlScheme(resolvedUrl)) {
+      return {
+        type: 'file',
+        mediaType: 'image',
+        data: { type: 'url', url: new URL(resolvedUrl) },
+        ...withProviderOptions,
+      }
+    }
+    return {
+      type: 'file',
+      mediaType: 'image',
+      data: { type: 'data', data: resolvedUrl },
+      ...withProviderOptions,
+    }
+  }
+
+  if (typeof item.file_id === 'string') {
+    return {
+      type: 'file',
+      mediaType: 'image',
+      data: { type: 'data', data: item.file_id },
+      ...withProviderOptions,
+    }
+  }
+
+  return { type: 'text', text: '' }
+}
+
 function mapEasyInputContent(content: EasyInputContent): string | ProtocolMessagePart[] {
   if (typeof content === 'string') return content
   return content.map((item): ProtocolMessagePart => {
     if (item.type === 'input_text' || item.type === 'output_text') {
       return { type: 'text', text: String(item.text ?? '') }
     }
-    // input_image: ProtocolMessagePart has no image variant.
-    // image_url is mapped to a text placeholder as a known limitation —
-    // multimodal content is not fully supported through the gateway yet.
     if (item.type === 'input_image') {
-      const imageUrl = item.image_url
-      const resolved =
-        typeof imageUrl === 'string'
-          ? imageUrl
-          : isRecord(imageUrl) && typeof imageUrl.url === 'string'
-            ? (imageUrl.url as string)
-            : typeof item.url === 'string'
-              ? item.url
-              : ''
-      return { type: 'text', text: resolved }
+      return mapInputImageContent(item)
     }
     // Fallback for unrecognized content parts: map to text
     return { type: 'text', text: String(item.text ?? '') }
