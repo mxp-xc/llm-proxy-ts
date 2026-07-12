@@ -8,19 +8,25 @@ const requestMock = vi.hoisted(() =>
   })),
 )
 
-const proxyAgentMock = vi.hoisted(() =>
-  vi.fn(function ProxyAgent(this: { options?: unknown }, options: unknown) {
+const agentMock = vi.hoisted(() =>
+  vi.fn(function Agent(this: { options?: unknown }, options?: unknown) {
     this.options = options
   }),
 )
-
+const envHttpProxyAgentMock = vi.hoisted(() =>
+  vi.fn(function EnvHttpProxyAgent(this: { options?: unknown }, options?: unknown) {
+    this.options = options
+  }),
+)
 vi.mock('undici', () => ({
-  ProxyAgent: proxyAgentMock,
+  Agent: agentMock,
+  EnvHttpProxyAgent: envHttpProxyAgentMock,
   request: requestMock,
 }))
 
 import {
   applyProviderAuth,
+  createDirectFetch,
   createProxyFetch,
   sanitizeHeaders,
 } from '../../src/providers/shared/provider-factory.js'
@@ -30,6 +36,7 @@ type RequestMockOptions = {
   body?: unknown
   signal?: AbortSignal
   headers?: Record<string, string>
+  dispatcher?: unknown
 }
 
 function getFirstRequestCall(): [string, RequestMockOptions] {
@@ -37,10 +44,28 @@ function getFirstRequestCall(): [string, RequestMockOptions] {
   return requestMock.mock.calls[0] as unknown as [string, RequestMockOptions]
 }
 
+function stubBunRuntime(): () => void {
+  const original = Object.getOwnPropertyDescriptor(process.versions, 'bun')
+  Object.defineProperty(process.versions, 'bun', {
+    value: '1.3.14',
+    configurable: true,
+  })
+
+  return () => {
+    if (original) {
+      Object.defineProperty(process.versions, 'bun', original)
+    } else {
+      delete (process.versions as NodeJS.ProcessVersions & { bun?: string }).bun
+    }
+  }
+}
+
 describe('provider fetch adapters', () => {
   beforeEach(() => {
     requestMock.mockClear()
-    proxyAgentMock.mockClear()
+    agentMock.mockClear()
+    envHttpProxyAgentMock.mockClear()
+    vi.unstubAllGlobals()
   })
 
   it('preserves Request method, body, headers, and signal through createProxyFetch', async () => {
@@ -57,8 +82,10 @@ describe('provider fetch adapters', () => {
 
     expect(response.status).toBe(202)
     expect(await response.text()).toBe('proxied')
-    expect(proxyAgentMock).toHaveBeenCalledWith({
-      uri: 'http://127.0.0.1:7890',
+    expect(envHttpProxyAgentMock).toHaveBeenCalledWith({
+      httpProxy: 'http://127.0.0.1:7890',
+      httpsProxy: 'http://127.0.0.1:7890',
+      noProxy: '',
       requestTls: { rejectUnauthorized: false },
       allowH2: false,
     })
@@ -69,6 +96,18 @@ describe('provider fetch adapters', () => {
     expect(options.body).toBe(request.body)
     expect(options.signal).toBe(request.signal)
     expect(options.headers).toMatchObject({ 'x-original': 'kept' })
+  })
+
+  it('uses an explicit direct dispatcher through createDirectFetch', async () => {
+    const directFetch = createDirectFetch()
+
+    const response = await directFetch('https://api.example.com/v1/models')
+
+    expect(response.status).toBe(202)
+    expect(agentMock).toHaveBeenCalledTimes(1)
+    const [url, options] = getFirstRequestCall()
+    expect(url).toBe('https://api.example.com/v1/models')
+    expect(options.dispatcher).toBe(agentMock.mock.instances[0])
   })
 
   it('lets init override Request defaults in createProxyFetch', async () => {
@@ -93,6 +132,48 @@ describe('provider fetch adapters', () => {
       'x-request-only': 'kept',
       'x-init-only': 'set',
     })
+  })
+
+  it('uses an empty noProxy dispatcher option so environment NO_PROXY does not bypass configured proxy', async () => {
+    const proxyFetch = createProxyFetch('http://127.0.0.1:7890', true)
+
+    await proxyFetch('https://api.example.com/v1/chat')
+
+    expect(envHttpProxyAgentMock).toHaveBeenCalledWith({
+      httpProxy: 'http://127.0.0.1:7890',
+      httpsProxy: 'http://127.0.0.1:7890',
+      noProxy: '',
+      requestTls: { rejectUnauthorized: true },
+      allowH2: false,
+    })
+  })
+
+  it('uses Bun fetch proxy options in Bun runtime', async () => {
+    const restoreBunRuntime = stubBunRuntime()
+    const response = new Response('bun-proxied', { status: 203 })
+    const bunFetch = vi.fn(async () => response)
+    vi.stubGlobal('fetch', bunFetch)
+
+    try {
+      const proxyFetch = createProxyFetch('http://127.0.0.1:9000', false)
+
+      const actual = await proxyFetch('http://httpbin.org/anything', {
+        headers: { 'x-probe': '1' },
+      })
+
+      expect(actual).toBe(response)
+      expect(requestMock).not.toHaveBeenCalled()
+      expect(bunFetch).toHaveBeenCalledWith(
+        'http://httpbin.org/anything',
+        expect.objectContaining({
+          headers: { 'x-probe': '1' },
+          proxy: 'http://127.0.0.1:9000',
+          tls: { rejectUnauthorized: false },
+        }),
+      )
+    } finally {
+      restoreBunRuntime()
+    }
   })
 })
 

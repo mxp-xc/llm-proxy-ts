@@ -1,4 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const createDirectFetchMock = vi.hoisted(() =>
+  vi.fn(() => ((input, init) => globalThis.fetch(input, init)) as typeof fetch),
+)
+
+vi.mock('../../src/providers/shared/provider-factory.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  createDirectFetch: createDirectFetchMock,
+}))
+
 import { createApp } from '../../src/server/app.js'
 import { createProviderRegistry, TokenManager } from '../../src/index.js'
 import {
@@ -15,7 +25,10 @@ import type { ModelGateway } from '../../src/server/types.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import type pino from 'pino'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  createDirectFetchMock.mockClear()
+})
 
 describe('openai provider /v1/responses via AI SDK passthrough override', () => {
   function makeOpenaiSettings() {

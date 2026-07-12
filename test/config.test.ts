@@ -50,6 +50,27 @@ describe('config', () => {
     )
   })
 
+  it('does not expose proxy no-proxy in the generated schema', () => {
+    const schema = generateSettingsJsonSchema()
+
+    expect(JSON.stringify(schema)).not.toContain('no-proxy')
+  })
+
+  it('ignores unsupported proxy no-proxy settings', () => {
+    const settings = parseAndValidateSettings(`{
+      "proxy": {
+        "url": "http://127.0.0.1:7890",
+        "verify": false,
+        "no-proxy": "localhost,127.0.0.1,.internal.example"
+      }
+    }`)
+
+    expect(settings.proxy).toEqual({
+      url: 'http://127.0.0.1:7890',
+      verify: false,
+    })
+  })
+
   it('loads api key arrays and resolves env placeholders', async () => {
     const { path: settingsPath } = await writeTempSettings(
       `{

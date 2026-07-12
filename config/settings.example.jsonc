@@ -6,6 +6,8 @@
     "port": 8056,
   },
   "requestTimeoutMs": 30000,
+  // To use an explicit proxy:
+  // "proxy": { "url": "http://127.0.0.1:7890", "verify": true },
   "proxy": null,
   "routing": {
     "enableFlatModelLookup": true,

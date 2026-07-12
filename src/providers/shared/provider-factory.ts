@@ -1,5 +1,6 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { ProxyAgent, request } from 'undici'
+import { Agent, EnvHttpProxyAgent, request } from 'undici'
+import type { Dispatcher } from 'undici'
 import type { OpenAICompatibleProviderConfig, ProviderConfig } from '../../config.js'
 
 export interface ProviderBuildInput<TProvider extends ProviderConfig = ProviderConfig> {
@@ -51,8 +52,8 @@ export function createOpenAICompatibleProvider(
  * 2. Set oauth-placeholder if customFetch is present but no apiKey (bypasses loadApiKey)
  * 3. Compose customFetch with proxy fetch if applicable
  *
- * `proxyFetch` 是 registry 作用域预构建的共享 ProxyAgent fetch（per-request 不再 new）;
- * 由调用方经 createProxyFetch 一次性构建后透传。无代理时传 undefined。
+ * `proxyFetch` 是 registry 作用域预构建的共享 transport fetch（per-request 不再 new）；
+ * 有代理时由 createProxyFetch 构建，无代理时由 createDirectFetch 构建，避免隐式环境代理。
  */
 export function applyProviderAuth(
   options: { apiKey?: string; fetch?: typeof fetch },
@@ -76,21 +77,66 @@ export function applyProviderAuth(
   }
 }
 
+type RequestOptions = NonNullable<Parameters<typeof request>[1]>
+type BunRequestInit = RequestInit & {
+  proxy?: string
+  tls?: {
+    rejectUnauthorized?: boolean
+  }
+}
+
+export function createDirectFetch(): typeof fetch {
+  return createUndiciFetch(new Agent())
+}
+
 export function createProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {
+  if (isBunRuntime()) {
+    return createBunProxyFetch(proxyUrl, verify)
+  }
+
   // undici 8 默认 allowH2: true（lib/core/connect.js），经 CONNECT 隧道连 HTTPS 上游会 ALPN 协商 h2。
   // 实测经 HTTP 代理连上游时，大流式响应偶发 NGHTTP2_FLOW_CONTROL_ERROR（ERR_HTTP2_STREAM_ERROR；
   // undici h2 client 走 node:http2 的 ClientHttp2Stream）。强制 HTTP/1.1 规避 HTTP/2 流控问题。
-  const dispatcher = new ProxyAgent({
-    uri: proxyUrl,
+  const dispatcher = new EnvHttpProxyAgent({
+    httpProxy: proxyUrl,
+    httpsProxy: proxyUrl,
+    noProxy: '',
     requestTls: { rejectUnauthorized: verify },
     allowH2: false,
   })
 
+  return createUndiciFetch(dispatcher)
+}
+
+function isBunRuntime(): boolean {
+  return typeof (process.versions as NodeJS.ProcessVersions & { bun?: unknown }).bun === 'string'
+}
+
+function createBunProxyFetch(proxyUrl: string, verify: boolean): typeof fetch {
+  return async (input, init) => {
+    const bunInit = init as BunRequestInit | undefined
+    const proxiedInit: BunRequestInit = {
+      ...bunInit,
+      proxy: proxyUrl,
+      tls: {
+        ...bunInit?.tls,
+        rejectUnauthorized: verify,
+      },
+    }
+
+    return globalThis.fetch(input, proxiedInit as RequestInit)
+  }
+}
+
+function getFetchUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+}
+
+function createUndiciFetch(dispatcher: Dispatcher): typeof fetch {
   return async (input, init) => {
     const requestInput = input instanceof Request ? input : undefined
-    const url =
-      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-    const options: Parameters<typeof request>[1] = { dispatcher }
+    const url = getFetchUrl(input)
+    const options: RequestOptions = { dispatcher }
     const method = init?.method ?? requestInput?.method
     const body = init?.body ?? requestInput?.body
     const requestHeaders = mergeFetchHeaders(requestInput?.headers, init?.headers)

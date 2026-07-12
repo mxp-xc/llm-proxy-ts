@@ -8,6 +8,7 @@ import { noopLogger } from '../types.js'
 import type { Logger } from '../types.js'
 import type { AuthFetchRegistry } from '../plugins/registry.js'
 import {
+  createDirectFetch,
   createOpenAICompatibleProvider,
   createProxyFetch,
   type ProviderBuildInput,
@@ -91,17 +92,20 @@ export async function createProviderRegistry(
   const providerFactory = factory ?? defaultFactory
   const apiKeyIndexes = new Map<string, number>()
 
-  // 共享 ProxyAgent fetch:settings 不可变,registry 作用域一次性构建,
-  // 所有 languageModel() 调用复用同一 ProxyAgent(原 per-request new ProxyAgent 消除)。
+  // 共享 transport fetch:settings 不可变,registry 作用域一次性构建。
+  // proxy:null 也使用显式直连 Agent，避免终端 http_proxy 覆盖配置文件语义。
   const sharedProxyFetch = settings.proxy
     ? createProxyFetch(settings.proxy.url, settings.proxy.verify)
-    : undefined
+    : createDirectFetch()
 
   // 启动时记录代理配置,便于排查「请求是否走代理」。url 经 safeProxyUrl 剥离凭据后以
   // 结构化 URL 形式输出(如 http://127.0.0.1:9000)。
   if (settings.proxy) {
     log.info(
-      { proxyUrl: safeProxyUrl(settings.proxy.url), verify: settings.proxy.verify },
+      {
+        proxyUrl: safeProxyUrl(settings.proxy.url),
+        verify: settings.proxy.verify,
+      },
       'proxy configured',
     )
   } else {

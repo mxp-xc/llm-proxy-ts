@@ -326,7 +326,7 @@ describe('shared ProxyAgent singleton', () => {
       .spyOn(providerFactoryModule, 'createProxyFetch')
       .mockReturnValue((() => Promise.resolve(new Response())) as typeof fetch)
 
-    const noProxySettings = makeSettings({
+    const settingsWithoutProxy = makeSettings({
       openrouter: {
         type: 'openai-compatible',
         baseURL: 'https://openrouter.ai/api/v1',
@@ -340,7 +340,7 @@ describe('shared ProxyAgent singleton', () => {
     })
 
     const registry = await createProviderRegistry(
-      noProxySettings,
+      settingsWithoutProxy,
       undefined,
       mockLogger,
       undefined,

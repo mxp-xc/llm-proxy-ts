@@ -1,4 +1,4 @@
-import { createProxyFetch } from '../../providers/shared/provider-factory.js'
+import { createDirectFetch, createProxyFetch } from '../../providers/shared/provider-factory.js'
 import type { ModelLimit } from '../../providers/model-types.js'
 import type { OpenAIProviderConfig, Settings } from '../../config.js'
 import type { DiscoveredModelList } from '../../plugins/types.js'
@@ -103,7 +103,7 @@ export async function fetchUpstreamModels({
 }: DiscoverModelsOptions): Promise<UpstreamModelResponse[]> {
   const fetchFn = proxySettings
     ? createProxyFetch(proxySettings.url, proxySettings.verify)
-    : globalThis.fetch
+    : createDirectFetch()
 
   // 1. 铺 provider 级静态 headers
   const headers: Record<string, string> = { ...providerHeaders }

@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const proxyFetchMock = vi.hoisted(() => vi.fn())
 const createProxyFetchMock = vi.hoisted(() => vi.fn(() => proxyFetchMock))
+const directFetchMock = vi.hoisted(() => vi.fn())
+const createDirectFetchMock = vi.hoisted(() => vi.fn(() => directFetchMock))
 
 vi.mock('../../src/providers/shared/provider-factory.js', () => ({
+  createDirectFetch: createDirectFetchMock,
   createProxyFetch: createProxyFetchMock,
 }))
 
@@ -57,21 +60,47 @@ describe('fetchUpstreamModels', () => {
   let mockFetch: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve(mockModelList),
-    })
+    mockFetch = directFetchMock
     proxyFetchMock.mockReset()
     proxyFetchMock.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(mockModelList),
     })
+    directFetchMock.mockReset()
+    directFetchMock.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockModelList),
+    })
     createProxyFetchMock.mockClear()
-    vi.stubGlobal('fetch', mockFetch)
+    createDirectFetchMock.mockClear()
+    vi.stubGlobal('fetch', vi.fn())
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+
+  it('uses explicit direct fetch when proxy is disabled in settings', async () => {
+    vi.stubEnv('http_proxy', 'http://env-proxy.invalid:8080')
+    const globalFetch = vi.fn().mockRejectedValue(new Error('global fetch used'))
+    vi.stubGlobal('fetch', globalFetch)
+
+    const models = await fetchUpstreamModels({
+      baseURL: 'https://api.example.com/v1',
+      apiKey: 'test-key',
+      proxySettings: null,
+    })
+
+    expect(models).toHaveLength(3)
+    expect(createDirectFetchMock).toHaveBeenCalledTimes(1)
+    expect(directFetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/models',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
+      }),
+    )
+    expect(globalFetch).not.toHaveBeenCalled()
   })
 
   it('fetches and sorts models from upstream', async () => {
@@ -331,11 +360,14 @@ describe('fetchUpstreamModels with authMode=anthropic', () => {
   let mockFetch: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    mockFetch = vi.fn().mockResolvedValue({
+    mockFetch = directFetchMock
+    directFetchMock.mockReset()
+    directFetchMock.mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(mockModelList),
     })
-    vi.stubGlobal('fetch', mockFetch)
+    createDirectFetchMock.mockClear()
+    vi.stubGlobal('fetch', vi.fn())
   })
 
   afterEach(() => {
@@ -406,8 +438,8 @@ describe('fetchUpstreamModels with authMode=anthropic', () => {
   })
 
   it('follows Anthropic pagination via has_more + last_id', async () => {
-    mockFetch = vi
-      .fn()
+    mockFetch
+      .mockReset()
       .mockResolvedValueOnce({
         ok: true,
         json: () =>
@@ -428,7 +460,6 @@ describe('fetchUpstreamModels with authMode=anthropic', () => {
             last_id: null,
           }),
       })
-    vi.stubGlobal('fetch', mockFetch)
 
     const models = await fetchUpstreamModels({
       baseURL: 'https://api.anthropic.com/v1',
