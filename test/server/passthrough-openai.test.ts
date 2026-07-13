@@ -17,6 +17,7 @@ import {
   mergeOpenAIResponsesRequestBody,
   type OpenAIResponsesPassthroughFetchState,
 } from '../../src/providers/openai-responses/passthrough.js'
+import { ADDITIONAL_TOOLS_ANCHOR_PREFIX } from '../../src/providers/openai-responses/protocol.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { authCodeConfig, createMemoryPersistence } from '../helpers/oauth.js'
@@ -152,6 +153,18 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
 
     expect(merged).not.toHaveProperty('instructions')
     expect(merged.prompt_cache_key).toBe('cache-key')
+    expect(merged.input).toEqual([
+      {
+        type: 'message',
+        role: 'developer',
+        content: 'Be helpful\nBe precise',
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'hello' }],
+      },
+    ])
   })
 
   it('restores raw include and raw-only web_search tool fields in the merged SDK body', () => {
@@ -189,6 +202,201 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
         search_content_types: ['text', 'image'],
       },
     ])
+  })
+
+  it.each([
+    {
+      name: 'leading',
+      rawInput: [
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'a' }],
+        },
+        { type: 'message', role: 'user', content: 'a' },
+      ],
+      sdkInput: [{ role: 'user', content: 'sdk-a' }],
+      expectedTypes: ['additional_tools', 'message'],
+    },
+    {
+      name: 'middle',
+      rawInput: [
+        { type: 'message', role: 'developer', content: 'a' },
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'b' }],
+        },
+        { type: 'message', role: 'user', content: 'b' },
+      ],
+      sdkInput: [
+        { role: 'developer', content: 'sdk-a' },
+        { role: 'user', content: 'sdk-b' },
+      ],
+      expectedTypes: ['message', 'additional_tools', 'message'],
+    },
+    {
+      name: 'trailing and repeated',
+      rawInput: [
+        { type: 'message', role: 'user', content: 'a' },
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'b' }],
+        },
+        {
+          type: 'additional_tools',
+          role: 'developer',
+          tools: [{ type: 'function', name: 'c' }],
+        },
+      ],
+      sdkInput: [{ role: 'user', content: 'sdk-a' }],
+      expectedTypes: ['message', 'additional_tools', 'additional_tools'],
+    },
+  ])(
+    'injects $name additional_tools without replacing SDK messages',
+    ({ rawInput, sdkInput, expectedTypes }) => {
+      const merged = mergeOpenAIResponsesRequestBody(
+        {
+          model: 'upstream',
+          input: sdkInput,
+          tools: [{ type: 'function', name: 'from-additional-tools' }],
+        },
+        { model: 'route/model', input: rawInput },
+      )
+
+      expect(
+        (merged.input as Array<Record<string, unknown>>).map((item) => item.type ?? item.role),
+      ).toEqual(expectedTypes)
+      expect(JSON.stringify(merged.input)).toContain('sdk-a')
+      expect(merged).not.toHaveProperty('tools')
+    },
+  )
+
+  it('aligns additional_tools around raw web_search_call items skipped by the SDK mapping', () => {
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [
+          { role: 'developer', content: 'sdk-a' },
+          { role: 'user', content: 'sdk-b' },
+        ],
+        tools: [{ type: 'function', name: 'later' }],
+      },
+      {
+        model: 'route/model',
+        input: [
+          { type: 'message', role: 'developer', content: 'raw-a' },
+          { type: 'web_search_call', id: 'ws_1', status: 'completed' },
+          {
+            type: 'additional_tools',
+            role: 'developer',
+            tools: [{ type: 'function', name: 'later' }],
+          },
+          { type: 'message', role: 'user', content: 'raw-b' },
+        ],
+      },
+    )
+
+    expect(merged.input).toEqual([
+      { type: 'message', role: 'developer', content: 'sdk-a' },
+      expect.objectContaining({ type: 'additional_tools' }),
+      { type: 'message', role: 'user', content: 'sdk-b' },
+    ])
+  })
+
+  it('trusts SDK-native additional_tools while restoring missing message types', () => {
+    const nativeAdditionalTools = { type: 'additional_tools', role: 'developer', tools: [] }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [nativeAdditionalTools, { role: 'user', content: 'sdk' }],
+        tools: [{ type: 'function', name: 'sdk' }],
+      },
+      {
+        model: 'route/model',
+        input: [{ type: 'additional_tools', role: 'developer', tools: [] }],
+      },
+    )
+
+    expect(merged.input).toEqual([
+      nativeAdditionalTools,
+      { type: 'message', role: 'user', content: 'sdk' },
+    ])
+    expect(merged.tools).toEqual([{ type: 'function', name: 'sdk' }])
+  })
+
+  it('removes only the internal anchor when the SDK emits additional_tools natively', () => {
+    const marker = `${ADDITIONAL_TOOLS_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`
+    const nativeAdditionalTools = {
+      type: 'additional_tools',
+      role: 'developer',
+      tools: [{ type: 'function', name: 'sdk' }],
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [
+          {
+            role: 'assistant',
+            phase: 'commentary',
+            content: [{ type: 'output_text', text: marker }],
+          },
+          nativeAdditionalTools,
+        ],
+        tools: [{ type: 'function', name: 'sdk' }],
+      },
+      {
+        model: 'route/model',
+        input: [{ type: 'additional_tools', role: 'developer', tools: [] }],
+      },
+    )
+
+    expect(merged.input).toEqual([nativeAdditionalTools])
+    expect(merged.tools).toEqual([{ type: 'function', name: 'sdk' }])
+  })
+
+  it('keeps raw top-level tools separate from input additional_tools', () => {
+    const rawTopTools = [{ type: 'function', name: 'top' }]
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [{ role: 'user', content: 'sdk' }],
+        tools: [
+          { type: 'function', name: 'top' },
+          { type: 'function', name: 'later' },
+        ],
+      },
+      {
+        model: 'route/model',
+        input: [
+          {
+            type: 'additional_tools',
+            role: 'developer',
+            tools: [{ type: 'function', name: 'later' }],
+          },
+          { type: 'message', role: 'user', content: 'raw' },
+        ],
+        tools: rawTopTools,
+      },
+    )
+
+    expect(merged.tools).toEqual(rawTopTools)
+  })
+
+  it('throws when raw and SDK input items cannot be aligned safely', () => {
+    expect(() =>
+      mergeOpenAIResponsesRequestBody(
+        { model: 'upstream', input: [] },
+        {
+          model: 'route/model',
+          input: [
+            { type: 'message', role: 'user', content: 'raw' },
+            { type: 'additional_tools', role: 'developer', tools: [] },
+          ],
+        },
+      ),
+    ).toThrow('Cannot align additional_tools with SDK input')
   })
 
   it('sets text/event-stream accept header for streaming upstream responses requests', async () => {
@@ -434,6 +642,201 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     expect(forwardedBody?.input).not.toEqual(rawInput)
     expect(JSON.stringify(forwardedBody?.input)).not.toContain('raw_item_should_not_be_deep_merged')
     expect(JSON.stringify(forwardedBody?.input)).not.toContain('raw_part_should_not_be_deep_merged')
+  })
+
+  it('preserves positional additional_tools in the final non-streaming SDK request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: [
+          {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'developer marker' }],
+          },
+          {
+            type: 'additional_tools',
+            role: 'developer',
+            tools: [
+              {
+                type: 'function',
+                name: 'lookup',
+                parameters: { type: 'object', properties: {} },
+              },
+            ],
+          },
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'user marker' }],
+          },
+        ],
+        reasoning: { effort: 'medium', context: 'all_turns' },
+        stream: false,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(forwardedBody?.model).toBe('gpt-5')
+    expect(forwardedBody?.reasoning).toEqual({ effort: 'medium', context: 'all_turns' })
+    expect(forwardedBody).not.toHaveProperty('tools')
+    expect(
+      (forwardedBody?.input as Array<Record<string, unknown>>).map(
+        (item) => item.type ?? item.role,
+      ),
+    ).toEqual(['message', 'additional_tools', 'message'])
+    expect(forwardedBody?.input).toEqual([
+      { type: 'message', role: 'developer', content: 'developer marker' },
+      expect.objectContaining({ type: 'additional_tools', role: 'developer' }),
+      expect.objectContaining({ type: 'message', role: 'user' }),
+    ])
+  })
+
+  it.each([
+    { name: 'without conversation or store', conversation: undefined, store: undefined },
+    { name: 'with conversation', conversation: 'conv_123', store: undefined },
+    { name: 'with store', conversation: undefined, store: true },
+  ])(
+    'preserves additional_tools after an SDK-expanded agent_message $name',
+    async ({ conversation, store }) => {
+      const settings = makeOpenaiSettings()
+      let forwardedBody: Record<string, unknown> | undefined
+      vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+        forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        return Response.json(makeRawResponseBody(), {
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+      const providerRegistry = await createProviderRegistry(settings)
+      const app = createApp({ settings, providerRegistry })
+
+      const res = await app.request('/codex/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openai/chat',
+          ...(conversation !== undefined && { conversation }),
+          ...(store !== undefined && { store }),
+          input: [
+            {
+              type: 'agent_message',
+              author: '/root',
+              recipient: '/root/worker',
+              content: [{ type: 'input_text', text: 'compute 19 + 23' }],
+            },
+            {
+              type: 'additional_tools',
+              role: 'developer',
+              tools: [
+                {
+                  type: 'function',
+                  name: 'lookup',
+                  parameters: { type: 'object', properties: {} },
+                },
+              ],
+            },
+            {
+              type: 'agent_message',
+              author: '/root/worker',
+              recipient: '/root',
+              content: [{ type: 'input_text', text: '42' }],
+            },
+          ],
+          stream: false,
+        }),
+      })
+
+      expect(res.status).toBe(200)
+      expect(
+        (forwardedBody?.input as Array<Record<string, unknown>>).map(
+          (item) => item.type ?? item.role,
+        ),
+      ).toEqual(['message', 'message', 'additional_tools', 'message'])
+      expect(forwardedBody).not.toHaveProperty('tools')
+    },
+  )
+
+  it('preserves positional additional_tools in the final streaming SDK request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      const events = [
+        {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_stream', object: 'response', status: 'in_progress', output: [] },
+        },
+        {
+          type: 'response.completed',
+          sequence_number: 1,
+          response: makeRawResponseBody(),
+        },
+      ]
+      return new Response(
+        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: [
+          {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'developer marker' }],
+          },
+          {
+            type: 'additional_tools',
+            role: 'developer',
+            tools: [
+              {
+                type: 'function',
+                name: 'lookup',
+                parameters: { type: 'object', properties: {} },
+              },
+            ],
+          },
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'user marker' }],
+          },
+        ],
+        reasoning: { effort: 'medium', context: 'all_turns' },
+        stream: true,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    await res.text()
+    expect(forwardedBody?.stream).toBe(true)
+    expect(forwardedBody?.reasoning).toEqual({ effort: 'medium', context: 'all_turns' })
+    expect(forwardedBody).not.toHaveProperty('tools')
+    expect(
+      (forwardedBody?.input as Array<Record<string, unknown>>).map(
+        (item) => item.type ?? item.role,
+      ),
+    ).toEqual(['message', 'additional_tools', 'message'])
   })
 
   it('rebuilds response.failed SSE from retry-wrapped AI SDK stream errors', async () => {

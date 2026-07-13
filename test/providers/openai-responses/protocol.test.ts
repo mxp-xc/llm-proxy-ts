@@ -1261,7 +1261,26 @@ describe('mapResponsesRequestToAISDKInput', () => {
       input: 'hi',
       reasoning: { effort: 'xhigh' },
     })
-    expect(result.providerOptions).toEqual({ openai: { reasoningEffort: 'xhigh' } })
+    expect(result.providerOptions).toEqual({
+      openai: { reasoningEffort: 'xhigh', reasoningSummary: null },
+    })
+  })
+
+  it('maps reasoning.context and suppresses the SDK default summary when omitted', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5.6',
+        input: 'hello',
+        reasoning: { effort: 'medium', context: 'all_turns' },
+      } as OpenAIResponsesRequest,
+      'openai',
+    )
+
+    expect(result.providerOptions?.openai).toMatchObject({
+      reasoningEffort: 'medium',
+      reasoningContext: 'all_turns',
+      reasoningSummary: null,
+    })
   })
 
   it('maps reasoning.summary to providerOptions.openai.reasoningSummary', () => {
@@ -1319,7 +1338,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
       custom_param: 'value',
     })
     expect(result.providerOptions).toEqual({
-      openai: { reasoningEffort: 'high', custom_param: 'value' },
+      openai: { reasoningEffort: 'high', reasoningSummary: null, custom_param: 'value' },
     })
   })
 

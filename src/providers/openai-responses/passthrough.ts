@@ -1,5 +1,5 @@
 import type { ExecutionOverrideInput, ExecutionOverrideConfig } from '../shared/strategy.js'
-import type { OpenAIResponsesRequest } from './protocol.js'
+import { ADDITIONAL_TOOLS_ANCHOR_PREFIX, type OpenAIResponsesRequest } from './protocol.js'
 import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 import { renderOpenAIResponsesRawResponse, renderOpenAIResponsesRawSSE } from './renderer.js'
 
@@ -109,6 +109,110 @@ function mergeRequestHeadersForBody(
   return mergedHeaders
 }
 
+function isAdditionalToolsAnchor(item: unknown): boolean {
+  if (!isRecord(item) || item.role !== 'assistant' || item.phase !== 'commentary') return false
+  if (!Array.isArray(item.content) || item.content.length !== 1) {
+    return false
+  }
+
+  const content = item.content[0]
+  if (!isRecord(content) || content.type !== 'output_text' || typeof content.text !== 'string') {
+    return false
+  }
+  const marker = content.text.slice(ADDITIONAL_TOOLS_ANCHOR_PREFIX.length)
+  return (
+    content.text.startsWith(ADDITIONAL_TOOLS_ANCHOR_PREFIX) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(marker)
+  )
+}
+
+function restoreMessageItemType(item: unknown): unknown {
+  if (!isRecord(item) || 'type' in item || !('content' in item)) return item
+  if (
+    item.role !== 'system' &&
+    item.role !== 'developer' &&
+    item.role !== 'user' &&
+    item.role !== 'assistant'
+  ) {
+    return item
+  }
+  return { type: 'message', ...item }
+}
+
+function restoreMessageItemTypes(body: Record<string, unknown>): Record<string, unknown> {
+  const input = body.input
+  if (!Array.isArray(input)) return body
+
+  let changed = false
+  const restoredInput = input.map((item) => {
+    const restored = restoreMessageItemType(item)
+    if (restored !== item) changed = true
+    return restored
+  })
+  return changed ? { ...body, input: restoredInput } : body
+}
+
+function patchAdditionalToolsInput(
+  sdkBody: Record<string, unknown>,
+  rawBody: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawInput = rawBody.input
+  if (!Array.isArray(rawInput)) return sdkBody
+  if (!rawInput.some((item) => isRecord(item) && item.type === 'additional_tools')) {
+    return sdkBody
+  }
+
+  const sdkInput = sdkBody.input
+  if (!Array.isArray(sdkInput)) {
+    throw new Error('Cannot align additional_tools with non-array SDK input')
+  }
+  if (sdkInput.some((item) => isRecord(item) && item.type === 'additional_tools')) {
+    if (!sdkInput.some(isAdditionalToolsAnchor)) return sdkBody
+    return { ...sdkBody, input: sdkInput.filter((item) => !isAdditionalToolsAnchor(item)) }
+  }
+
+  const rawAdditionalTools = rawInput.filter(
+    (item): item is Record<string, unknown> => isRecord(item) && item.type === 'additional_tools',
+  )
+  const anchorCount = sdkInput.filter(isAdditionalToolsAnchor).length
+  let patchedInput: unknown[]
+  if (anchorCount > 0) {
+    if (anchorCount !== rawAdditionalTools.length) {
+      throw new Error('Cannot align additional_tools with SDK input: anchor count mismatch')
+    }
+    let additionalIndex = 0
+    patchedInput = sdkInput.map((item) =>
+      isAdditionalToolsAnchor(item) ? rawAdditionalTools[additionalIndex++] : item,
+    )
+  } else {
+    patchedInput = []
+    let sdkIndex = 0
+    for (const rawItem of rawInput) {
+      if (isRecord(rawItem) && rawItem.type === 'additional_tools') {
+        patchedInput.push(rawItem)
+        continue
+      }
+      if (isRecord(rawItem) && rawItem.type === 'web_search_call') continue
+      if (sdkIndex >= sdkInput.length) {
+        throw new Error('Cannot align additional_tools with SDK input: missing SDK item')
+      }
+      patchedInput.push(sdkInput[sdkIndex])
+      sdkIndex += 1
+    }
+    if (sdkIndex !== sdkInput.length) {
+      throw new Error('Cannot align additional_tools with SDK input: unused SDK items')
+    }
+  }
+
+  const patched: Record<string, unknown> = {
+    ...sdkBody,
+    input: patchedInput,
+  }
+  if (Array.isArray(rawBody.tools)) patched.tools = rawBody.tools
+  else delete patched.tools
+  return patched
+}
+
 export function mergeOpenAIResponsesRequestBody(
   sdkBody: Record<string, unknown>,
   rawBody: unknown,
@@ -137,7 +241,7 @@ export function mergeOpenAIResponsesRequestBody(
       merged[key] = value
     }
   }
-  return merged
+  return patchAdditionalToolsInput(restoreMessageItemTypes(merged), rawBody)
 }
 
 export function createOpenAIResponsesRequestBodyMergeFetch(

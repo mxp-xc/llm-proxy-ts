@@ -104,8 +104,10 @@ describe('ErrorLogger', () => {
 
   it('does not throw when file write fails (logs fallback)', () => {
     const errorSpy = vi.spyOn(fallbackLogger, 'error').mockImplementation(() => undefined)
+    const blockingFile = join(tmpLogDir, 'not-a-directory')
+    writeFileSync(blockingFile, 'blocks mkdirSync')
     const logger = new ErrorLogger({
-      logDir: '/nonexistent/path/that/cannot/be/created',
+      logDir: blockingFile,
       enabled: true,
       maxBodyLength: 262144,
     })

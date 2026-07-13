@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto'
 import { type FilePart, type ToolSet, jsonSchema } from 'ai'
 import { openai } from '@ai-sdk/openai'
 import type { AISDKInput, ProtocolMessage, ProtocolMessagePart } from '../shared/aisdk-types.js'
 import { mapProviderOptions, mapToolToAISDK } from '../shared/protocol-utils.js'
 import { isRecord, type NamespaceFlatMap } from '../protocol-types.js'
 import { z } from 'zod/v3'
+
+export const ADDITIONAL_TOOLS_ANCHOR_PREFIX = 'llm_proxy_additional_tools_anchor:'
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -827,6 +830,20 @@ function pushToolResultMessage(
   })
 }
 
+function createAdditionalToolsAnchor(): ProtocolMessage {
+  const marker = `${ADDITIONAL_TOOLS_ANCHOR_PREFIX}${randomUUID()}`
+  return {
+    role: 'assistant',
+    content: [
+      {
+        type: 'text',
+        text: marker,
+        providerOptions: { openai: { phase: 'commentary' } },
+      },
+    ],
+  }
+}
+
 // ─── Mapping ────────────────────────────────────────────────
 
 const mappedResponsesRequestKeys = new Set([
@@ -1035,8 +1052,9 @@ export function mapResponsesRequestToAISDKInput(
           ],
         })
       } else if ('type' in item && item.type === 'additional_tools') {
-        // Codex Desktop 的 input 内工具声明块，不是对话内容；顶层 tools / tool_search_output
-        // 才会进入 toolSet 构造。这里跳过，避免把声明块误当 developer message。
+        // AI SDK 尚不能表达 additional_tools。原生 Responses 路径先放置内部锚点，
+        // final fetch 再原位替换；兼容 provider 继续只把其中工具加入 ToolSet。
+        if (nativeResponses) messages.push(createAdditionalToolsAnchor())
         continue
       } else {
         // EasyInputMessage
@@ -1081,12 +1099,17 @@ export function mapResponsesRequestToAISDKInput(
   if (request.parallel_tool_calls !== undefined) {
     providerOptions.parallelToolCalls = request.parallel_tool_calls
   }
-  // reasoning.effort/summary：AI SDK 期望 reasoningEffort/reasoningSummary（扁平 camelCase），
+  // reasoning：AI SDK 期望 reasoningEffort/reasoningSummary/reasoningContext（扁平 camelCase），
   // 非 reasoning.effort 嵌套对象（原样透传会被 zod 丢弃）
   if (request.reasoning !== undefined) {
-    const reasoning = request.reasoning as { effort?: string; summary?: string }
+    const reasoning = request.reasoning as {
+      effort?: string
+      summary?: string
+      context?: string
+    }
     if (reasoning.effort !== undefined) providerOptions.reasoningEffort = reasoning.effort
-    if (reasoning.summary !== undefined) providerOptions.reasoningSummary = reasoning.summary
+    if (reasoning.context !== undefined) providerOptions.reasoningContext = reasoning.context
+    providerOptions.reasoningSummary = reasoning.summary ?? null
   }
   // text.verbosity：AI SDK 期望 textVerbosity
   if (request.text !== undefined) {
