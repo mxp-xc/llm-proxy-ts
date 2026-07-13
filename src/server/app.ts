@@ -132,7 +132,6 @@ export function createApp({
           provider: requestLogContext?.provider,
           requestedModel: requestLogContext?.requestedModel,
           actualModel: requestLogContext?.actualModel,
-          keySelection: requestLogContext?.keySelection,
         },
         'request completed',
       )

@@ -493,11 +493,6 @@ export async function handleProtocolRequest<
     actualModel: route.upstreamModel,
   }
 
-  requestScope.logger.info(
-    { requestModel, upstreamModel: route.upstreamModel, provider: route.providerName },
-    'route resolved',
-  )
-
   const loginUrl = buildOAuthLoginUrl(ctx.settings, route.providerName)
   const providerType = route.provider.type
 
@@ -531,6 +526,19 @@ export async function handleProtocolRequest<
     if (modelResult.keySelection) {
       requestLogContext.keySelection = modelResult.keySelection
     }
+    requestScope.logger.info(
+      {
+        provider: route.providerName,
+        requestModel,
+        upstreamModel: route.upstreamModel,
+        requestedModel: requestModel,
+        actualModel: route.upstreamModel,
+        modelKey: route.modelKey,
+        modelSelector: route.modelSelector,
+        keySelection: modelResult.keySelection,
+      },
+      'route resolved',
+    )
   } catch (error) {
     if (error instanceof OAuthError && error.code === 'auth_required') {
       requestScope.logger.error(

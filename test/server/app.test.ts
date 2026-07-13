@@ -1032,8 +1032,11 @@ describe('request logging', () => {
       }),
     })
 
+    const resolved = logs.find((e) => e.msg === 'route resolved')
+    expect(resolved?.keySelection).toEqual({ index: 1, count: 2 })
+
     const completed = logs.find((e) => e.msg === 'request completed')
-    expect(completed?.keySelection).toEqual({ index: 1, count: 2 })
+    expect(completed?.keySelection).toBeUndefined()
   })
 
   it('logs keySelection for openai responses AI SDK path', async () => {
@@ -1074,8 +1077,11 @@ describe('request logging', () => {
     })
 
     expect(response.status).toBe(200)
+    const resolved = logs.find((e) => e.msg === 'route resolved')
+    expect(resolved?.keySelection).toEqual({ index: 0, count: 1 })
+
     const completed = logs.find((e) => e.msg === 'request completed')
-    expect(completed?.keySelection).toEqual({ index: 0, count: 1 })
+    expect(completed?.keySelection).toBeUndefined()
   })
 })
 
