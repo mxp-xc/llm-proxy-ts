@@ -44,6 +44,7 @@ export interface ModelGateway {
     requestModel: string
     abortSignal?: AbortSignal
     options?: GatewayStreamOptions
+    onError?: (error: unknown) => void
   }): AsyncIterable<ProxyStreamPart>
 }
 

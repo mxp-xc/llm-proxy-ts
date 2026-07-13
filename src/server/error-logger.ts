@@ -14,7 +14,15 @@ export interface ErrorLogEntry {
   provider: string
   requestedModel: string
   actualModel: string
-  error: { name: string; message: string; stack?: string }
+  error: {
+    name: string
+    message: string
+    stack?: string
+    code?: string
+    statusCode?: number
+    responseBody?: string
+    isRetryable?: boolean
+  }
   request: unknown
   response: unknown
 }
@@ -108,9 +116,21 @@ export class ErrorLogger {
 
 /** 将任意错误值安全转换为 ErrorLogEntry.error 形状 */
 export function normalizeErrorForLog(error: unknown): ErrorLogEntry['error'] {
+  const record =
+    typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : undefined
+  const lastError =
+    typeof record?.lastError === 'object' && record.lastError !== null
+      ? (record.lastError as Record<string, unknown>)
+      : undefined
+  const details = lastError ?? record
+
   return {
     name: error instanceof Error ? error.name : 'Error',
     message: error instanceof Error ? error.message : String(error),
     ...(error instanceof Error && error.stack && { stack: error.stack }),
+    ...(typeof record?.code === 'string' && { code: record.code }),
+    ...(typeof details?.statusCode === 'number' && { statusCode: details.statusCode }),
+    ...(typeof details?.responseBody === 'string' && { responseBody: details.responseBody }),
+    ...(typeof details?.isRetryable === 'boolean' && { isRetryable: details.isRetryable }),
   }
 }

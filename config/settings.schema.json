@@ -225,10 +225,16 @@
                           "type": "string"
                         },
                         "personality_friendly": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         },
                         "personality_pragmatic": {
-                          "type": "string"
+                          "type": [
+                            "string",
+                            "null"
+                          ]
                         }
                       },
                       "required": [
@@ -737,10 +743,16 @@
                                       "type": "string"
                                     },
                                     "personality_friendly": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     },
                                     "personality_pragmatic": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -1101,10 +1113,16 @@
                                     "type": "string"
                                   },
                                   "personality_friendly": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   },
                                   "personality_pragmatic": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -1586,10 +1604,16 @@
                                       "type": "string"
                                     },
                                     "personality_friendly": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     },
                                     "personality_pragmatic": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -1950,10 +1974,16 @@
                                     "type": "string"
                                   },
                                   "personality_friendly": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   },
                                   "personality_pragmatic": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -2431,10 +2461,16 @@
                                       "type": "string"
                                     },
                                     "personality_friendly": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     },
                                     "personality_pragmatic": {
-                                      "type": "string"
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -2795,10 +2831,16 @@
                                     "type": "string"
                                   },
                                   "personality_friendly": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   },
                                   "personality_pragmatic": {
-                                    "type": "string"
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [

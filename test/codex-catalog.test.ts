@@ -45,6 +45,33 @@ describe('CodexCatalogCache', () => {
     expect(m1.get('gpt-5.4')?.slug).toBe('gpt-5.4')
   })
 
+  it('accepts nullable optional personality variables from the bundled catalog', async () => {
+    const cache = new CodexCatalogCache(async () =>
+      JSON.stringify({
+        models: [
+          {
+            ...FULL_MODEL,
+            model_messages: {
+              instructions_template: 'tpl-{{ personality }}',
+              instructions_variables: {
+                personality_default: '',
+                personality_friendly: null,
+                personality_pragmatic: null,
+              },
+            },
+          },
+        ],
+      }),
+    )
+
+    const model = (await cache.get()).get('gpt-5.4')
+
+    expect(model?.model_messages?.instructions_variables).toMatchObject({
+      personality_friendly: null,
+      personality_pragmatic: null,
+    })
+  })
+
   it('throws on non-json stdout', async () => {
     const cache = new CodexCatalogCache(async () => 'not json')
     await expect(cache.get()).rejects.toThrow()

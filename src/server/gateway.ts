@@ -1,5 +1,6 @@
 import { generateText, streamText } from 'ai'
 import { logger as defaultLogger } from './logging.js'
+import { normalizeErrorForLog } from './error-logger.js'
 import type { ModelGateway } from './types.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 
@@ -40,7 +41,7 @@ export const defaultGateway: ModelGateway = {
       abortSignal,
     } as Parameters<typeof generateText>[0])
   },
-  stream({ model, callInput, abortSignal, options }) {
+  stream({ model, callInput, abortSignal, options, onError }) {
     const result = streamText({
       model,
       ...callInput,
@@ -49,7 +50,11 @@ export const defaultGateway: ModelGateway = {
       // AI SDK streamText 抑制异常并整合到 fullStream 中作为 { type: 'error' } chunk。
       // onError 仅是日志回调，不改变流行为；error chunk 会经过插件检查流程。
       onError: ({ error }) => {
-        defaultLogger.error({ err: error }, 'stream error from AI SDK')
+        if (onError) {
+          onError(error)
+          return
+        }
+        defaultLogger.error({ err: normalizeErrorForLog(error) }, 'stream error from AI SDK')
       },
     } as Parameters<typeof streamText>[0])
     return normalizeStream(result.fullStream as AsyncIterable<ProxyStreamPart>)

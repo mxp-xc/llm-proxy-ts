@@ -6,6 +6,7 @@ import { settingsSchema } from '../../src/config.js'
 import {
   ErrorLogger,
   getErrorLogFileName,
+  normalizeErrorForLog,
   type ErrorLogEntry,
 } from '../../src/server/error-logger.js'
 import { cleanOldLogs, logger as fallbackLogger } from '../../src/server/logging.js'
@@ -124,6 +125,30 @@ describe('ErrorLogger', () => {
       'error log write failed',
     )
     errorSpy.mockRestore()
+  })
+})
+
+describe('normalizeErrorForLog', () => {
+  it('keeps useful upstream fields without serializing request bodies', () => {
+    const lastError = Object.assign(new Error('Upstream request failed'), {
+      statusCode: 502,
+      responseBody: '{"error":{"type":"upstream_error"}}',
+      isRetryable: true,
+      requestBodyValues: { model: 'gpt-5.4', input: 'x'.repeat(1_000_000) },
+    })
+    const error = Object.assign(new Error('Failed after 3 attempts'), { lastError })
+
+    const normalized = normalizeErrorForLog(error)
+
+    expect(normalized).toMatchObject({
+      name: 'Error',
+      message: 'Failed after 3 attempts',
+      statusCode: 502,
+      responseBody: '{"error":{"type":"upstream_error"}}',
+      isRetryable: true,
+    })
+    expect(JSON.stringify(normalized)).not.toContain('requestBodyValues')
+    expect(JSON.stringify(normalized)).not.toContain('gpt-5.4')
   })
 })
 

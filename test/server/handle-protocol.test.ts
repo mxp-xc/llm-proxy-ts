@@ -308,6 +308,49 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
 })
 
 describe('handleProtocolRequest branch matrix — stream path', () => {
+  it('logs AI SDK stream errors through the request-scoped logger with a compact error', async () => {
+    async function* goodStream(): AsyncIterable<unknown> {
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        rawFinishReason: 'stop',
+        totalUsage: { inputTokens: 0, outputTokens: 0 },
+      }
+    }
+    const lastError = Object.assign(new Error('Upstream request failed'), {
+      statusCode: 502,
+      responseBody: '{"error":{"type":"upstream_error"}}',
+      isRetryable: true,
+      requestBodyValues: { input: 'x'.repeat(1_000_000) },
+    })
+    const retryError = Object.assign(new Error('Failed after 3 attempts'), { lastError })
+    const gateway = makeGateway({
+      stream(input) {
+        input.onError?.(retryError)
+        return goodStream() as AsyncIterable<ProxyStreamPart>
+      },
+    })
+    const { logger, error } = makeTestLogger()
+    const { app } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await response.text()
+
+    expect(error).toHaveBeenCalledWith(
+      {
+        err: expect.objectContaining({
+          message: 'Failed after 3 attempts',
+          statusCode: 502,
+        }),
+      },
+      'stream error from AI SDK',
+    )
+    const loggedError = error.mock.calls.find(
+      ([, message]) => message === 'stream error from AI SDK',
+    )?.[0]
+    expect(JSON.stringify(loggedError)).not.toContain('requestBodyValues')
+  })
+
   it('returns 200 text/event-stream for a healthy stream', async () => {
     async function* goodStream(): AsyncIterable<unknown> {
       yield { type: 'text-delta', id: 'txt-1', text: 'hello' }

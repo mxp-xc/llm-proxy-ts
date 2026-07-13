@@ -17,8 +17,8 @@ const codexModelMessagesSchema = z
     instructions_variables: z
       .object({
         personality_default: z.string(),
-        personality_friendly: z.string().optional(),
-        personality_pragmatic: z.string().optional(),
+        personality_friendly: z.string().nullable().optional(),
+        personality_pragmatic: z.string().nullable().optional(),
       })
       .passthrough(),
   })

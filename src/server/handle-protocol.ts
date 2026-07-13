@@ -42,6 +42,7 @@ export interface ProtocolRequestScope {
 
 interface AcquireStreamOptions {
   gateway: ModelGateway
+  logger: Logger
   model: LanguageModel
   callInput: AISDKInput
   requestModel: string
@@ -89,6 +90,9 @@ async function acquireStream(opts: AcquireStreamOptions): Promise<AcquireStreamR
     callInput: opts.callInput,
     requestModel: opts.requestModel,
     abortSignal: opts.abortController.signal,
+    onError: (error) => {
+      opts.logger.error({ err: normalizeErrorForLog(error) }, 'stream error from AI SDK')
+    },
   }
   if (opts.options !== undefined) streamInput.options = opts.options
   const stream = opts.gateway.stream(streamInput)
@@ -296,6 +300,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   const acquireRoutedStream = () =>
     acquireStream({
       gateway: runtime.gateway,
+      logger,
       model,
       callInput,
       requestModel,
@@ -337,7 +342,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
             ...withEnrichment({ model: requestModel, stream: preparedStreamResponse.stream }),
           }),
           (error) => {
-            logger.error({ err: error }, 'stream consumption failed')
+            logger.error({ err: normalizeErrorForLog(error) }, 'stream consumption failed')
             writeProtocolErrorLog(
               runtime.errorLogger,
               requestMetadata,
@@ -628,7 +633,7 @@ function handleUpstreamError(
   logger: Logger,
   errorLogCtx?: ErrorLogContext,
 ): Response {
-  logger.error({ err: error, phase }, 'upstream request failed')
+  logger.error({ err: normalizeErrorForLog(error), phase }, 'upstream request failed')
   if (error instanceof OAuthError && error.code === 'auth_required') {
     const { body, status } = formatErrors.oauth(error.message, loginUrl)
     return jsonResponse(body, status)
