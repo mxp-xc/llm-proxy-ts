@@ -95,6 +95,24 @@ describe('validateOpenAIResponsesRequest', () => {
     expect(items[1]?.type).toBe('reasoning')
   })
 
+  it('accepts compaction items in input (multi-turn)', () => {
+    const result = validateOpenAIResponsesRequest({
+      model: 'gpt-5',
+      input: [
+        { type: 'message', role: 'user', content: 'hi' },
+        { type: 'compaction', id: 'cmp_123', encrypted_content: 'enc-state' },
+      ],
+    })
+
+    expect(Array.isArray(result.input)).toBe(true)
+    const items = result.input as Exclude<typeof result.input, string>
+    expect(items[1]).toMatchObject({
+      type: 'compaction',
+      id: 'cmp_123',
+      encrypted_content: 'enc-state',
+    })
+  })
+
   it('accepts Codex additional_tools input items', () => {
     const result = validateOpenAIResponsesRequest({
       model: 'gpt-5',
@@ -334,6 +352,58 @@ describe('mapResponsesRequestToAISDKInput', () => {
       instructions: 'Be helpful',
       systemMessageMode: 'developer',
     })
+  })
+
+  it('maps compaction input items to native OpenAI custom parts', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'compaction', id: 'cmp_123', encrypted_content: 'enc-state' },
+        ],
+      } as any,
+      'openai',
+    )
+
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'custom',
+            kind: 'openai.compaction',
+            providerOptions: {
+              openai: {
+                type: 'compaction',
+                itemId: 'cmp_123',
+                encryptedContent: 'enc-state',
+              },
+            },
+          },
+        ],
+      },
+    ])
+  })
+
+  it('skips compaction input items for openai-compatible providers', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'compaction', id: 'cmp_123', encrypted_content: 'enc-state' },
+          { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hello' }] },
+        ],
+      } as any,
+      'openai-compatible',
+    )
+
+    expect(result.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+    ])
   })
 
   it('maps input_text content to AI SDK text type', () => {

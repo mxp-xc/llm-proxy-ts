@@ -173,6 +173,14 @@ const webSearchCallInputSchema = z
   })
   .passthrough()
 
+const compactionInputSchema = z
+  .object({
+    type: z.literal('compaction'),
+    id: z.string().min(1),
+    encrypted_content: z.string().nullish(),
+  })
+  .passthrough()
+
 // Codex Desktop can send tool declarations inside input as additional_tools.
 // They describe client-side tool availability for the model request envelope; the
 // AI SDK mapping path cannot consume them as conversation messages.
@@ -193,6 +201,7 @@ const inputItemSchema = z.union([
   toolSearchCallSchema,
   toolSearchOutputSchema,
   webSearchCallInputSchema,
+  compactionInputSchema,
   agentMessageSchema,
   reasoningItemSchema,
   additionalToolsInputSchema,
@@ -1004,6 +1013,27 @@ export function mapResponsesRequestToAISDKInput(
         // 历史 hosted web_search 调用：AI SDK 不处理，跳过（不传给上游）。
         // openai 上游走 passthrough 透传原始 body，不走此 map；此处仅 openai-compatible 兜底。
         continue
+      } else if ('type' in item && item.type === 'compaction') {
+        // OpenAI Responses compaction 是 native OpenAI 加密状态；兼容 provider 无法消费。
+        if (!nativeResponses) continue
+        const compaction = item as z.infer<typeof compactionInputSchema>
+        const openaiOptions: Record<string, unknown> = {
+          type: 'compaction',
+          itemId: compaction.id,
+        }
+        if (compaction.encrypted_content != null) {
+          openaiOptions.encryptedContent = compaction.encrypted_content
+        }
+        messages.push({
+          role: 'assistant',
+          content: [
+            {
+              type: 'custom',
+              kind: 'openai.compaction',
+              providerOptions: { openai: openaiOptions },
+            },
+          ],
+        })
       } else if ('type' in item && item.type === 'additional_tools') {
         // Codex Desktop 的 input 内工具声明块，不是对话内容；顶层 tools / tool_search_output
         // 才会进入 toolSet 构造。这里跳过，避免把声明块误当 developer message。

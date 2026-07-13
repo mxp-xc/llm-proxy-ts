@@ -5,6 +5,7 @@ export type ProtocolMessagePart =
   | { type: 'text'; text: string }
   | FilePart
   | { type: 'reasoning'; text: string; providerOptions?: Record<string, Record<string, unknown>> }
+  | { type: 'custom'; kind: string; providerOptions?: Record<string, Record<string, unknown>> }
   | {
       type: 'tool-call'
       toolCallId: string
