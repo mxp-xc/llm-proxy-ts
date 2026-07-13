@@ -15,11 +15,70 @@ const functionToolSchema = z.object({
   strict: z.boolean().optional(),
 })
 
-// Codex 与 OpenAI Responses 会携带非 function 工具（web_search、file_search、
-// apply_patch(custom)、namespace、tool_search 等）。AI SDK 仅支持 function 工具，
-// 这些工具在 mapping 阶段被 filter 掉；这里只做最小形状校验后原样放行，
-// 避免任一非 function 工具导致整包 tools 校验失败（400）。
-const passthroughToolSchema = z.object({ type: z.string() }).passthrough()
+const customToolSchema = z
+  .object({
+    type: z.literal('custom'),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    format: z
+      .union([
+        z.object({
+          type: z.literal('grammar'),
+          syntax: z.enum(['regex', 'lark']),
+          definition: z.string(),
+        }),
+        z.object({ type: z.literal('text') }),
+      ])
+      .optional(),
+  })
+  .passthrough()
+
+const webSearchToolSchema = z
+  .object({
+    type: z.literal('web_search'),
+    external_web_access: z.boolean().optional(),
+    search_context_size: z.enum(['low', 'medium', 'high']).optional(),
+    filters: z
+      .object({ allowed_domains: z.array(z.string()).optional() })
+      .passthrough()
+      .optional(),
+    user_location: z
+      .object({
+        type: z.literal('approximate').optional(),
+        country: z.string().optional(),
+        region: z.string().optional(),
+        city: z.string().optional(),
+        timezone: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough()
+
+const toolSearchToolSchema = z
+  .object({
+    type: z.literal('tool_search'),
+    execution: z.enum(['server', 'client']).optional(),
+    description: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+  })
+  .passthrough()
+
+const recognizedToolTypes = new Set(['function', 'custom', 'web_search', 'tool_search'])
+const unknownToolSchema = z
+  .object({ type: z.string() })
+  .passthrough()
+  .refine((tool) => !recognizedToolTypes.has(tool.type), {
+    message: 'recognized tool must match its declared schema',
+  })
+
+const requestToolSchema = z.union([
+  functionToolSchema,
+  customToolSchema,
+  webSearchToolSchema,
+  toolSearchToolSchema,
+  unknownToolSchema,
+])
 
 const easyInputMessageSchema = z.object({
   type: z.literal('message').optional(),
@@ -121,7 +180,7 @@ const additionalToolsInputSchema = z
   .object({
     type: z.literal('additional_tools'),
     role: z.string().optional(),
-    tools: z.array(z.union([functionToolSchema, passthroughToolSchema])).optional(),
+    tools: z.array(requestToolSchema).optional(),
   })
   .passthrough()
 
@@ -148,7 +207,7 @@ export const openAIResponsesRequestSchema = z
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
     max_output_tokens: z.number().int().positive().optional(),
-    tools: z.array(z.union([functionToolSchema, passthroughToolSchema])).optional(),
+    tools: z.array(requestToolSchema).optional(),
     tool_choice: z
       .union([
         z.enum(['auto', 'none', 'required']),
@@ -357,18 +416,26 @@ function mapInputImageContent(item: Record<string, unknown>): ProtocolMessagePar
   const withProviderOptions = providerOptions ? { providerOptions } : {}
 
   if (resolvedUrl) {
+    if (resolvedUrl.startsWith('data:')) {
+      return {
+        type: 'file',
+        mediaType: 'image',
+        data: resolvedUrl,
+        ...withProviderOptions,
+      }
+    }
     if (hasUrlScheme(resolvedUrl)) {
       return {
         type: 'file',
         mediaType: 'image',
-        data: { type: 'url', url: new URL(resolvedUrl) },
+        data: new URL(resolvedUrl),
         ...withProviderOptions,
       }
     }
     return {
       type: 'file',
       mediaType: 'image',
-      data: { type: 'data', data: resolvedUrl },
+      data: resolvedUrl,
       ...withProviderOptions,
     }
   }
@@ -377,7 +444,7 @@ function mapInputImageContent(item: Record<string, unknown>): ProtocolMessagePar
     return {
       type: 'file',
       mediaType: 'image',
-      data: { type: 'data', data: item.file_id },
+      data: item.file_id,
       ...withProviderOptions,
     }
   }
@@ -562,8 +629,6 @@ function buildResponsesToolInput(
         // —— Codex 期望 custom_tool_call，function_call 不匹配 ToolPayload::Custom
         const customTool = tool as { name?: string; description?: string; format?: unknown }
         if (customTool.name) {
-          // v4: customTool args 不含 name（name 来自 toolSet key，prepareResponsesTools
-          // 序列化时用 tool.name → {type:'custom', name: 'apply_patch'}）
           const args: Parameters<typeof openai.tools.customTool>[0] = {}
           if (customTool.description !== undefined) args.description = customTool.description
           if (customTool.format !== undefined) {

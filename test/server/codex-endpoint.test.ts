@@ -213,7 +213,7 @@ describe('POST /codex/v1/responses', () => {
           type: 'custom',
           name: 'apply_patch',
           description: 'apply patch',
-          format: { type: 'grammar' },
+          format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
         },
         { type: 'namespace', name: 'mcp__node_repl', description: 'node repl' },
         { type: 'tool_search', execution: 'client' },
@@ -237,6 +237,25 @@ describe('POST /codex/v1/responses', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.output).toBeDefined()
+  })
+
+  it('rejects malformed recognized tools before invoking the gateway', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        throw new Error('gateway must not be called')
+      },
+    })
+    const app = createApp({ settings: openrouterSettings, gateway, providerRegistry: stubRegistry })
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/chat',
+        input: 'hi',
+        tools: [{ type: 'custom', name: 'apply_patch', format: { type: 'grammar' } }],
+      }),
+    })
+    expect(res.status).toBe(400)
   })
 
   it('passes apply_patch through for openai-compatible provider and renders custom_tool_call', async () => {

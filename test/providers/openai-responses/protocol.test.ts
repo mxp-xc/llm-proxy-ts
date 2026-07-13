@@ -143,7 +143,7 @@ describe('validateOpenAIResponsesRequest', () => {
           type: 'custom',
           name: 'apply_patch',
           description: 'apply patch',
-          format: { type: 'grammar' },
+          format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
         },
         { type: 'namespace', name: 'mcp__node_repl', description: 'node repl' },
         { type: 'tool_search', execution: 'client' },
@@ -157,6 +157,31 @@ describe('validateOpenAIResponsesRequest', () => {
       'namespace',
       'tool_search',
     ])
+  })
+
+  it.each([
+    { type: 'custom', description: 'missing name' },
+    { type: 'custom', name: 'patch', format: { type: 'grammar' } },
+    { type: 'web_search', search_context_size: 'huge' },
+    { type: 'web_search', filters: { allowed_domains: 'example.com' } },
+    { type: 'web_search', user_location: null },
+    { type: 'web_search', user_location: { type: 'exact' } },
+    { type: 'tool_search', execution: 'browser' },
+    { type: 'tool_search', description: 42 },
+    { type: 'tool_search', parameters: [] },
+  ])('rejects malformed recognized tool %#', (tool) => {
+    expect(() =>
+      validateOpenAIResponsesRequest({ model: 'gpt-5', input: 'hi', tools: [tool] }),
+    ).toThrow()
+  })
+
+  it('keeps unknown hosted tools forward-compatible', () => {
+    const result = validateOpenAIResponsesRequest({
+      model: 'gpt-5',
+      input: 'hi',
+      tools: [{ type: 'future_hosted_tool', preview_option: true }],
+    })
+    expect(result.tools).toEqual([{ type: 'future_hosted_tool', preview_option: true }])
   })
 
   it('accepts tool_choice as string', () => {
@@ -383,7 +408,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           {
             type: 'file',
             mediaType: 'image',
-            data: { type: 'url', url: new URL('https://example.com/img.png') },
+            data: new URL('https://example.com/img.png'),
             providerOptions: { openai: { imageDetail: 'high' } },
           },
         ],
@@ -414,7 +439,7 @@ describe('mapResponsesRequestToAISDKInput', () => {
           {
             type: 'file',
             mediaType: 'image',
-            data: { type: 'url', url: new URL('https://example.com/img.png') },
+            data: new URL('https://example.com/img.png'),
             providerOptions: { openai: { imageDetail: 'auto' } },
           },
         ],
@@ -441,9 +466,28 @@ describe('mapResponsesRequestToAISDKInput', () => {
           {
             type: 'file',
             mediaType: 'image',
-            data: { type: 'url', url: new URL(imageUrl) },
+            data: imageUrl,
           },
         ],
+      },
+    ])
+  })
+
+  it('preserves input_image file_id as file data', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-4o',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', file_id: 'file_123' }],
+        },
+      ],
+    })
+    expect(result.messages).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'file', mediaType: 'image', data: 'file_123' }],
       },
     ])
   })
@@ -758,6 +802,14 @@ describe('mapResponsesRequestToAISDKInput', () => {
       'openai',
     )
     expect(Object.keys(result.tools!).sort()).toEqual(['apply_patch', 'shell_command'])
+    expect(result.tools!['apply_patch']).toMatchObject({
+      type: 'provider',
+      id: 'openai.custom',
+      args: {
+        description: 'apply patch',
+        format: { type: 'grammar', syntax: 'lark', definition: 'start:' },
+      },
+    })
   })
 
   it('passes namespace tools through as providerOptions.openai.namespace for openai provider', () => {
