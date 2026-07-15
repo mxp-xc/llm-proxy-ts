@@ -156,6 +156,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
     const options = models.map((model) => ({
       value: model.id,
       label: model.id,
+      ...(model.description ? { hint: model.description } : {}),
     }))
     const initialValues = getInitialModelSelections({
       existingModels,
@@ -167,6 +168,7 @@ export async function runModelsSync(options: ModelsSyncOptions): Promise<void> {
       options,
       initialValues,
       placeholder: 'Type to search models...',
+      filter: (search, option) => String(option.value).toLowerCase().includes(search.toLowerCase()),
       required: false,
     })
 

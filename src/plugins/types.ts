@@ -20,6 +20,8 @@ export interface PluginStore {
 
 export interface DiscoveredModel {
   id: string
+  /** Optional CLI-only description supplied by model discovery integrations. */
+  description?: string
   limit?: ModelLimit
 }
 

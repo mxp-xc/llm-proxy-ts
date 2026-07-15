@@ -124,6 +124,43 @@ describe('runModelsSync', () => {
     }
   })
 
+  it('shows discovered descriptions without including them in model search', async () => {
+    const clack = await import('@clack/prompts')
+    vi.mocked(clack.autocompleteMultiselect).mockResolvedValue([])
+    discoverMock.mockResolvedValue({
+      ok: {
+        providerName: 'openrouter',
+        models: [
+          { id: 'gpt-5', description: 'Best for complex coding tasks' },
+          { id: 'gpt-5-mini' },
+          { id: 'gpt-5-nano', description: '' },
+        ],
+        existingModels: {},
+        source: 'plugin',
+      },
+    })
+    const temp = await writeSettings()
+    try {
+      await runModelsSync({ settingsPath: temp.path, provider: 'openrouter' })
+
+      const promptOptions = vi.mocked(clack.autocompleteMultiselect).mock.calls[0]![0]
+      const modelOptions = promptOptions.options
+      if (!Array.isArray(modelOptions)) throw new Error('Expected static model options')
+
+      expect(modelOptions).toEqual([
+        { value: 'gpt-5', label: 'gpt-5', hint: 'Best for complex coding tasks' },
+        { value: 'gpt-5-mini', label: 'gpt-5-mini' },
+        { value: 'gpt-5-nano', label: 'gpt-5-nano' },
+      ])
+
+      const filter = promptOptions.filter!
+      expect(filter('GPT-5', modelOptions[0]!)).toBe(true)
+      expect(filter('complex coding', modelOptions[0]!)).toBe(false)
+    } finally {
+      await temp.cleanup()
+    }
+  })
+
   it('does not write changes when confirmation is declined', async () => {
     const clack = await import('@clack/prompts')
     vi.mocked(clack.autocompleteMultiselect).mockResolvedValue(['gpt-5'])
@@ -155,9 +192,15 @@ describe('runModelsSync', () => {
     discoverMock.mockResolvedValue({
       ok: {
         providerName: 'openrouter',
-        models: [{ id: 'gpt-5', limit: { context: 128000, output: 8192 } }],
+        models: [
+          {
+            id: 'gpt-5',
+            description: 'Best for complex coding tasks',
+            limit: { context: 128000, output: 8192 },
+          },
+        ],
         existingModels: {},
-        source: 'http',
+        source: 'plugin',
       },
     })
     const temp = await writeSettings()
