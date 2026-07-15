@@ -14,6 +14,14 @@ export interface ModelSyncPlan {
   removed: number
 }
 
+function omitEmptyModelDefaults(model: ModelRouteInput): ModelRouteInput {
+  const result = { ...model }
+  if (result.aliases?.length === 0) delete result.aliases
+  if (result.headers && Object.keys(result.headers).length === 0) delete result.headers
+  if (result.plugins?.length === 0) delete result.plugins
+  return result
+}
+
 export function getInitialModelSelections(input: {
   existingModels: Record<string, ModelRouteInput>
   discoveredModels: DiscoveredModel[]
@@ -46,7 +54,7 @@ export function planModelSyncChanges({
     const existingKey = existingByUpstreamModel.get(modelId)
 
     if (existingKey) {
-      newModels[existingKey] = existingModels[existingKey]!
+      newModels[existingKey] = omitEmptyModelDefaults(existingModels[existingKey]!)
       kept++
       continue
     }

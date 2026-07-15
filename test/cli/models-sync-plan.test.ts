@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getInitialModelSelections, planModelSyncChanges } from '../../src/cli/models/sync-plan.js'
+import { parseAndValidateSettings } from '../../src/config.js'
 
 describe('planModelSyncChanges', () => {
   it('keeps existing model keys when upstream ids are selected', () => {
@@ -13,12 +14,61 @@ describe('planModelSyncChanges', () => {
 
     expect(plan).toEqual({
       newModels: {
-        friendly: { upstreamModel: 'provider/model-a', aliases: [], headers: {}, plugins: [] },
+        friendly: { upstreamModel: 'provider/model-a' },
       },
       added: 0,
       kept: 1,
       removed: 0,
     })
+  })
+
+  it('does not persist empty defaults added while parsing existing models', () => {
+    const settings = parseAndValidateSettings(`{
+      "providers": {
+        "test": {
+          "type": "openai-compatible",
+          "baseURL": "https://example.com/v1",
+          "models": {
+            "friendly": { "upstreamModel": "provider/model-a" }
+          }
+        }
+      }
+    }`)
+
+    const plan = planModelSyncChanges({
+      existingModels: settings.providers.test!.models,
+      discoveredModels: [{ id: 'provider/model-a' }],
+      selectedIds: ['provider/model-a'],
+    })
+
+    expect(plan.newModels.friendly).toEqual({ upstreamModel: 'provider/model-a' })
+  })
+
+  it('preserves non-empty user configuration on existing models', () => {
+    const settings = parseAndValidateSettings(`{
+      "providers": {
+        "test": {
+          "type": "openai-compatible",
+          "baseURL": "https://example.com/v1",
+          "models": {
+            "friendly": {
+              "upstreamModel": "provider/model-a",
+              "aliases": ["model-a"],
+              "headers": { "X-Test": "value" },
+              "plugins": ["vendor_sse_error"]
+            }
+          }
+        }
+      }
+    }`)
+
+    const plan = planModelSyncChanges({
+      existingModels: settings.providers.test!.models,
+      discoveredModels: [{ id: 'provider/model-a' }],
+      selectedIds: ['provider/model-a'],
+    })
+
+    expect(plan.newModels.friendly).toEqual(settings.providers.test!.models.friendly)
   })
 
   it('adds discovered limits to new model entries', () => {
