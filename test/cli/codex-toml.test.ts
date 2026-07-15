@@ -176,3 +176,26 @@ describe('applyCodexConfigEdits: check_for_update_on_startup', () => {
     expect(second.overwritten).toEqual([])
   })
 })
+
+describe('applyCodexConfigEdits: model_instructions_file', () => {
+  it('writes and reports an explicitly selected system prompt', () => {
+    const content = 'model_instructions_file = "custom.md"\n'
+    const { content: out, overwritten } = applyCodexConfigEdits(content, {
+      ...edits,
+      modelInstructionsFile: 'llm-proxy/prompts/gpt-5.6.md',
+    })
+    expect(out).toContain('model_instructions_file = "llm-proxy/prompts/gpt-5.6.md"')
+    expect(
+      overwritten.some(
+        (report) => report.key === 'model_instructions_file' && report.oldValue === 'custom.md',
+      ),
+    ).toBe(true)
+  })
+
+  it('leaves an existing system prompt untouched when no override is configured', () => {
+    const content = 'model_instructions_file = "custom.md"\n'
+    const { content: out, overwritten } = applyCodexConfigEdits(content, edits)
+    expect(out).toContain('model_instructions_file = "custom.md"')
+    expect(overwritten.some((report) => report.key === 'model_instructions_file')).toBe(false)
+  })
+})

@@ -4,3 +4,4 @@ build
 coverage
 *.min.js
 config/settings.schema.json
+src/cli/codex/prompt-assets/*.md

@@ -391,6 +391,13 @@
             "checkForUpdateOnStartup": {
               "type": "boolean",
               "default": false
+            },
+            "systemPrompt": {
+              "type": "string",
+              "enum": [
+                "gpt-5.6",
+                "gpt-5.5"
+              ]
             }
           },
           "additionalProperties": false,

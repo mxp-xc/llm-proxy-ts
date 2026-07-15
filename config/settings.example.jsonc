@@ -40,6 +40,8 @@
       // "providerName": "LLM Proxy",
       // Whether codex sends OpenAI auth headers to the proxy.
       "requiresOpenaiAuth": true,
+      // Optional system prompt override offered by `codex install`; omit to preserve Codex config.
+      // "systemPrompt": "gpt-5.6",
     },
   },
   "providers": {

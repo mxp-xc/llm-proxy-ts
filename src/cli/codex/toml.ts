@@ -15,6 +15,7 @@ export interface CodexConfigEdits {
   baseUrl: string
   wireApi: 'responses'
   modelSlug: string
+  modelInstructionsFile?: string
   requiresOpenaiAuth: boolean
   modelReasoningEffort?: string
   checkForUpdateOnStartup: boolean
@@ -40,6 +41,12 @@ export function applyCodexConfigEdits(
     { key: 'model_provider', newValue: formatTomlString(params.providerId) },
     { key: 'model', newValue: formatTomlString(params.modelSlug) },
   ]
+  if (params.modelInstructionsFile !== undefined) {
+    topKeys.push({
+      key: 'model_instructions_file',
+      newValue: formatTomlString(params.modelInstructionsFile),
+    })
+  }
   for (const { key, newValue } of topKeys) {
     const oldRaw = readTopLevelKey(cur, key)
     if (oldRaw !== undefined && oldRaw !== normalizeTomlString(newValue)) {

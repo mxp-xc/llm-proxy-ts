@@ -9,6 +9,9 @@ import {
   resolveCodexHome,
   resolveCodexConfigPath,
   resolveCodexCatalogPath,
+  resolveLegacyCodexCatalogPath,
+  resolveCodexPromptPath,
+  resolveCodexPromptsDirectory,
 } from '../../src/cli/codex/home.js'
 
 const mockedHomedir = vi.mocked(homedir)
@@ -53,9 +56,20 @@ describe('resolveCodexConfigPath', () => {
 
 describe('resolveCodexCatalogPath', () => {
   it('joins default catalog filename', () => {
-    expect(resolveCodexCatalogPath('/c/h')).toBe('/c/h/llm-proxy-model-catalog.json')
+    expect(resolveCodexCatalogPath('/c/h')).toBe('/c/h/llm-proxy/model-catalog.json')
   })
   it('accepts custom filename', () => {
     expect(resolveCodexCatalogPath('/c/h', 'other.json')).toBe('/c/h/other.json')
+  })
+})
+
+describe('llm-proxy Codex paths', () => {
+  it('resolves the legacy catalog path for cleanup', () => {
+    expect(resolveLegacyCodexCatalogPath('/c/h')).toBe('/c/h/llm-proxy-model-catalog.json')
+  })
+
+  it('resolves prompt paths inside the dedicated directory', () => {
+    expect(resolveCodexPromptsDirectory('/c/h')).toBe('/c/h/llm-proxy/prompts')
+    expect(resolveCodexPromptPath('gpt-5.6.md', '/c/h')).toBe('/c/h/llm-proxy/prompts/gpt-5.6.md')
   })
 })

@@ -1,5 +1,5 @@
 import * as clack from '@clack/prompts'
-import { readFile, writeFile, mkdir, access } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, access, unlink } from 'node:fs/promises'
 import type { CodexModelInfo } from '../../codex-types.js'
 import {
   CodexCatalogCache,
@@ -12,9 +12,14 @@ import {
   resolveCodexHome,
   resolveCodexConfigPath,
   resolveCodexCatalogPath,
+  resolveLegacyCodexCatalogPath,
+  resolveCodexPromptPath,
+  resolveCodexPromptsDirectory,
   DEFAULT_CATALOG_FILENAME,
+  PROMPTS_DIRECTORY,
 } from './home.js'
 import { applyCodexConfigEdits } from './toml.js'
+import { CODEX_PROMPT_ASSETS, getCodexPromptAsset } from './prompt-assets.js'
 
 /** Build the codex base URL from service settings (no trailing slash; IPv6 bracketed). */
 export function buildCodexBaseUrl(settings: Settings): string {
@@ -29,6 +34,7 @@ export interface CodexInstallFs {
   writeFile(path: string, data: string): Promise<void>
   mkdir(path: string, opts: { recursive: boolean }): Promise<void>
   access(path: string): Promise<void>
+  unlink(path: string): Promise<void>
 }
 
 export interface CodexInstallPrompts {
@@ -51,6 +57,7 @@ const defaultFs: CodexInstallFs = {
   writeFile: (p, d) => writeFile(p, d, 'utf8'),
   mkdir: (p, o) => mkdir(p, o).then(() => undefined),
   access: (p) => access(p),
+  unlink: (p) => unlink(p),
 }
 
 /** Sentinel pseudo-option value: selecting it installs every model. */
@@ -228,27 +235,16 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     defaultSlug = picked
   }
 
-  // 7. Write catalog file (only the selected subset).
-  try {
-    await fs.mkdir(codexHome, { recursive: true })
-    await fs.writeFile(catalogPath, JSON.stringify({ models: subset }, null, 2))
-  } catch (err) {
-    clack.log.error(`Failed to write catalog: ${err instanceof Error ? err.message : String(err)}`)
-    clack.outro('Aborted')
-    return
-  }
-  clack.log.step(
-    `Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`,
-  )
-
-  // 8. Edit config.toml.
+  // 7. Read every input before the first write, so preflight failures leave CODEX_HOME unchanged.
   let rawConfig: string
+  let promptContents: string[]
   try {
-    rawConfig = await fs.readFile(configPath)
+    ;[rawConfig, promptContents] = await Promise.all([
+      fs.readFile(configPath),
+      Promise.all(CODEX_PROMPT_ASSETS.map((asset) => fs.readFile(asset.sourcePath))),
+    ])
   } catch (err) {
-    clack.log.error(
-      `Failed to read config.toml: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    clack.log.error(`Failed to read install inputs: ${formatError(err)}`)
     clack.outro('Aborted')
     return
   }
@@ -264,6 +260,11 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
     baseUrl,
     wireApi: 'responses',
     modelSlug: defaultSlug,
+    ...(settings.codex.install.systemPrompt
+      ? {
+          modelInstructionsFile: `${PROMPTS_DIRECTORY}/${getCodexPromptAsset(settings.codex.install.systemPrompt).filename}`,
+        }
+      : {}),
     requiresOpenaiAuth,
     checkForUpdateOnStartup,
     ...(reasoningLevel ? { modelReasoningEffort: reasoningLevel } : {}),
@@ -271,17 +272,46 @@ export async function runCodexInstall(options: CodexInstallOptions): Promise<voi
   for (const report of overwritten) {
     clack.log.warn(`Overwrote ${report.key}: ${report.oldValue} → ${report.newValue}`)
   }
+  // 8. Install prompts, catalog, and config. The legacy catalog remains until all writes succeed.
   try {
+    await fs.mkdir(resolveCodexPromptsDirectory(codexHome), { recursive: true })
+    for (const [index, asset] of CODEX_PROMPT_ASSETS.entries()) {
+      await fs.writeFile(resolveCodexPromptPath(asset.filename, codexHome), promptContents[index]!)
+    }
+    await fs.writeFile(catalogPath, JSON.stringify({ models: subset }, null, 2))
     await fs.writeFile(configPath, newConfig)
   } catch (err) {
-    clack.log.error(
-      `Failed to write config.toml: ${err instanceof Error ? err.message : String(err)}`,
-    )
+    clack.log.error(`Failed to write Codex install files: ${formatError(err)}`)
     clack.outro('Aborted')
     return
   }
+  clack.log.step(`Installed system prompts → ${resolveCodexPromptsDirectory(codexHome)}`)
+  clack.log.step(
+    `Wrote catalog (${subset.length} model${subset.length === 1 ? '' : 's'}) → ${catalogPath}`,
+  )
   clack.log.success(`Updated ${configPath}`)
+
+  // 9. Remove the old root-level catalog only after the new installation is active.
+  const legacyCatalogPath = resolveLegacyCodexCatalogPath(codexHome)
+  try {
+    await fs.unlink(legacyCatalogPath)
+    clack.log.step(`Removed legacy catalog → ${legacyCatalogPath}`)
+  } catch (err) {
+    if (!isNotFoundError(err)) {
+      clack.log.error(`Install succeeded, but legacy catalog cleanup failed: ${formatError(err)}`)
+      clack.outro('Done with cleanup warning. Restart codex to load the new configuration.')
+      return
+    }
+  }
   clack.outro('Done. Restart codex to load the new catalog and provider.')
+}
+
+function formatError(err: unknown): string {
+  return err instanceof Error ? (err.stack ?? err.message) : String(err)
+}
+
+function isNotFoundError(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT'
 }
 
 /** Map catalog build errors to user-facing messages. */

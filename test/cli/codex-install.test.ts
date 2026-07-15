@@ -9,17 +9,21 @@ import {
   resolveSelectedModels,
 } from '../../src/cli/codex/install-run.js'
 import type { CodexInstallFs } from '../../src/cli/codex/install-run.js'
+import { CODEX_PROMPT_ASSETS } from '../../src/cli/codex/prompt-assets.js'
 
 /** Wrap raw node:fs/promises fns to match the narrower CodexInstallFs interface. */
 function wrapFs(over: {
+  readFile?: CodexInstallFs['readFile']
   writeFile?: CodexInstallFs['writeFile']
   access?: CodexInstallFs['access']
+  unlink?: CodexInstallFs['unlink']
 }): CodexInstallFs {
   return {
-    readFile: (p) => readFile(p, 'utf8'),
+    readFile: over.readFile ?? ((p) => readFile(p, 'utf8')),
     writeFile: over.writeFile ?? ((p, d) => writeFile(p, d, 'utf8')),
     mkdir: (p, o) => mkdir(p, o).then(() => undefined),
     access: over.access ?? ((p) => access(p)),
+    unlink: over.unlink ?? (async () => {}),
   }
 }
 
@@ -123,19 +127,33 @@ describe('runCodexInstall', () => {
     fs: CodexInstallFs
     writtenConfig: () => string
     writtenCatalog: () => string
+    writtenFiles: () => ReadonlyMap<string, string>
+    unlinkedPaths: () => readonly string[]
   } {
     let writtenConfig = ''
     let writtenCatalog = ''
+    const writtenFiles = new Map<string, string>()
+    const unlinkedPaths: string[] = []
     const fs: CodexInstallFs = {
       readFile: async (p) => readFile(p, 'utf8'),
       writeFile: async (p, d) => {
+        writtenFiles.set(p, d)
         if (p.endsWith('config.toml')) writtenConfig = d
         if (p.endsWith('.json')) writtenCatalog = d
       },
       mkdir: (p, o) => mkdir(p, o).then(() => undefined),
       access: async () => {},
+      unlink: async (p) => {
+        unlinkedPaths.push(p)
+      },
     }
-    return { fs, writtenConfig: () => writtenConfig, writtenCatalog: () => writtenCatalog }
+    return {
+      fs,
+      writtenConfig: () => writtenConfig,
+      writtenCatalog: () => writtenCatalog,
+      writtenFiles: () => writtenFiles,
+      unlinkedPaths: () => unlinkedPaths,
+    }
   }
 
   it('aborts when config.toml missing, no catalog fetch, no catalog written', async () => {
@@ -218,7 +236,7 @@ describe('runCodexInstall', () => {
 
   it('succeeds with default-all: writes full catalog + edits config.toml', async () => {
     await writeFile(join(tmp.dir, 'config.toml'), '# codex\nmodel = "gpt-5"\n')
-    const { fs, writtenConfig, writtenCatalog } = capturingFs()
+    const { fs, writtenConfig, writtenCatalog, writtenFiles, unlinkedPaths } = capturingFs()
     await runCodexInstall({
       settingsPath: settings.path,
       catalogFetcher,
@@ -231,12 +249,158 @@ describe('runCodexInstall', () => {
     })
     const catalog = JSON.parse(writtenCatalog()) as { models: { slug: string }[] }
     expect(catalog.models.map((m) => m.slug).sort()).toEqual(['zhipu/glm-5.2', 'zhipu/gpt-5'])
-    expect(writtenConfig()).toContain('model_catalog_json = "llm-proxy-model-catalog.json"')
+    expect(writtenConfig()).toContain('model_catalog_json = "llm-proxy/model-catalog.json"')
     expect(writtenConfig()).toContain('model_provider = "llm-proxy"')
     expect(writtenConfig()).toContain('model = "zhipu/glm-5.2"')
     expect(writtenConfig()).toContain('check_for_update_on_startup = false')
     expect(writtenConfig()).toContain('[model_providers.llm-proxy]')
     expect(writtenConfig()).toContain('# codex') // comment preserved
+    for (const asset of CODEX_PROMPT_ASSETS) {
+      const targetPath = join(tmp.dir, 'llm-proxy', 'prompts', asset.filename).replaceAll('\\', '/')
+      const target = [...writtenFiles().entries()].find(
+        ([path]) => path.replaceAll('\\', '/') === targetPath,
+      )
+      expect(target?.[1]).toBe(await readFile(asset.sourcePath, 'utf8'))
+    }
+    expect(unlinkedPaths().some((path) => path.endsWith('llm-proxy-model-catalog.json'))).toBe(true)
+  })
+
+  it('does not touch model_instructions_file when systemPrompt is omitted', async () => {
+    await writeFile(
+      join(tmp.dir, 'config.toml'),
+      'model = "gpt-5"\nmodel_instructions_file = "custom.md"\n',
+    )
+    const { fs, writtenConfig } = capturingFs()
+    await runCodexInstall({
+      settingsPath: settings.path,
+      catalogFetcher,
+      fs,
+      codexHome: tmp.dir,
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
+    })
+    expect(writtenConfig()).toContain('model_instructions_file = "custom.md"')
+  })
+
+  it.each([
+    ['gpt-5.6', 'llm-proxy/prompts/gpt-5.6.md'],
+    ['gpt-5.5', 'llm-proxy/prompts/gpt-5.5.md'],
+  ] as const)(
+    'reads systemPrompt=%s directly from settings',
+    async (systemPrompt, expectedPath) => {
+      const configuredSettingsPath = await writeSettings(
+        { zhipu: zhipuProvider({ 'glm-5.2': modelDef('glm-5.2') }) },
+        {
+          models_catalog: { context_window: 204800 },
+          install: { systemPrompt },
+        },
+      )
+      await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+      const { fs, writtenConfig } = capturingFs()
+      await runCodexInstall({
+        settingsPath: configuredSettingsPath,
+        catalogFetcher,
+        fs,
+        codexHome: tmp.dir,
+        prompts: {
+          selectModels: async () => ['zhipu/glm-5.2'],
+          selectDefaultModel: async () => 'zhipu/glm-5.2',
+        },
+      })
+      expect(writtenConfig()).toContain(`model_instructions_file = "${expectedPath}"`)
+    },
+  )
+
+  it('does not clean up the legacy catalog when an install write fails', async () => {
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const unlinkSpy = vi.fn()
+    await runCodexInstall({
+      settingsPath: settings.path,
+      catalogFetcher,
+      fs: wrapFs({
+        access: async () => {},
+        writeFile: async () => {
+          throw new Error('disk full')
+        },
+        unlink: unlinkSpy,
+      }),
+      codexHome: tmp.dir,
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
+    })
+    expect(unlinkSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not write or clean up when prompt asset preflight fails', async () => {
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const writeFileSpy = vi.fn()
+    const unlinkSpy = vi.fn()
+    await runCodexInstall({
+      settingsPath: settings.path,
+      catalogFetcher,
+      fs: wrapFs({
+        access: async () => {},
+        readFile: async (path) => {
+          if (path.endsWith('.md')) throw new Error('prompt asset missing')
+          return readFile(path, 'utf8')
+        },
+        writeFile: writeFileSpy,
+        unlink: unlinkSpy,
+      }),
+      codexHome: tmp.dir,
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
+    })
+    expect(writeFileSpy).not.toHaveBeenCalled()
+    expect(unlinkSpy).not.toHaveBeenCalled()
+  })
+
+  it('ignores a missing legacy catalog after activating the new config', async () => {
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const missing = Object.assign(new Error('missing'), { code: 'ENOENT' })
+    await runCodexInstall({
+      settingsPath: settings.path,
+      catalogFetcher,
+      fs: wrapFs({
+        access: async () => {},
+        unlink: async () => {
+          throw missing
+        },
+      }),
+      codexHome: tmp.dir,
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
+    })
+    await expect(readFile(join(tmp.dir, 'config.toml'), 'utf8')).resolves.toContain(
+      'model_catalog_json = "llm-proxy/model-catalog.json"',
+    )
+  })
+
+  it('keeps the new config active when legacy catalog cleanup fails', async () => {
+    await writeFile(join(tmp.dir, 'config.toml'), 'model = "gpt-5"\n')
+    const unlinkSpy = vi.fn().mockRejectedValue(new Error('access denied'))
+    await runCodexInstall({
+      settingsPath: settings.path,
+      catalogFetcher,
+      fs: wrapFs({ access: async () => {}, unlink: unlinkSpy }),
+      codexHome: tmp.dir,
+      prompts: {
+        selectModels: async () => ['zhipu/glm-5.2'],
+        selectDefaultModel: async () => 'zhipu/glm-5.2',
+      },
+    })
+    expect(unlinkSpy).toHaveBeenCalledOnce()
+    await expect(readFile(join(tmp.dir, 'config.toml'), 'utf8')).resolves.toContain(
+      'model_catalog_json = "llm-proxy/model-catalog.json"',
+    )
   })
 
   it('filters catalog to the selected subset', async () => {

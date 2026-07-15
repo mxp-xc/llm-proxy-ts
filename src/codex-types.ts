@@ -88,6 +88,10 @@ export const codexModelOverrideSchema = codexModelInfoSchema
 
 export type CodexModelOverride = z.infer<typeof codexModelOverrideSchema>
 
+export const codexPromptIdSchema = z.enum(['gpt-5.6', 'gpt-5.5'])
+
+export type CodexPromptId = z.infer<typeof codexPromptIdSchema>
+
 /** codex install 配置（仅全局 settings.codex.install） */
 export const codexInstallSchema = z
   .object({
@@ -95,6 +99,7 @@ export const codexInstallSchema = z
     providerName: z.string().min(1).default('LLM Proxy'),
     requiresOpenaiAuth: z.boolean().default(false),
     checkForUpdateOnStartup: z.boolean().default(false),
+    systemPrompt: codexPromptIdSchema.optional(),
   })
   .strict()
   .default({})
