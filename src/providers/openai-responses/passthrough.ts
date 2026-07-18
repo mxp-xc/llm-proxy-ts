@@ -1,5 +1,9 @@
 import type { ExecutionOverrideInput, ExecutionOverrideConfig } from '../shared/strategy.js'
-import { ADDITIONAL_TOOLS_ANCHOR_PREFIX, type OpenAIResponsesRequest } from './protocol.js'
+import {
+  ADDITIONAL_TOOLS_ANCHOR_PREFIX,
+  AGENT_MESSAGE_ANCHOR_PREFIX,
+  type OpenAIResponsesRequest,
+} from './protocol.js'
 import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 import { renderOpenAIResponsesRawResponse, renderOpenAIResponsesRawSSE } from './renderer.js'
 
@@ -109,8 +113,15 @@ function mergeRequestHeadersForBody(
   return mergedHeaders
 }
 
-function isAdditionalToolsAnchor(item: unknown): boolean {
-  if (!isRecord(item) || item.role !== 'assistant' || item.phase !== 'commentary') return false
+function isInputItemAnchor(item: unknown, prefix: string): boolean {
+  if (
+    !isRecord(item) ||
+    item.type !== 'message' ||
+    item.role !== 'assistant' ||
+    item.phase !== 'commentary'
+  ) {
+    return false
+  }
   if (!Array.isArray(item.content) || item.content.length !== 1) {
     return false
   }
@@ -119,11 +130,19 @@ function isAdditionalToolsAnchor(item: unknown): boolean {
   if (!isRecord(content) || content.type !== 'output_text' || typeof content.text !== 'string') {
     return false
   }
-  const marker = content.text.slice(ADDITIONAL_TOOLS_ANCHOR_PREFIX.length)
+  const marker = content.text.slice(prefix.length)
   return (
-    content.text.startsWith(ADDITIONAL_TOOLS_ANCHOR_PREFIX) &&
+    content.text.startsWith(prefix) &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(marker)
   )
+}
+
+function isAdditionalToolsAnchor(item: unknown): boolean {
+  return isInputItemAnchor(item, ADDITIONAL_TOOLS_ANCHOR_PREFIX)
+}
+
+function isAgentMessageAnchor(item: unknown): boolean {
+  return isInputItemAnchor(item, AGENT_MESSAGE_ANCHOR_PREFIX)
 }
 
 function restoreMessageItemType(item: unknown): unknown {
@@ -150,6 +169,61 @@ function restoreMessageItemTypes(body: Record<string, unknown>): Record<string, 
     return restored
   })
   return changed ? { ...body, input: restoredInput } : body
+}
+
+function patchAgentMessagesInput(
+  sdkBody: Record<string, unknown>,
+  rawBody: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawInput = rawBody.input
+  if (!Array.isArray(rawInput)) return sdkBody
+
+  const rawAgentMessages = rawInput.filter(
+    (item): item is Record<string, unknown> => isRecord(item) && item.type === 'agent_message',
+  )
+  if (rawAgentMessages.length === 0) return sdkBody
+
+  const sdkInput = sdkBody.input
+  if (!Array.isArray(sdkInput)) {
+    throw new Error('Cannot align agent_message with non-array SDK input')
+  }
+
+  const nativeAgentMessageCount = sdkInput.filter(
+    (item) => isRecord(item) && item.type === 'agent_message',
+  ).length
+  if (nativeAgentMessageCount > 0) {
+    if (nativeAgentMessageCount !== rawAgentMessages.length) {
+      throw new Error(
+        `Cannot align agent_message with SDK input: expected ${rawAgentMessages.length} native items, found ${nativeAgentMessageCount}`,
+      )
+    }
+    let agentMessageIndex = 0
+    const patchedInput: unknown[] = []
+    for (const item of sdkInput) {
+      if (isAgentMessageAnchor(item)) continue
+      if (isRecord(item) && item.type === 'agent_message') {
+        patchedInput.push(rawAgentMessages[agentMessageIndex++])
+        continue
+      }
+      patchedInput.push(item)
+    }
+    return { ...sdkBody, input: patchedInput }
+  }
+
+  const anchorCount = sdkInput.filter(isAgentMessageAnchor).length
+  if (anchorCount !== rawAgentMessages.length) {
+    throw new Error(
+      `Cannot align agent_message with SDK input: expected ${rawAgentMessages.length} anchors, found ${anchorCount}`,
+    )
+  }
+
+  let agentMessageIndex = 0
+  return {
+    ...sdkBody,
+    input: sdkInput.map((item) =>
+      isAgentMessageAnchor(item) ? rawAgentMessages[agentMessageIndex++] : item,
+    ),
+  }
 }
 
 function patchAdditionalToolsInput(
@@ -241,7 +315,9 @@ export function mergeOpenAIResponsesRequestBody(
       merged[key] = value
     }
   }
-  return patchAdditionalToolsInput(restoreMessageItemTypes(merged), rawBody)
+  const restoredMessages = restoreMessageItemTypes(merged)
+  const patchedAgentMessages = patchAgentMessagesInput(restoredMessages, rawBody)
+  return patchAdditionalToolsInput(patchedAgentMessages, rawBody)
 }
 
 export function createOpenAIResponsesRequestBodyMergeFetch(

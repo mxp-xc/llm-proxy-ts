@@ -7,6 +7,7 @@ import { isRecord, type NamespaceFlatMap } from '../protocol-types.js'
 import { z } from 'zod/v3'
 
 export const ADDITIONAL_TOOLS_ANCHOR_PREFIX = 'llm_proxy_additional_tools_anchor:'
+export const AGENT_MESSAGE_ANCHOR_PREFIX = 'llm_proxy_agent_message_anchor:'
 
 // ─── Schemas ──────────────────────────────────────────────────
 
@@ -830,8 +831,8 @@ function pushToolResultMessage(
   })
 }
 
-function createAdditionalToolsAnchor(): ProtocolMessage {
-  const marker = `${ADDITIONAL_TOOLS_ANCHOR_PREFIX}${randomUUID()}`
+function createInputItemAnchor(prefix: string): ProtocolMessage {
+  const marker = `${prefix}${randomUUID()}`
   return {
     role: 'assistant',
     content: [
@@ -842,6 +843,14 @@ function createAdditionalToolsAnchor(): ProtocolMessage {
       },
     ],
   }
+}
+
+function createAdditionalToolsAnchor(): ProtocolMessage {
+  return createInputItemAnchor(ADDITIONAL_TOOLS_ANCHOR_PREFIX)
+}
+
+function createAgentMessageAnchor(): ProtocolMessage {
+  return createInputItemAnchor(AGENT_MESSAGE_ANCHOR_PREFIX)
 }
 
 // ─── Mapping ────────────────────────────────────────────────
@@ -994,11 +1003,15 @@ export function mapResponsesRequestToAISDKInput(
         const toolName = callIdToName.get(callId) ?? 'tool_search'
         pushToolResultMessage(messages, callId, toolName, tsOut.tools ?? [])
       } else if ('type' in item && item.type === 'agent_message') {
-        const agentMessage = item as z.infer<typeof agentMessageSchema>
-        messages.push({
-          role: agentMessage.author === currentAgent ? 'assistant' : 'user',
-          content: mapAgentMessageContent(agentMessage),
-        })
+        if (nativeResponses) {
+          messages.push(createAgentMessageAnchor())
+        } else {
+          const agentMessage = item as z.infer<typeof agentMessageSchema>
+          messages.push({
+            role: agentMessage.author === currentAgent ? 'assistant' : 'user',
+            content: mapAgentMessageContent(agentMessage),
+          })
+        }
       } else if ('type' in item && item.type === 'reasoning') {
         // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content
         // 透传；@ai-sdk/openai-compatible 把 reasoning part 的 text 转成 Chat Completions 的

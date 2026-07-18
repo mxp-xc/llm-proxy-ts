@@ -17,7 +17,10 @@ import {
   mergeOpenAIResponsesRequestBody,
   type OpenAIResponsesPassthroughFetchState,
 } from '../../src/providers/openai-responses/passthrough.js'
-import { ADDITIONAL_TOOLS_ANCHOR_PREFIX } from '../../src/providers/openai-responses/protocol.js'
+import {
+  ADDITIONAL_TOOLS_ANCHOR_PREFIX,
+  AGENT_MESSAGE_ANCHOR_PREFIX,
+} from '../../src/providers/openai-responses/protocol.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { authCodeConfig, createMemoryPersistence } from '../helpers/oauth.js'
@@ -354,6 +357,145 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
 
     expect(merged.input).toEqual([nativeAdditionalTools])
     expect(merged.tools).toEqual([{ type: 'function', name: 'sdk' }])
+  })
+
+  it('restores raw agent_message items from internal anchors', () => {
+    const marker = `${AGENT_MESSAGE_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`
+    const rawAgentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [
+        { type: 'input_text', text: 'Reply with exactly: task received' },
+        { type: 'encrypted_content', encrypted_content: 'encrypted-task-payload' },
+      ],
+      custom_field: 'preserve-me',
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [
+          { role: 'user', content: 'before' },
+          {
+            role: 'assistant',
+            phase: 'commentary',
+            content: [{ type: 'output_text', text: marker }],
+          },
+          { role: 'user', content: 'after' },
+        ],
+      },
+      {
+        model: 'route/model',
+        input: [
+          { type: 'message', role: 'user', content: 'raw-before' },
+          rawAgentMessage,
+          { type: 'message', role: 'user', content: 'raw-after' },
+        ],
+      },
+    )
+
+    expect(merged.input).toEqual([
+      { type: 'message', role: 'user', content: 'before' },
+      rawAgentMessage,
+      { type: 'message', role: 'user', content: 'after' },
+    ])
+  })
+
+  it('restores raw SDK-native agent_message items and removes only the internal anchor', () => {
+    const marker = `${AGENT_MESSAGE_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`
+    const nativeAgentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [
+        { type: 'input_text', text: 'Reply with exactly: task received' },
+        { type: 'encrypted_content', encrypted_content: 'sdk-encrypted-task-payload' },
+      ],
+    }
+    const rawAgentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [
+        { type: 'input_text', text: 'Reply with exactly: task received' },
+        { type: 'encrypted_content', encrypted_content: 'raw-encrypted-task-payload' },
+      ],
+      custom_field: 'preserve-me',
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'upstream',
+        input: [
+          {
+            role: 'assistant',
+            phase: 'commentary',
+            content: [{ type: 'output_text', text: marker }],
+          },
+          nativeAgentMessage,
+        ],
+      },
+      {
+        model: 'route/model',
+        input: [rawAgentMessage],
+      },
+    )
+
+    expect(merged.input).toEqual([rawAgentMessage])
+  })
+
+  it('does not mistake an SDK-native agent_message for an internal anchor', () => {
+    const marker = `${AGENT_MESSAGE_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`
+    const nativeAgentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      role: 'assistant',
+      phase: 'commentary',
+      content: [{ type: 'output_text', text: marker }],
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'upstream', input: [nativeAgentMessage] },
+      { model: 'route/model', input: [nativeAgentMessage] },
+    )
+
+    expect(merged.input).toEqual([nativeAgentMessage])
+  })
+
+  it.each([
+    {
+      name: 'non-array SDK input',
+      sdkInput: 'sdk',
+      expected: 'Cannot align agent_message with non-array SDK input',
+    },
+    {
+      name: 'missing anchor',
+      sdkInput: [],
+      expected: 'Cannot align agent_message with SDK input: expected 1 anchors, found 0',
+    },
+  ])('rejects unsafe agent_message alignment with $name', ({ sdkInput, expected }) => {
+    const encryptedContent = 'must-not-appear-in-error'
+    let error: Error | undefined
+    try {
+      mergeOpenAIResponsesRequestBody(
+        { model: 'upstream', input: sdkInput },
+        {
+          model: 'route/model',
+          input: [
+            {
+              type: 'agent_message',
+              author: '/root',
+              recipient: '/root/worker',
+              content: [{ type: 'encrypted_content', encrypted_content: encryptedContent }],
+            },
+          ],
+        },
+      )
+    } catch (cause) {
+      error = cause as Error
+    }
+
+    expect(error?.message).toContain(expected)
+    expect(error?.message).not.toContain(encryptedContent)
   })
 
   it('keeps raw top-level tools separate from input additional_tools', () => {
@@ -705,12 +847,50 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     ])
   })
 
+  it('preserves opaque agent_message fields in the final SDK request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+    const agentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [
+        { type: 'input_text', text: 'Reply with exactly: task received' },
+        { type: 'encrypted_content', encrypted_content: 'encrypted-task-payload' },
+      ],
+      custom_field: 'preserve-me',
+    }
+
+    const res = await app.request('/codex/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: [agentMessage],
+        stream: false,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(forwardedBody?.input).toEqual([agentMessage])
+    expect(JSON.stringify(forwardedBody?.input)).not.toContain('Agent message from')
+    expect(JSON.stringify(forwardedBody?.input)).not.toContain('llm_proxy_')
+  })
+
   it.each([
     { name: 'without conversation or store', conversation: undefined, store: undefined },
     { name: 'with conversation', conversation: 'conv_123', store: undefined },
     { name: 'with store', conversation: undefined, store: true },
   ])(
-    'preserves additional_tools after an SDK-expanded agent_message $name',
+    'preserves agent_message and additional_tools wire items $name',
     async ({ conversation, store }) => {
       const settings = makeOpenaiSettings()
       let forwardedBody: Record<string, unknown> | undefined
@@ -722,6 +902,33 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       })
       const providerRegistry = await createProviderRegistry(settings)
       const app = createApp({ settings, providerRegistry })
+      const firstAgentMessage = {
+        type: 'agent_message',
+        author: '/root',
+        recipient: '/root/worker',
+        content: [
+          { type: 'input_text', text: 'Reply with exactly: task received' },
+          { type: 'encrypted_content', encrypted_content: 'encrypted-task-payload' },
+        ],
+      }
+      const additionalTools = {
+        type: 'additional_tools',
+        role: 'developer',
+        tools: [
+          {
+            type: 'function',
+            name: 'lookup',
+            parameters: { type: 'object', properties: {} },
+          },
+        ],
+      }
+      const secondAgentMessage = {
+        type: 'agent_message',
+        author: '/root/worker',
+        recipient: '/root',
+        content: [{ type: 'input_text', text: '42' }],
+      }
+      const rawInput = [firstAgentMessage, additionalTools, secondAgentMessage]
 
       const res = await app.request('/codex/v1/responses', {
         method: 'POST',
@@ -730,42 +937,15 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
           model: 'openai/chat',
           ...(conversation !== undefined && { conversation }),
           ...(store !== undefined && { store }),
-          input: [
-            {
-              type: 'agent_message',
-              author: '/root',
-              recipient: '/root/worker',
-              content: [{ type: 'input_text', text: 'compute 19 + 23' }],
-            },
-            {
-              type: 'additional_tools',
-              role: 'developer',
-              tools: [
-                {
-                  type: 'function',
-                  name: 'lookup',
-                  parameters: { type: 'object', properties: {} },
-                },
-              ],
-            },
-            {
-              type: 'agent_message',
-              author: '/root/worker',
-              recipient: '/root',
-              content: [{ type: 'input_text', text: '42' }],
-            },
-          ],
+          input: rawInput,
           stream: false,
         }),
       })
 
       expect(res.status).toBe(200)
-      expect(
-        (forwardedBody?.input as Array<Record<string, unknown>>).map(
-          (item) => item.type ?? item.role,
-        ),
-      ).toEqual(['message', 'message', 'additional_tools', 'message'])
+      expect(forwardedBody?.input).toEqual(rawInput)
       expect(forwardedBody).not.toHaveProperty('tools')
+      expect(JSON.stringify(forwardedBody?.input)).not.toContain('llm_proxy_')
     },
   )
 
@@ -793,6 +973,15 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     })
     const providerRegistry = await createProviderRegistry(settings)
     const app = createApp({ settings, providerRegistry })
+    const agentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [
+        { type: 'input_text', text: 'Reply with exactly: task received' },
+        { type: 'encrypted_content', encrypted_content: 'stream-encrypted-task-payload' },
+      ],
+    }
 
     const res = await app.request('/codex/v1/responses', {
       method: 'POST',
@@ -805,6 +994,7 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
             role: 'developer',
             content: [{ type: 'input_text', text: 'developer marker' }],
           },
+          agentMessage,
           {
             type: 'additional_tools',
             role: 'developer',
@@ -836,7 +1026,9 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       (forwardedBody?.input as Array<Record<string, unknown>>).map(
         (item) => item.type ?? item.role,
       ),
-    ).toEqual(['message', 'additional_tools', 'message'])
+    ).toEqual(['message', 'agent_message', 'additional_tools', 'message'])
+    expect((forwardedBody?.input as unknown[])[1]).toEqual(agentMessage)
+    expect(JSON.stringify(forwardedBody?.input)).not.toContain('llm_proxy_')
   })
 
   it('rebuilds response.failed SSE from retry-wrapped AI SDK stream errors', async () => {

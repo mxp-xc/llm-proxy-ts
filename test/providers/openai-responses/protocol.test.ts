@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  AGENT_MESSAGE_ANCHOR_PREFIX,
   getResponsesCustomToolNames,
   getResponsesNamespaceFlatMap,
   mapResponsesRequestToAISDKInput,
@@ -435,6 +436,40 @@ describe('mapResponsesRequestToAISDKInput', () => {
         ],
       },
     ])
+  })
+
+  it('maps native OpenAI agent_message items to opaque wire anchors', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-4o',
+        input: [
+          {
+            type: 'agent_message',
+            author: '/root',
+            recipient: '/root/worker',
+            content: [
+              { type: 'input_text', text: 'Reply with exactly: task received' },
+              { type: 'encrypted_content', encrypted_content: 'encrypted-task-payload' },
+            ],
+          } as any,
+        ],
+      },
+      'openai',
+    )
+
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          providerOptions: { openai: { phase: 'commentary' } },
+        },
+      ],
+    })
+    const marker = (result.messages[0]?.content as Array<{ text?: string }>)[0]?.text
+    expect(marker).toMatch(new RegExp(`^${AGENT_MESSAGE_ANCHOR_PREFIX}[0-9a-f-]{36}$`, 'i'))
+    expect(JSON.stringify(result.messages)).not.toContain('encrypted-task-payload')
   })
 
   it('maps outgoing historical agent_message items as assistant context', () => {
