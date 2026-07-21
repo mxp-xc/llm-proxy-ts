@@ -2,6 +2,7 @@
 export {
   pluginEntrySchema,
   modelRouteConfigSchema,
+  disabledToolsSchema,
   oauthConfigSchema,
   providerConfigSchema,
   settingsSchema,
@@ -9,6 +10,7 @@ export {
 export type {
   PluginEntry,
   AliasEntry,
+  DisabledToolEntry,
   ModelRouteConfig,
   ReasoningEffortConfig,
   OAuthConfig,

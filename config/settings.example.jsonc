@@ -62,6 +62,9 @@
       //   // "includeUsage": false,
       //   // Force all requests through streaming path (for providers that only support streaming).
       //   // "streamOnly": true,
+      //   // Disable tools for every model under this provider. Strings match exactly;
+      //   // explicit glob entries support * and ? with case-sensitive matching.
+      //   // "disabled-tools": ["apply_patch", { "glob": "mcp__github__*" }],
       //   // Reasoning effort default for all models under this provider:
       //   // "reasoning_effort": { "default": "medium", "supported": ["low", "medium", "high"] },
       // },
@@ -74,6 +77,8 @@
           //   "default": "high",
           //   "supported": ["low", "medium", "high", "xhigh"],
           // },
+          // Additional tools disabled only for this model:
+          // "disabled-tools": ["web_search"],
         },
       },
     },

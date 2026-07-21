@@ -151,6 +151,53 @@ describe('config', () => {
     expect(JSON.stringify(schema)).toContain('apiKey')
   })
 
+  it('accepts provider and model disabled-tools matchers', () => {
+    const raw = `{
+      "providers": {
+        "openrouter": {
+          "type": "openai-compatible",
+          "baseURL": "https://openrouter.ai/api/v1",
+          "options": {
+            "disabled-tools": ["apply_patch", { "glob": "mcp__github__*" }]
+          },
+          "models": {
+            "chat": {
+              "upstreamModel": "gpt-5",
+              "disabled-tools": []
+            }
+          }
+        }
+      }
+    }`
+    const settings = parseAndValidateSettings(raw)
+
+    expect(settings.providers.openrouter?.options?.['disabled-tools']).toEqual([
+      'apply_patch',
+      { glob: 'mcp__github__*' },
+    ])
+    expect(settings.providers.openrouter?.models.chat?.['disabled-tools']).toEqual([])
+    expect(compileGeneratedSettingsSchema()(JSON.parse(raw))).toBe(true)
+  })
+
+  it.each(['[""]', '[{ "glob": "" }]', '[{ "glob": "tool_*", "extra": true }]'])(
+    'rejects invalid disabled-tools matcher %s',
+    (matcher) => {
+      const raw = `{
+      "providers": {
+        "openrouter": {
+          "type": "openai-compatible",
+          "baseURL": "https://openrouter.ai/api/v1",
+          "options": { "disabled-tools": ${matcher} },
+          "models": { "chat": { "upstreamModel": "gpt-5" } }
+        }
+      }
+    }`
+
+      expect(() => parseAndValidateSettings(raw)).toThrow()
+      expect(compileGeneratedSettingsSchema()(JSON.parse(raw))).toBe(false)
+    },
+  )
+
   it('accepts enableFlatModelLookup per-provider override', () => {
     const settings = parseAndValidateSettings(`{
       "routing": { "enableFlatModelLookup": false },

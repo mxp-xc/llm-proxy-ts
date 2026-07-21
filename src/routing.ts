@@ -3,6 +3,7 @@ import { enumerateModelEntries } from './providers/model-types.js'
 import type { PipelinePluginRegistry, ResolvedPlugin } from './plugins/registry.js'
 import { getBuiltInPlugin } from './plugins/loader.js'
 import { canUseFlatModelSelector, parseModelSelector } from './model-selector.js'
+import { ToolNameMatcher } from './tool-filter.js'
 
 export interface RouteMatch {
   providerName: string
@@ -11,6 +12,7 @@ export interface RouteMatch {
   modelSelector: string
   upstreamModel: string
   modelHeaders: Record<string, string>
+  disabledToolMatcher: ToolNameMatcher
   resolvedPlugins: ResolvedPlugin[]
 }
 
@@ -188,6 +190,10 @@ function buildRoute(
     modelSelector,
     upstreamModel: model.upstreamModel,
     modelHeaders: { ...model.headers },
+    disabledToolMatcher: new ToolNameMatcher([
+      ...(provider.options?.['disabled-tools'] ?? []),
+      ...(model['disabled-tools'] ?? []),
+    ]),
     resolvedPlugins,
   }
 }

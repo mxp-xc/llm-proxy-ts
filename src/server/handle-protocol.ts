@@ -24,6 +24,7 @@ import { readableStreamFromAsyncIterable } from './stream-utils.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 import { type ErrorLogger, type ErrorPhase, normalizeErrorForLog } from './error-logger.js'
 import { buildOAuthLoginUrl } from './oauth/urls.js'
+import { filterDisabledTools } from '../tool-filter.js'
 
 export interface ProtocolContext {
   routingTable: RoutingTable
@@ -510,9 +511,10 @@ export async function handleProtocolRequest<
 
   // 4. Map to AI SDK input + compute strategy-local enrichment
   const providerAwareMapping = getProviderAwareMappingCapability(strategy)
-  const callInput =
+  const mappedCallInput =
     providerAwareMapping?.mapToProviderAISDKInput(request, providerType) ??
     strategy.mapToAISDKInput(request)
+  const callInput = filterDisabledTools(mappedCallInput, route.disabledToolMatcher)
   const enrichment = getRenderEnrichmentCapability(strategy)?.prepareEnrichment(
     request,
     providerType,

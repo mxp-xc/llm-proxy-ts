@@ -42,6 +42,24 @@ describe('RoutingTable', () => {
     expect(route.resolvedPlugins[0]!.plugin.name).toBe('vendor_sse_error')
   })
 
+  it('combines provider and model disabled-tools matchers', () => {
+    const s = settings()
+    const provider = s.providers.openrouter!
+    provider.options = {
+      'disabled-tools': ['provider_tool', { glob: 'mcp__github__*' }],
+    }
+    provider.models.chat!['disabled-tools'] = ['model_tool', 'provider_tool']
+
+    const table = RoutingTable.fromSettings(s)
+    const route = table.resolve('openrouter/chat')
+
+    expect(route.disabledToolMatcher.matches('provider_tool')).toBe(true)
+    expect(route.disabledToolMatcher.matches('model_tool')).toBe(true)
+    expect(route.disabledToolMatcher.matches('mcp__github__search')).toBe(true)
+    expect(route.disabledToolMatcher.matches('keep')).toBe(false)
+    expect(table.resolve('openrouter/default').disabledToolMatcher.matches('model_tool')).toBe(true)
+  })
+
   it('resolves aliases inside an explicit provider', () => {
     const table = RoutingTable.fromSettings(settings())
     expect(table.resolve('openrouter/default').modelKey).toBe('chat')

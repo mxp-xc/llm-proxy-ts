@@ -97,6 +97,16 @@ export const aliasEntrySchema = z
 
 export type AliasEntry = z.infer<typeof aliasEntrySchema>
 
+const disabledToolGlobSchema = z
+  .object({
+    glob: z.string().min(1),
+  })
+  .strict()
+
+export const disabledToolsSchema = z.array(z.union([z.string().min(1), disabledToolGlobSchema]))
+
+export type DisabledToolEntry = z.infer<typeof disabledToolsSchema>[number]
+
 export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
   aliases: z.array(aliasEntrySchema).optional().default([]),
@@ -106,6 +116,7 @@ export const modelRouteConfigSchema = z.object({
   limit: modelLimitSchema.optional(),
   reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
+  'disabled-tools': disabledToolsSchema.optional(),
 })
 
 export const oauthConfigSchema = z.object({
@@ -125,6 +136,7 @@ const commonProviderOptionsSchema = z.object({
   enableFlatModelLookup: z.boolean().optional(),
   reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
+  'disabled-tools': disabledToolsSchema.optional(),
 })
 
 // openai-compatible 特定选项
