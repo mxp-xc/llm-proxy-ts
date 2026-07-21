@@ -16,6 +16,7 @@ export interface AnthropicErrorBody {
   type: 'error'
   error: {
     type: string
+    code?: string
     message: string
     loginUrl?: string
   }
@@ -28,6 +29,10 @@ export interface AnthropicErrorBody {
 export interface ProtocolErrorFormatter<TBody = OpenAIErrorBody | AnthropicErrorBody> {
   /** 请求验证失败 — 可传入协议特定的消息文本 */
   validation(message?: string): { body: TBody; status: number }
+  /** 选中模型不支持请求中的视觉输入 */
+  unsupportedVisionInput(): { body: TBody; status: number }
+  /** proxy 内部错误 */
+  internal(): { body: TBody; status: number }
   /** 模型路由失败（模型不存在） */
   routing(error: RoutingError): { body: TBody; status: number }
   /** OAuth 认证失败（需要登录） */
@@ -55,6 +60,32 @@ export const openAIErrorFormat: ProtocolErrorFormatter<OpenAIErrorBody> = {
         },
       },
       status: 400,
+    }
+  },
+
+  unsupportedVisionInput() {
+    return {
+      body: {
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_vision_input',
+          message: 'Vision input is not supported by the selected model',
+        },
+      },
+      status: 400,
+    }
+  },
+
+  internal() {
+    return {
+      body: {
+        error: {
+          type: 'internal_error',
+          code: 'internal_server_error',
+          message: 'Internal server error',
+        },
+      },
+      status: 500,
     }
   },
 
@@ -145,6 +176,30 @@ export const anthropicErrorFormat: ProtocolErrorFormatter<AnthropicErrorBody> = 
         error: { type: 'invalid_request_error', message: message ?? 'Invalid request' },
       },
       status: 400,
+    }
+  },
+
+  unsupportedVisionInput() {
+    return {
+      body: {
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_vision_input',
+          message: 'Vision input is not supported by the selected model',
+        },
+      },
+      status: 400,
+    }
+  },
+
+  internal() {
+    return {
+      body: {
+        type: 'error',
+        error: { type: 'api_error', message: 'Internal server error' },
+      },
+      status: 500,
     }
   },
 

@@ -12,6 +12,22 @@
   "routing": {
     "enableFlatModelLookup": true,
   },
+  // Optional storage for images removed from tool results when the selected model has no vision.
+  // Omit this block to inject an unavailable notice without writing image files.
+  // "visionFallback": {
+  //   "toolResultArtifacts": {
+  //     // Absolute directory used by the proxy process.
+  //     "storageDir": "C:/llm-proxy/vision-artifacts",
+  //     // Absolute path to the same shared directory as visible to the agent runtime.
+  //     "agentVisibleDir": "/workspace/.llm-proxy/vision-artifacts",
+  //     "ttlMs": 86400000,
+  //     "maxImageBytes": 10485760,
+  //     // Must be greater than or equal to maxImageBytes.
+  //     "maxRequestBytes": 20971520,
+  //     // Must be greater than or equal to maxRequestBytes.
+  //     "maxTotalBytes": 1073741824,
+  //   },
+  // },
   "plugins": [
     // Auth plugin example (custom token endpoint → Bearer header):
     // {
@@ -65,6 +81,8 @@
       //   // Disable tools for every model under this provider. Strings match exactly;
       //   // explicit glob entries support * and ? with case-sensitive matching.
       //   // "disabled-tools": ["apply_patch", { "glob": "mcp__github__*" }],
+      //   // Default vision capability for all models under this provider (default: true).
+      //   // "supports_vision": false,
       //   // Reasoning effort default for all models under this provider:
       //   // "reasoning_effort": { "default": "medium", "supported": ["low", "medium", "high"] },
       // },
@@ -72,6 +90,8 @@
       "models": {
         "gpt-5.5": {
           "upstreamModel": "gpt-5.5",
+          // Override the provider-level vision capability for this model:
+          // "supports_vision": true,
           // Reasoning effort (model property, used by codex catalog + config.toml):
           // "reasoning_effort": {
           //   "default": "high",

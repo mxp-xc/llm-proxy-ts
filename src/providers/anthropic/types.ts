@@ -2,8 +2,8 @@
  * Anthropic Messages API 类型定义。
  *
  * 基于 Anthropic Messages API 官方规范。
- * v0 仅覆盖核心类型（text、tool_use、tool_result），
- * image、thinking、document 等后续迭代。
+ * v0 仅覆盖核心类型（text、image、tool_use、tool_result），
+ * thinking、document 等后续迭代。
  */
 
 // ─── Cache Control ─────────────────────────────────────────────
@@ -21,6 +21,15 @@ export interface AnthropicTextBlock {
   cache_control?: CacheControlEphemeral
 }
 
+export type AnthropicImageSource =
+  { type: 'base64'; media_type: string; data: string } | { type: 'url'; url: string }
+
+export interface AnthropicImageBlock {
+  type: 'image'
+  source: AnthropicImageSource
+  cache_control?: CacheControlEphemeral
+}
+
 export interface AnthropicToolUseBlock {
   type: 'tool_use'
   id: string
@@ -31,13 +40,13 @@ export interface AnthropicToolUseBlock {
 export interface AnthropicToolResultBlock {
   type: 'tool_result'
   tool_use_id: string
-  content?: string | AnthropicTextBlock[]
+  content?: string | Array<AnthropicTextBlock | AnthropicImageBlock>
   is_error?: boolean
   cache_control?: CacheControlEphemeral
 }
 
 export type AnthropicContentBlock =
-  AnthropicTextBlock | AnthropicToolUseBlock | AnthropicToolResultBlock
+  AnthropicTextBlock | AnthropicImageBlock | AnthropicToolUseBlock | AnthropicToolResultBlock
 
 // ─── System Prompt ─────────────────────────────────────────────
 
@@ -124,7 +133,7 @@ export type AnthropicErrorType =
 
 export interface AnthropicErrorResponse {
   type: 'error'
-  error: { type: AnthropicErrorType; message: string }
+  error: { type: AnthropicErrorType; message: string; code?: string }
 }
 
 // ─── SSE Streaming Events ────────────────────────────────────────

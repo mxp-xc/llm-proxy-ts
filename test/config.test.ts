@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { Ajv } from 'ajv'
 import {
   generateSettingsJsonSchema,
@@ -427,6 +428,146 @@ describe('config', () => {
     },
   )
 
+  it('accepts supports_vision at provider options and model top level without defaults', () => {
+    const settings = parseAndValidateSettings(`{
+      "providers": {
+        "custom": {
+          "type": "openai-compatible",
+          "baseURL": "https://api.example.com/v1",
+          "options": { "supports_vision": false },
+          "models": {
+            "vision": { "upstreamModel": "vision-model", "supports_vision": true },
+            "text": { "upstreamModel": "text-model" }
+          }
+        },
+        "unset": {
+          "type": "openai-compatible",
+          "baseURL": "https://api.example.com/v1",
+          "options": {},
+          "models": {}
+        }
+      }
+    }`)
+
+    const provider = settings.providers.custom
+    expect(provider?.options?.supports_vision).toBe(false)
+    expect(provider?.models.vision?.supports_vision).toBe(true)
+    expect(provider?.models.text?.supports_vision).toBeUndefined()
+    expect(settings.providers.unset?.options?.supports_vision).toBeUndefined()
+  })
+
+  it('accepts optional tool-result artifact storage and applies bounded defaults', () => {
+    const storageDir = resolve('temp/vision-artifacts')
+    const settings = parseAndValidateSettings(
+      JSON.stringify({
+        visionFallback: {
+          toolResultArtifacts: {
+            storageDir,
+            agentVisibleDir: '/workspace/.llm-proxy/vision-artifacts',
+          },
+        },
+      }),
+    )
+
+    expect(settings.visionFallback?.toolResultArtifacts).toEqual({
+      storageDir,
+      agentVisibleDir: '/workspace/.llm-proxy/vision-artifacts',
+      ttlMs: 86_400_000,
+      maxImageBytes: 10_485_760,
+      maxRequestBytes: 20_971_520,
+      maxTotalBytes: 1_073_741_824,
+    })
+    expect(parseAndValidateSettings('{}').visionFallback).toBeUndefined()
+  })
+
+  it.each([
+    {
+      name: 'relative server path',
+      config: { storageDir: 'relative/artifacts', agentVisibleDir: '/shared/artifacts' },
+      message: /storageDir must be an absolute path/,
+    },
+    {
+      name: 'relative agent path',
+      config: { storageDir: resolve('temp/artifacts'), agentVisibleDir: 'relative/artifacts' },
+      message: /agentVisibleDir must be an absolute path/,
+    },
+    {
+      name: 'server path ending in CR',
+      config: {
+        storageDir: `${resolve('temp/artifacts')}\r`,
+        agentVisibleDir: '/shared/artifacts',
+      },
+      message: /path must not contain NUL, CR, or LF/,
+    },
+    {
+      name: 'agent path ending in LF',
+      config: {
+        storageDir: resolve('temp/artifacts'),
+        agentVisibleDir: '/shared/artifacts\n',
+      },
+      message: /path must not contain NUL, CR, or LF/,
+    },
+    {
+      name: 'request limit below image limit',
+      config: {
+        storageDir: resolve('temp/artifacts'),
+        agentVisibleDir: '/shared/artifacts',
+        maxImageBytes: 10,
+        maxRequestBytes: 9,
+      },
+      message: /maxRequestBytes must be greater than or equal to maxImageBytes/,
+    },
+    {
+      name: 'total limit below request limit',
+      config: {
+        storageDir: resolve('temp/artifacts'),
+        agentVisibleDir: '/shared/artifacts',
+        maxImageBytes: 10,
+        maxRequestBytes: 20,
+        maxTotalBytes: 19,
+      },
+      message: /maxTotalBytes must be greater than or equal to maxRequestBytes/,
+    },
+  ])('rejects invalid artifact storage config: $name', ({ config, message }) => {
+    expect(() =>
+      parseAndValidateSettings(JSON.stringify({ visionFallback: { toolResultArtifacts: config } })),
+    ).toThrow(message)
+  })
+
+  it('rejects supports_vision at the provider top level with a placement hint', () => {
+    expect(() =>
+      parseAndValidateSettings(`{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "supports_vision": false,
+            "models": {}
+          }
+        }
+      }`),
+    ).toThrow(/provider\.options\.supports_vision/)
+  })
+
+  it('rejects model options.supports_vision with a model-level placement hint', () => {
+    expect(() =>
+      parseAndValidateSettings(`{
+        "providers": {
+          "custom": {
+            "type": "openai-compatible",
+            "baseURL": "https://api.example.com/v1",
+            "models": {
+              "chat": {
+                "upstreamModel": "model-x",
+                "options": { "supports_vision": false }
+              }
+            }
+          }
+        }
+      }`),
+    ).toThrow(/supports_vision.*model top level/)
+  })
+
   it('defaults options to undefined when omitted', () => {
     const settings = parseAndValidateSettings(`{
       "providers": {
@@ -585,6 +726,140 @@ describe('config', () => {
         },
       }),
     ).toBe(false)
+  })
+
+  it('validates supports_vision placements and types through generated JSON schema', () => {
+    const validate = compileGeneratedSettingsSchema()
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            options: { supports_vision: false },
+            models: { chat: { upstreamModel: 'model-x', supports_vision: true } },
+          },
+        },
+      }),
+    ).toBe(true)
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            options: { supports_vision: 'false' },
+            models: { chat: { upstreamModel: 'model-x' } },
+          },
+        },
+      }),
+    ).toBe(false)
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            models: { chat: { upstreamModel: 'model-x', supports_vision: 'true' } },
+          },
+        },
+      }),
+    ).toBe(false)
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            supports_vision: false,
+            models: { chat: { upstreamModel: 'model-x' } },
+          },
+        },
+      }),
+    ).toBe(false)
+
+    expect(
+      validate({
+        providers: {
+          compatible: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            models: {
+              chat: {
+                upstreamModel: 'model-x',
+                options: { supports_vision: false },
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false)
+  })
+
+  it('validates tool-result artifact storage through generated JSON schema', () => {
+    const validate = compileGeneratedSettingsSchema()
+    const validArtifactConfig = {
+      storageDir: resolve('temp/vision-artifacts'),
+      agentVisibleDir: '/shared/vision-artifacts',
+    }
+
+    expect(
+      validate({
+        visionFallback: {
+          toolResultArtifacts: {
+            ...validArtifactConfig,
+            ttlMs: 60_000,
+            maxImageBytes: 1024,
+            maxRequestBytes: 2048,
+            maxTotalBytes: 4096,
+          },
+        },
+      }),
+    ).toBe(true)
+
+    expect(
+      validate({
+        visionFallback: {
+          toolResultArtifacts: {
+            ...validArtifactConfig,
+            ttlMs: '60000',
+          },
+        },
+      }),
+    ).toBe(false)
+
+    expect(
+      validate({
+        visionFallback: {
+          toolResultArtifacts: {
+            ...validArtifactConfig,
+            unexpected: true,
+          },
+        },
+      }),
+    ).toBe(false)
+
+    for (const invalidArtifactConfig of [
+      { ...validArtifactConfig, storageDir: 'relative/artifacts' },
+      { ...validArtifactConfig, agentVisibleDir: 'relative/artifacts' },
+      { ...validArtifactConfig, storageDir: `${validArtifactConfig.storageDir}\r` },
+      { ...validArtifactConfig, agentVisibleDir: '/shared/artifacts\n' },
+      { ...validArtifactConfig, storageDir: `${validArtifactConfig.storageDir}\u0000suffix` },
+      { ...validArtifactConfig, ttlMs: 0 },
+      { ...validArtifactConfig, maxImageBytes: 1.5 },
+    ]) {
+      expect(validate({ visionFallback: { toolResultArtifacts: invalidArtifactConfig } })).toBe(
+        false,
+      )
+    }
+
+    const generatedSchema = JSON.stringify(generateSettingsJsonSchema())
+    expect(generatedSchema).toContain('must be greater than or equal to maxImageBytes')
+    expect(generatedSchema).toContain('must be greater than or equal to maxRequestBytes')
   })
 
   it('rejects slash-containing aliases through generated JSON schema', () => {

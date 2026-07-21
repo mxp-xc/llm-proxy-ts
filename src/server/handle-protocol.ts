@@ -9,6 +9,12 @@ import type {
   ProtocolProviderAwareMapping,
   ProtocolRenderEnrichment,
   ProtocolStrategy,
+  ProtocolVisionInputFilter,
+  VisionArtifactUnavailableReason,
+  VisionInputProtocol,
+  VisionInputTransformResult,
+  VisionToolResultImageCandidate,
+  VisionToolResultReplacement,
 } from '../providers/shared/strategy.js'
 import type { ProtocolErrorFormatter } from '../providers/shared/error-format.js'
 import type { AISDKInput } from '../providers/shared/aisdk-types.js'
@@ -30,6 +36,13 @@ import {
 } from './error-logger.js'
 import { buildOAuthLoginUrl } from './oauth/urls.js'
 import { filterDisabledTools } from '../tool-filter.js'
+import { resolveModelSupportsVision } from '../config-helpers.js'
+import {
+  createVisionToolResultReplacement,
+  type VisionArtifactBatchResult,
+  type VisionArtifactPersistenceError,
+  type VisionArtifactStore,
+} from './vision-artifact-store.js'
 
 export interface ProtocolContext {
   routingTable: RoutingTable
@@ -37,6 +50,7 @@ export interface ProtocolContext {
   gateway: ModelGateway
   providerRegistry: Pick<ProviderRegistry, 'languageModel'>
   errorLogger: ErrorLogger
+  visionArtifactStore: Pick<VisionArtifactStore, 'persistBatch'>
 }
 
 export interface ProtocolRequestScope {
@@ -573,6 +587,148 @@ function getProviderAwareMappingCapability<TRequest, TSSEData, TResult, TEnrichm
     : undefined
 }
 
+function getVisionInputFilterCapability<TRequest, TSSEData, TResult, TEnrichment extends object>(
+  strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>,
+): ProtocolVisionInputFilter | undefined {
+  const candidate = strategy as Partial<ProtocolVisionInputFilter>
+  return typeof candidate.planUnsupportedVisionInput === 'function' &&
+    typeof candidate.applyUnsupportedVisionInput === 'function' &&
+    candidate.visionInputProtocol !== undefined
+    ? (candidate as ProtocolVisionInputFilter)
+    : undefined
+}
+
+type VisionInputFilterOutcome = 'forwarded' | 'rejected' | 'internal_error'
+
+function logVisionInputMutation(
+  logger: Logger,
+  metadata: ProtocolRequestMetadata,
+  protocol: VisionInputProtocol,
+  result: VisionInputTransformResult,
+  outcome: VisionInputFilterOutcome,
+): void {
+  const changes = result.changes.map((change) => {
+    if (change.action === 'remove_image') {
+      return {
+        action: change.action,
+        path: change.path,
+        ...(change.role === undefined ? {} : { role: change.role }),
+        blockType: change.blockType,
+      }
+    }
+    return {
+      action: change.action,
+      path: change.path,
+      ...(change.role === undefined ? {} : { role: change.role }),
+      blockType: change.blockType,
+      containerType: change.containerType,
+      artifactStatus: change.artifactStatus,
+      ...(change.unavailableReason === undefined
+        ? {}
+        : { unavailableReason: change.unavailableReason }),
+    }
+  })
+  const fallbackChanges = result.changes.filter(
+    (change) => change.action === 'replace_tool_result_image',
+  )
+  const storedArtifactCount = fallbackChanges.filter(
+    (change) => change.artifactStatus === 'stored',
+  ).length
+  const unavailableReasonCounts: Record<string, number> = {}
+  for (const change of fallbackChanges) {
+    if (change.artifactStatus !== 'unavailable' || change.unavailableReason === undefined) continue
+    unavailableReasonCounts[change.unavailableReason] =
+      (unavailableReasonCounts[change.unavailableReason] ?? 0) + 1
+  }
+  logger.info(
+    {
+      event: 'vision_input_filtered',
+      protocol,
+      provider: metadata.provider,
+      requestedModel: metadata.requestedModel,
+      actualModel: metadata.actualModel,
+      supportsVision: false,
+      outcome,
+      removedImageCount: result.removedImageCount,
+      affectedMessageCount: result.affectedMessageCount,
+      fallbackNoticeCount: result.fallbackNoticeCount,
+      storedArtifactCount,
+      unavailableArtifactCount: fallbackChanges.length - storedArtifactCount,
+      ...(Object.keys(unavailableReasonCounts).length === 0 ? {} : { unavailableReasonCounts }),
+      changes,
+    },
+    'vision input filtered',
+  )
+}
+
+function createUnavailableReplacements(
+  candidates: readonly VisionToolResultImageCandidate[],
+  reason: VisionArtifactUnavailableReason,
+): Map<string, VisionToolResultReplacement> {
+  return new Map(
+    candidates.map((candidate) => [
+      candidate.path,
+      createVisionToolResultReplacement({
+        path: candidate.path,
+        status: 'unavailable',
+        reason,
+      }),
+    ]),
+  )
+}
+
+function logVisionArtifactErrors(
+  logger: Logger,
+  metadata: ProtocolRequestMetadata,
+  protocol: VisionInputProtocol,
+  errors: readonly VisionArtifactPersistenceError[],
+): void {
+  for (const error of errors) {
+    logger.error(
+      {
+        event: 'vision_artifact_persistence_failed',
+        phase: error.phase,
+        err: error.err,
+        protocol,
+        provider: metadata.provider,
+        requestedModel: metadata.requestedModel,
+        actualModel: metadata.actualModel,
+      },
+      'vision artifact persistence failed',
+    )
+  }
+}
+
+function createStoredOrUnavailableReplacements(
+  candidates: readonly VisionToolResultImageCandidate[],
+  batch: VisionArtifactBatchResult,
+): {
+  replacements: Map<string, VisionToolResultReplacement>
+  invariantErrors: VisionArtifactPersistenceError[]
+} {
+  const replacements = new Map<string, VisionToolResultReplacement>()
+  const invariantErrors: VisionArtifactPersistenceError[] = []
+  for (const candidate of candidates) {
+    const result = batch.results.get(candidate.path)
+    if (result !== undefined) {
+      replacements.set(candidate.path, createVisionToolResultReplacement(result))
+      continue
+    }
+
+    const err = new Error(`Vision artifact store omitted result for ${candidate.path}`)
+    invariantErrors.push({ phase: 'vision_artifact_persist', err })
+    replacements.set(
+      candidate.path,
+      createVisionToolResultReplacement({
+        path: candidate.path,
+        status: 'unavailable',
+        reason: 'storage_error',
+      }),
+    )
+  }
+  return { replacements, invariantErrors }
+}
+
 interface ExecuteUpstreamOptions<TRequest, TSSEData, TResult, TEnrichment extends object> {
   logger: Logger
   strategy: ProtocolStrategy<TRequest, TSSEData, TResult, TEnrichment>
@@ -963,6 +1119,133 @@ export async function handleProtocolRequest<
     actualModel: route.upstreamModel,
   }
 
+  const routeModel = route.provider.models[route.modelKey]!
+  const supportsVision = resolveModelSupportsVision(route.provider, routeModel)
+  const visionInputFilter = getVisionInputFilterCapability(strategy)
+  let rawBodyWasTransformed = false
+  if (!supportsVision && visionInputFilter !== undefined) {
+    const plan = visionInputFilter.planUnsupportedVisionInput(rawBody)
+    if (plan.imageCount > 0) {
+      let replacements: Map<string, VisionToolResultReplacement>
+      if (plan.rejection === 'unsupported_vision_input') {
+        replacements = createUnavailableReplacements(plan.toolResultImages, 'request_rejected')
+      } else {
+        let batch: VisionArtifactBatchResult
+        try {
+          batch = await ctx.visionArtifactStore.persistBatch(plan.toolResultImages)
+        } catch (err) {
+          batch = {
+            results: new Map(
+              plan.toolResultImages.map((candidate) => [
+                candidate.path,
+                {
+                  path: candidate.path,
+                  status: 'unavailable' as const,
+                  reason: 'storage_error' as const,
+                },
+              ]),
+            ),
+            errors: [{ phase: 'vision_artifact_persist', err }],
+          }
+        }
+        logVisionArtifactErrors(
+          requestScope.logger,
+          requestMetadata,
+          visionInputFilter.visionInputProtocol,
+          batch.errors,
+        )
+        const converted = createStoredOrUnavailableReplacements(plan.toolResultImages, batch)
+        logVisionArtifactErrors(
+          requestScope.logger,
+          requestMetadata,
+          visionInputFilter.visionInputProtocol,
+          converted.invariantErrors,
+        )
+        replacements = converted.replacements
+      }
+
+      let transform: VisionInputTransformResult
+      try {
+        transform = visionInputFilter.applyUnsupportedVisionInput(plan, replacements)
+      } catch (err) {
+        requestScope.logger.error(
+          {
+            event: 'vision_transform_apply_failed',
+            phase: 'vision-transform-apply',
+            err,
+            protocol: visionInputFilter.visionInputProtocol,
+            provider: route.providerName,
+            requestedModel: requestModel,
+            actualModel: route.upstreamModel,
+            imageCount: plan.imageCount,
+            toolResultImageCount: plan.toolResultImages.length,
+          },
+          'vision request transform failed',
+        )
+        const { body, status } = formatErrors.internal()
+        return jsonResponse(body, status)
+      }
+
+      rawBody = transform.body
+      if (transform.rejection === 'unsupported_vision_input') {
+        logVisionInputMutation(
+          requestScope.logger,
+          requestMetadata,
+          visionInputFilter.visionInputProtocol,
+          transform,
+          'rejected',
+        )
+        const { body, status } = formatErrors.unsupportedVisionInput()
+        return jsonResponse(body, status)
+      }
+
+      try {
+        request = strategy.validate(rawBody)
+      } catch (err) {
+        logVisionInputMutation(
+          requestScope.logger,
+          requestMetadata,
+          visionInputFilter.visionInputProtocol,
+          transform,
+          'internal_error',
+        )
+        const issues =
+          typeof err === 'object' && err !== null && 'issues' in err
+            ? (err as { issues?: unknown }).issues
+            : undefined
+        requestScope.logger.error(
+          {
+            event: 'vision_transform_validation_failed',
+            phase: 'vision-transform-validation',
+            err,
+            ...(issues !== undefined ? { issues } : {}),
+            protocol: visionInputFilter.visionInputProtocol,
+            provider: route.providerName,
+            requestedModel: requestModel,
+            actualModel: route.upstreamModel,
+            removedImageCount: transform.removedImageCount,
+            affectedMessageCount: transform.affectedMessageCount,
+            fallbackNoticeCount: transform.fallbackNoticeCount,
+          },
+          'vision-transformed request validation failed',
+        )
+        const { body, status } = formatErrors.internal()
+        return jsonResponse(body, status)
+      }
+
+      rawBodyWasTransformed = transform.changes.length > 0
+      if (rawBodyWasTransformed) {
+        logVisionInputMutation(
+          requestScope.logger,
+          requestMetadata,
+          visionInputFilter.visionInputProtocol,
+          transform,
+          'forwarded',
+        )
+      }
+    }
+  }
+
   const loginUrl = buildOAuthLoginUrl(ctx.settings, route.providerName)
   const providerType = route.provider.type
 
@@ -971,6 +1254,7 @@ export async function handleProtocolRequest<
   const executionOverride = getExecutionOverrideCapability(strategy)?.prepareExecution({
     providerType,
     rawBody,
+    rawBodyWasTransformed,
   })
 
   // 4. Map to AI SDK input + compute strategy-local enrichment

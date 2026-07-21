@@ -28,7 +28,7 @@ export {
 } from './config.js'
 export { loadEnvironmentFiles } from './env.js'
 export { resolveSettingsPath } from './resolve-settings-path.js'
-export { isFlatLookupEnabled } from './config-helpers.js'
+export { isFlatLookupEnabled, resolveModelSupportsVision } from './config-helpers.js'
 
 // Type exports
 export type { Logger } from './types.js'

@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, isAbsolute, posix, win32 } from 'node:path'
 import { parse, type ParseError } from 'jsonc-parser'
 import { z } from 'zod/v3'
 import { zodToJsonSchema } from 'zod-to-json-schema'
@@ -111,6 +111,7 @@ export const modelRouteConfigSchema = z.object({
   upstreamModel: z.string().min(1),
   aliases: z.array(aliasEntrySchema).optional().default([]),
   flat: z.boolean().optional(),
+  supports_vision: z.boolean().optional(),
   headers: z.record(z.string(), z.string()).optional().default({}),
   plugins: z.array(scopedPluginEntrySchema).optional().default([]),
   limit: modelLimitSchema.optional(),
@@ -134,6 +135,7 @@ export const oauthConfigSchema = z.object({
 const commonProviderOptionsSchema = z.object({
   streamOnly: z.boolean().optional(),
   enableFlatModelLookup: z.boolean().optional(),
+  supports_vision: z.boolean().optional(),
   reasoning_effort: reasoningEffortConfigSchema.optional(),
   codex: codexModelOverrideSchema.optional(),
   'disabled-tools': disabledToolsSchema.optional(),
@@ -204,6 +206,76 @@ export const errorLoggingSchema = z.object({
 
 export type ErrorLoggingConfig = z.infer<typeof errorLoggingSchema>
 
+const absolutePathPattern = /^(?:\/|\\|[A-Za-z]:[\\/])/
+const pathWithoutControlCharactersSchema = z
+  .string()
+  .min(1)
+  .regex(/^(?![\s\S]*[\u0000\r\n])/, 'path must not contain NUL, CR, or LF')
+
+export const visionToolResultArtifactsSchema = z
+  .object({
+    storageDir: pathWithoutControlCharactersSchema
+      .regex(absolutePathPattern, 'storageDir must be an absolute path on the server')
+      .refine(
+        (value) => !absolutePathPattern.test(value) || isAbsolute(value),
+        'storageDir must be an absolute path on the server',
+      ),
+    agentVisibleDir: pathWithoutControlCharactersSchema
+      .regex(absolutePathPattern, 'agentVisibleDir must be an absolute path')
+      .refine(
+        (value) =>
+          !absolutePathPattern.test(value) || posix.isAbsolute(value) || win32.isAbsolute(value),
+        'agentVisibleDir must be an absolute path',
+      ),
+    ttlMs: z
+      .number()
+      .int()
+      .positive()
+      .default(86400000)
+      .describe('Artifact lifetime in milliseconds.'),
+    maxImageBytes: z
+      .number()
+      .int()
+      .positive()
+      .default(10485760)
+      .describe('Maximum decoded bytes for one image.'),
+    maxRequestBytes: z
+      .number()
+      .int()
+      .positive()
+      .default(20971520)
+      .describe(
+        'Maximum decoded image bytes for one request; must be greater than or equal to maxImageBytes.',
+      ),
+    maxTotalBytes: z
+      .number()
+      .int()
+      .positive()
+      .default(1073741824)
+      .describe(
+        'Maximum bytes of managed artifacts in storageDir; must be greater than or equal to maxRequestBytes.',
+      ),
+  })
+  .strict()
+  .superRefine((config, ctx) => {
+    if (config.maxRequestBytes < config.maxImageBytes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['maxRequestBytes'],
+        message: 'maxRequestBytes must be greater than or equal to maxImageBytes',
+      })
+    }
+    if (config.maxTotalBytes < config.maxRequestBytes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['maxTotalBytes'],
+        message: 'maxTotalBytes must be greater than or equal to maxRequestBytes',
+      })
+    }
+  })
+
+export type VisionToolResultArtifactsConfig = z.infer<typeof visionToolResultArtifactsSchema>
+
 export const settingsSchema = z.object({
   $schema: z.string().optional(),
   service: z
@@ -229,6 +301,12 @@ export const settingsSchema = z.object({
   plugins: z.array(pluginEntrySchema).default([]),
   codex: codexSettingsSchema.default({}),
   errorLogging: errorLoggingSchema.default({}),
+  visionFallback: z
+    .object({
+      toolResultArtifacts: visionToolResultArtifactsSchema.optional(),
+    })
+    .strict()
+    .optional(),
   providers: z.record(z.string(), providerConfigSchema).default({}),
 })
 
@@ -311,6 +389,38 @@ function checkMigratedTopLevelFields(parsed: unknown): void {
   }
 }
 
+/** 检测 supports_vision 是否放在受支持的 provider/model 层级。 */
+function checkSupportsVisionPlacement(parsed: unknown): void {
+  if (!isRecord(parsed)) return
+  const providers = parsed['providers']
+  if (!isRecord(providers)) return
+
+  for (const [providerName, provider] of Object.entries(providers)) {
+    if (!isRecord(provider)) continue
+
+    if (Object.prototype.hasOwnProperty.call(provider, 'supports_vision')) {
+      throw new Error(
+        `Provider "${providerName}": "supports_vision" must be configured at ` +
+          '`provider.options.supports_vision`. Move it into the provider `options` object.',
+      )
+    }
+
+    const models = provider['models']
+    if (!isRecord(models)) continue
+    for (const [modelName, model] of Object.entries(models)) {
+      if (!isRecord(model)) continue
+      const options = model['options']
+      if (!isRecord(options)) continue
+      if (Object.prototype.hasOwnProperty.call(options, 'supports_vision')) {
+        throw new Error(
+          `Provider "${providerName}", model "${modelName}": ` +
+            '`options.supports_vision` is not supported. Move `supports_vision` to the model top level.',
+        )
+      }
+    }
+  }
+}
+
 export function parseAndValidateSettings(raw: string): Settings {
   const errors: ParseError[] = []
   const parsed = parse(raw, errors, { allowTrailingComma: true })
@@ -321,6 +431,7 @@ export function parseAndValidateSettings(raw: string): Settings {
 
   const resolved = resolveEnvPlaceholders(parsed)
   checkMigratedTopLevelFields(resolved)
+  checkSupportsVisionPlacement(resolved)
 
   return settingsSchema.parse(resolved)
 }

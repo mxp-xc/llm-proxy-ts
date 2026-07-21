@@ -25,6 +25,7 @@ import type {
   RequestOutcome,
   RequestTelemetryContext,
 } from './types.js'
+import { VisionArtifactStore } from './vision-artifact-store.js'
 
 export type { Settings } from '../index.js'
 export type { ModelGateway, AppDependencies, AppEnv } from './types.js'
@@ -132,6 +133,7 @@ export function createApp({
   codexCatalogCache,
   errorLogger,
   errorLogDir = 'logs',
+  visionArtifactStore,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -141,6 +143,8 @@ export function createApp({
     settings,
     gateway,
     providerRegistry,
+    visionArtifactStore:
+      visionArtifactStore ?? new VisionArtifactStore(settings.visionFallback?.toolResultArtifacts),
     errorLogger:
       errorLogger ??
       new ErrorLogger({

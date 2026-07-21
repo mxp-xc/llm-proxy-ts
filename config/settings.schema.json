@@ -423,6 +423,70 @@
       "additionalProperties": false,
       "default": {}
     },
+    "visionFallback": {
+      "type": "object",
+      "properties": {
+        "toolResultArtifacts": {
+          "type": "object",
+          "properties": {
+            "storageDir": {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [
+                {
+                  "pattern": "^(?![\\s\\S]*[\\u0000\\r\\n])"
+                },
+                {
+                  "pattern": "^(?:\\/|\\\\|[A-Za-z]:[\\\\/])"
+                }
+              ]
+            },
+            "agentVisibleDir": {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [
+                {
+                  "pattern": "^(?![\\s\\S]*[\\u0000\\r\\n])"
+                },
+                {
+                  "pattern": "^(?:\\/|\\\\|[A-Za-z]:[\\\\/])"
+                }
+              ]
+            },
+            "ttlMs": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 86400000,
+              "description": "Artifact lifetime in milliseconds."
+            },
+            "maxImageBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 10485760,
+              "description": "Maximum decoded bytes for one image."
+            },
+            "maxRequestBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 20971520,
+              "description": "Maximum decoded image bytes for one request; must be greater than or equal to maxImageBytes."
+            },
+            "maxTotalBytes": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "default": 1073741824,
+              "description": "Maximum bytes of managed artifacts in storageDir; must be greater than or equal to maxRequestBytes."
+            }
+          },
+          "required": [
+            "storageDir",
+            "agentVisibleDir"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "providers": {
       "type": "object",
       "additionalProperties": {
@@ -540,6 +604,9 @@
                       "default": []
                     },
                     "flat": {
+                      "type": "boolean"
+                    },
+                    "supports_vision": {
                       "type": "boolean"
                     },
                     "headers": {
@@ -990,6 +1057,9 @@
                     "type": "boolean"
                   },
                   "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "supports_vision": {
                     "type": "boolean"
                   },
                   "reasoning_effort": {
@@ -1451,6 +1521,9 @@
                     "flat": {
                       "type": "boolean"
                     },
+                    "supports_vision": {
+                      "type": "boolean"
+                    },
                     "headers": {
                       "type": "object",
                       "additionalProperties": {
@@ -1899,6 +1972,9 @@
                     "type": "boolean"
                   },
                   "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "supports_vision": {
                     "type": "boolean"
                   },
                   "reasoning_effort": {
@@ -2356,6 +2432,9 @@
                     "flat": {
                       "type": "boolean"
                     },
+                    "supports_vision": {
+                      "type": "boolean"
+                    },
                     "headers": {
                       "type": "object",
                       "additionalProperties": {
@@ -2804,6 +2883,9 @@
                     "type": "boolean"
                   },
                   "enableFlatModelLookup": {
+                    "type": "boolean"
+                  },
+                  "supports_vision": {
                     "type": "boolean"
                   },
                   "reasoning_effort": {

@@ -35,7 +35,7 @@ afterEach(() => {
 })
 
 describe('openai provider /v1/responses via AI SDK passthrough override', () => {
-  function makeOpenaiSettings() {
+  function makeOpenaiSettings(supportsVision?: boolean) {
     return makeSettings({
       openai: {
         type: 'openai',
@@ -43,6 +43,7 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
         apiKey: 'sk-test',
         headers: {},
         plugins: [],
+        ...(supportsVision === undefined ? {} : { options: { supports_vision: supportsVision } }),
         models: { chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] } },
       },
     })
@@ -167,6 +168,451 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
         content: [{ type: 'input_text', text: 'hello' }],
       },
     ])
+  })
+
+  it('restores filtered easy-message fields without replacing SDK-merged instructions', () => {
+    const inputFile = {
+      type: 'input_file',
+      file_url: 'file:///C:/workspace/context.txt',
+      opaque: 'preserve-file-field',
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            role: 'developer',
+            content: 'Be helpful\nBe precise',
+          },
+        ],
+      },
+      {
+        model: 'gpt-5.5',
+        instructions: 'Be helpful',
+        input: [
+          {
+            type: 'message',
+            role: 'developer',
+            content: [inputFile, { type: 'input_text', text: 'Be precise' }],
+            opaque_message_field: 'preserve-message-field',
+          },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged).not.toHaveProperty('instructions')
+    expect(merged.input).toEqual([
+      {
+        type: 'message',
+        role: 'developer',
+        content: [
+          { type: 'input_text', text: 'Be helpful' },
+          inputFile,
+          { type: 'input_text', text: 'Be precise' },
+        ],
+        opaque_message_field: 'preserve-message-field',
+      },
+    ])
+  })
+
+  it('matches same-role filtered messages by their retained text', () => {
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [{ role: 'system', content: 'retained system text' }],
+      },
+      {
+        model: 'gpt-5.5',
+        input: [
+          { type: 'message', role: 'system', content: [] },
+          {
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: 'retained system text' }],
+            opaque_message_field: 'preserve-second-message',
+          },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([
+      {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: 'retained system text' }],
+        opaque_message_field: 'preserve-second-message',
+      },
+    ])
+  })
+
+  it('aligns SDK-normalized system/developer roles without matching other roles', () => {
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [
+          { role: 'developer', content: 'system text' },
+          { role: 'developer', content: 'developer text' },
+          { role: 'user', content: 'shared text' },
+        ],
+      },
+      {
+        model: 'gpt-5.5',
+        input: [
+          {
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: 'system text' }],
+            opaque_message_field: 'preserve-system',
+          },
+          {
+            type: 'message',
+            role: 'developer',
+            content: [{ type: 'input_text', text: 'developer text' }],
+            opaque_message_field: 'preserve-developer',
+          },
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'shared text' }],
+            opaque_message_field: 'do-not-match-assistant',
+          },
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'shared text' }],
+            opaque_message_field: 'preserve-user',
+          },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([
+      {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: 'system text' }],
+        opaque_message_field: 'preserve-system',
+      },
+      {
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'developer text' }],
+        opaque_message_field: 'preserve-developer',
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'shared text' }],
+        opaque_message_field: 'preserve-user',
+      },
+    ])
+  })
+
+  it('restores unmatched non-text system/developer messages in raw input order', () => {
+    const inputFile = { type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }
+    const agentAnchor = {
+      type: 'message',
+      role: 'assistant',
+      phase: 'commentary',
+      content: [
+        {
+          type: 'output_text',
+          text: `${AGENT_MESSAGE_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`,
+        },
+      ],
+    }
+    const additionalToolsAnchor = {
+      type: 'message',
+      role: 'assistant',
+      phase: 'commentary',
+      content: [
+        {
+          type: 'output_text',
+          text: `${ADDITIONAL_TOOLS_ANCHOR_PREFIX}00000000-0000-4000-8000-000000000000`,
+        },
+      ],
+    }
+    const agentMessage = {
+      type: 'agent_message',
+      author: '/root',
+      recipient: '/root/worker',
+      content: [{ type: 'input_text', text: 'delegate' }],
+    }
+    const additionalTools = {
+      type: 'additional_tools',
+      tools: [{ type: 'function', name: 'inspect' }],
+    }
+    const functionCall = {
+      type: 'function_call',
+      call_id: 'call_1',
+      name: 'inspect',
+      arguments: '{}',
+    }
+    const mappedToolSearchOutput = {
+      type: 'function_call_output',
+      call_id: 'tool_search_1',
+      output: 'mapped tool search output',
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [
+          mappedToolSearchOutput,
+          agentAnchor,
+          agentMessage,
+          functionCall,
+          additionalToolsAnchor,
+          additionalTools,
+          { role: 'user', content: 'before' },
+          { type: 'function_call_output', call_id: 'call_1', output: 'sdk output' },
+          { role: 'user', content: 'after' },
+        ],
+      },
+      {
+        model: 'gpt-5.5',
+        input: [
+          {
+            type: 'message',
+            role: 'system',
+            content: [inputFile],
+            opaque_message_field: 'preserve-system-file',
+          },
+          { type: 'tool_search_output', id: 'tool_search_1', tools: [] },
+          agentMessage,
+          functionCall,
+          {
+            type: 'message',
+            role: 'developer',
+            content: [inputFile],
+            opaque_message_field: 'preserve-developer-file',
+          },
+          additionalTools,
+          { type: 'message', role: 'user', content: 'before' },
+          {
+            type: 'function_call_output',
+            call_id: 'call_1',
+            output: [{ type: 'input_text', text: 'raw output' }],
+          },
+          { type: 'message', role: 'user', content: 'after' },
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            opaque_message_field: 'do-not-insert-empty-assistant',
+          },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([
+      {
+        type: 'message',
+        role: 'system',
+        content: [inputFile],
+        opaque_message_field: 'preserve-system-file',
+      },
+      mappedToolSearchOutput,
+      agentMessage,
+      functionCall,
+      {
+        type: 'message',
+        role: 'developer',
+        content: [inputFile],
+        opaque_message_field: 'preserve-developer-file',
+      },
+      additionalTools,
+      { type: 'message', role: 'user', content: 'before' },
+      {
+        type: 'function_call_output',
+        call_id: 'call_1',
+        output: [{ type: 'input_text', text: 'raw output' }],
+      },
+      { type: 'message', role: 'user', content: 'after' },
+    ])
+  })
+
+  it('restores a filtered file-only assistant message without restoring an empty assistant', () => {
+    const fileOnlyAssistant = {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }],
+      opaque_message_field: 'preserve-assistant-file',
+    }
+    const userMessage = { type: 'message', role: 'user', content: 'continue' }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [{ role: 'user', content: 'continue' }] },
+      {
+        model: 'gpt-5.5',
+        input: [
+          fileOnlyAssistant,
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            opaque_message_field: 'do-not-restore-empty-assistant',
+          },
+          userMessage,
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([fileOnlyAssistant, userMessage])
+  })
+
+  it('keeps file-only system/developer messages around reasoning with unstable IDs', () => {
+    const inputFile = { type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }
+    const firstSDKReasoning = {
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'first sdk reasoning' }],
+    }
+    const secondSDKReasoning = {
+      type: 'reasoning',
+      id: 'sdk-generated-reasoning-id',
+      summary: [{ type: 'summary_text', text: 'second sdk reasoning' }],
+    }
+    const leadingSystem = { type: 'message', role: 'system', content: [inputFile] }
+    const middleDeveloper = { type: 'message', role: 'developer', content: [inputFile] }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [firstSDKReasoning, secondSDKReasoning],
+      },
+      {
+        model: 'gpt-5.5',
+        input: [
+          leadingSystem,
+          { type: 'reasoning', id: 'raw-reasoning-id', summary: [] },
+          middleDeveloper,
+          { type: 'reasoning', summary: [] },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([
+      leadingSystem,
+      firstSDKReasoning,
+      middleDeveloper,
+      secondSDKReasoning,
+    ])
+  })
+
+  it('keeps a file-only system message before a stored compaction reference', () => {
+    const leadingSystem = {
+      type: 'message',
+      role: 'system',
+      content: [{ type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }],
+    }
+    const itemReference = { type: 'item_reference', id: 'compaction_1' }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [itemReference] },
+      {
+        model: 'gpt-5.5',
+        input: [leadingSystem, { type: 'compaction', id: 'compaction_1' }],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([leadingSystem, itemReference])
+  })
+
+  it('keeps file-only messages around tool search calls whose IDs are rewritten', () => {
+    const inputFile = { type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }
+    const leadingSystem = { type: 'message', role: 'system', content: [inputFile] }
+    const middleDeveloper = { type: 'message', role: 'developer', content: [inputFile] }
+    const firstSDKCall = {
+      type: 'tool_search_call',
+      id: 'tool_search_1',
+      call_id: null,
+      execution: 'server',
+      arguments: {},
+    }
+    const secondSDKCall = {
+      type: 'tool_search_call',
+      id: 'tool_search_2',
+      call_id: null,
+      execution: 'server',
+      arguments: {},
+    }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [firstSDKCall, secondSDKCall] },
+      {
+        model: 'gpt-5.5',
+        input: [
+          leadingSystem,
+          { type: 'tool_search_call', call_id: 'tool_search_1', arguments: {} },
+          middleDeveloper,
+          { type: 'tool_search_call', id: 'tool_search_2', arguments: {} },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([leadingSystem, firstSDKCall, middleDeveloper, secondSDKCall])
+  })
+
+  it('keeps a file-only system message before a tool search output whose ID is rewritten', () => {
+    const leadingSystem = {
+      type: 'message',
+      role: 'system',
+      content: [{ type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }],
+    }
+    const sdkToolSearchOutput = {
+      type: 'tool_search_output',
+      call_id: 'tool_search_1',
+      execution: 'client',
+      status: 'completed',
+      tools: [],
+    }
+    const userMessage = { type: 'message', role: 'user', content: 'after' }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [sdkToolSearchOutput, userMessage] },
+      {
+        model: 'gpt-5.5',
+        input: [
+          leadingSystem,
+          { type: 'tool_search_output', id: 'tool_search_1', tools: [] },
+          userMessage,
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([leadingSystem, sdkToolSearchOutput, userMessage])
+  })
+
+  it('matches duplicate stored item references in raw input order', () => {
+    const inputFile = { type: 'input_file', file_url: 'file:///C:/workspace/context.txt' }
+    const leadingSystem = { type: 'message', role: 'system', content: [inputFile] }
+    const middleDeveloper = { type: 'message', role: 'developer', content: [inputFile] }
+    const firstReference = { type: 'item_reference', id: 'duplicate_id' }
+    const secondReference = { type: 'item_reference', id: 'duplicate_id' }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [firstReference, secondReference] },
+      {
+        model: 'gpt-5.5',
+        input: [
+          leadingSystem,
+          { type: 'compaction', id: 'duplicate_id' },
+          middleDeveloper,
+          { type: 'tool_search_output', call_id: 'duplicate_id', tools: [] },
+        ],
+      },
+      { restoreFilteredInputItems: true },
+    )
+
+    expect(merged.input).toEqual([leadingSystem, firstReference, middleDeveloper, secondReference])
   })
 
   it('restores raw include and raw-only web_search tool fields in the merged SDK body', () => {
@@ -883,6 +1329,316 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     expect(JSON.stringify(forwardedBody?.input)).not.toContain('Agent message from')
     expect(JSON.stringify(forwardedBody?.input)).not.toContain('llm_proxy_')
   })
+
+  it.each([false, true])(
+    'does not restore filtered agent_message images in the final SDK request body (stream=%s)',
+    async (stream) => {
+      const settings = makeOpenaiSettings(false)
+      let forwardedBody: Record<string, unknown> | undefined
+      vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+        forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        if (!stream) return Response.json(makeRawResponseBody())
+
+        const events = [
+          {
+            type: 'response.created',
+            sequence_number: 0,
+            response: {
+              id: 'resp_stream',
+              object: 'response',
+              status: 'in_progress',
+              output: [],
+            },
+          },
+          {
+            type: 'response.completed',
+            sequence_number: 1,
+            response: makeRawResponseBody(),
+          },
+        ]
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      })
+      const providerRegistry = await createProviderRegistry(settings)
+      const app = createApp({ settings, providerRegistry })
+      const imageBase64 = 'data:image/png;base64,must-not-reach-upstream'
+      const imageUrl = 'https://sensitive.example/image.png'
+      const filePath = 'C:\\workspace\\images\\keep.png'
+      const expectedAgentMessage = {
+        type: 'agent_message',
+        author: '/root',
+        recipient: '/root/worker',
+        content: [
+          { type: 'input_text', text: `inspect image path: ${filePath}` },
+          { type: 'input_file', file_url: 'file:///C:/workspace/images/keep.png' },
+          { type: 'encrypted_content', encrypted_content: 'opaque-encrypted-content' },
+        ],
+        custom_field: { file_path: filePath, opaque: 'preserve-me' },
+      }
+
+      const res = await app.request('/codex/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openai/chat',
+          input: [
+            {
+              ...expectedAgentMessage,
+              content: [
+                expectedAgentMessage.content[0],
+                { type: 'input_image', image_url: imageBase64 },
+                expectedAgentMessage.content[1],
+                { type: 'input_image', image_url: imageUrl },
+                expectedAgentMessage.content[2],
+              ],
+            },
+          ],
+          stream,
+          opaque_top_level: { preserve: true },
+        }),
+      })
+
+      expect(res.status).toBe(200)
+      await res.text()
+      expect(forwardedBody?.stream).toBe(stream)
+      expect(forwardedBody?.opaque_top_level).toEqual({ preserve: true })
+      expect(forwardedBody?.input).toEqual([expectedAgentMessage])
+      const serialized = JSON.stringify(forwardedBody)
+      expect(serialized).not.toContain('input_image')
+      expect(serialized).not.toContain(imageBase64)
+      expect(serialized).not.toContain(imageUrl)
+      expect(serialized).toContain(filePath.replaceAll('\\', '\\\\'))
+    },
+  )
+
+  it.each([false, true])(
+    'preserves filtered easy-message and call-output wire items (stream=%s)',
+    async (stream) => {
+      const settings = makeOpenaiSettings(false)
+      let forwardedBody: Record<string, unknown> | undefined
+      vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+        forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        if (!stream) return Response.json(makeRawResponseBody())
+
+        const events = [
+          {
+            type: 'response.created',
+            sequence_number: 0,
+            response: {
+              id: 'resp_stream',
+              object: 'response',
+              status: 'in_progress',
+              output: [],
+            },
+          },
+          {
+            type: 'response.completed',
+            sequence_number: 1,
+            response: makeRawResponseBody(),
+          },
+        ]
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      })
+      const providerRegistry = await createProviderRegistry(settings)
+      const app = createApp({ settings, providerRegistry })
+      const imageData = 'data:image/png;base64,must-not-reach-call-output-upstream'
+      const imageUrl = 'https://sensitive.example/easy-message.png'
+      const inputFile = {
+        type: 'input_file',
+        file_url: 'file:///C:/workspace/images/keep.png',
+        opaque_file_field: 'preserve-file-field',
+      }
+      const expectedSystemMessage = {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: 'system instruction' }],
+        opaque_message_field: 'preserve-system-message',
+      }
+      const expectedFileOnlySystemMessage = {
+        type: 'message',
+        role: 'system',
+        content: [inputFile],
+        opaque_message_field: 'preserve-file-only-system-message',
+      }
+      const expectedDeveloperMessage = {
+        type: 'message',
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'developer instruction' }],
+        opaque_message_field: 'preserve-developer-message',
+      }
+      const expectedEasyMessage = {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'inspect C:\\workspace\\images\\keep.png' },
+          inputFile,
+        ],
+        opaque_message_field: { preserve: true },
+      }
+      const expectedFunctionOutput = {
+        type: 'function_call_output',
+        call_id: 'call_function',
+        output: [
+          { type: 'input_text', text: 'function before' },
+          inputFile,
+          { type: 'input_text', text: 'function after' },
+        ],
+        opaque_output_field: 'preserve-function-output',
+      }
+      const expectedCustomOutput = {
+        type: 'custom_tool_call_output',
+        call_id: 'call_custom',
+        output: [
+          { type: 'input_text', text: 'custom before' },
+          inputFile,
+          { type: 'input_text', text: 'custom after' },
+        ],
+        opaque_output_field: 'preserve-custom-output',
+      }
+
+      const res = await app.request('/codex/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openai/chat',
+          input: [
+            expectedSystemMessage,
+            {
+              ...expectedFileOnlySystemMessage,
+              content: [
+                { type: 'input_image', image_url: imageData },
+                expectedFileOnlySystemMessage.content[0],
+              ],
+            },
+            expectedDeveloperMessage,
+            {
+              ...expectedEasyMessage,
+              content: [
+                expectedEasyMessage.content[0],
+                { type: 'input_image', image_url: imageUrl },
+                expectedEasyMessage.content[1],
+              ],
+            },
+            {
+              type: 'function_call',
+              call_id: 'call_function',
+              name: 'inspect',
+              arguments: '{}',
+            },
+            {
+              ...expectedFunctionOutput,
+              output: [
+                expectedFunctionOutput.output[0],
+                { type: 'input_image', image_url: imageData },
+                expectedFunctionOutput.output[1],
+                expectedFunctionOutput.output[2],
+              ],
+            },
+            {
+              type: 'custom_tool_call',
+              call_id: 'call_custom',
+              name: 'shell',
+              input: 'inspect image',
+            },
+            {
+              ...expectedCustomOutput,
+              output: [
+                expectedCustomOutput.output[0],
+                { type: 'input_image', image_url: imageData },
+                expectedCustomOutput.output[1],
+                expectedCustomOutput.output[2],
+              ],
+            },
+            {
+              type: 'function_call',
+              call_id: 'call_image_only',
+              name: 'inspect',
+              arguments: '{}',
+            },
+            {
+              type: 'function_call_output',
+              call_id: 'call_image_only',
+              output: [{ type: 'input_image', image_url: imageData }],
+              opaque_output_field: 'preserve-image-only-output',
+            },
+          ],
+          tools: [
+            {
+              type: 'function',
+              name: 'inspect',
+              parameters: { type: 'object', properties: {} },
+            },
+            { type: 'custom', name: 'shell', format: { type: 'text' } },
+          ],
+          stream,
+        }),
+      })
+
+      expect(res.status).toBe(200)
+      await res.text()
+      const forwardedInput = forwardedBody?.input as Array<Record<string, unknown>>
+      expect(forwardedInput[0]).toEqual(expectedSystemMessage)
+      expect(forwardedInput[1]).toEqual(expectedFileOnlySystemMessage)
+      expect(forwardedInput[2]).toEqual(expectedDeveloperMessage)
+      expect(forwardedInput[3]).toEqual(expectedEasyMessage)
+      expect(
+        forwardedInput.find(
+          (item) => item.type === 'function_call_output' && item.call_id === 'call_function',
+        ),
+      ).toEqual({
+        ...expectedFunctionOutput,
+        output: [
+          expectedFunctionOutput.output[0],
+          {
+            type: 'input_text',
+            text: expect.stringContaining('[llm-proxy-ts vision fallback]'),
+          },
+          expectedFunctionOutput.output[1],
+          expectedFunctionOutput.output[2],
+        ],
+      })
+      expect(
+        forwardedInput.find(
+          (item) => item.type === 'custom_tool_call_output' && item.call_id === 'call_custom',
+        ),
+      ).toEqual({
+        ...expectedCustomOutput,
+        output: [
+          expectedCustomOutput.output[0],
+          {
+            type: 'input_text',
+            text: expect.stringContaining('[llm-proxy-ts vision fallback]'),
+          },
+          expectedCustomOutput.output[1],
+          expectedCustomOutput.output[2],
+        ],
+      })
+      expect(
+        forwardedInput.find(
+          (item) => item.type === 'function_call_output' && item.call_id === 'call_image_only',
+        ),
+      ).toEqual({
+        type: 'function_call_output',
+        call_id: 'call_image_only',
+        output: expect.stringContaining('[llm-proxy-ts vision fallback]'),
+        opaque_output_field: 'preserve-image-only-output',
+      })
+      const serialized = JSON.stringify(forwardedBody)
+      expect(serialized).not.toContain('input_image')
+      expect(serialized).not.toContain(imageData)
+      expect(serialized).not.toContain(imageUrl)
+      expect(serialized).toContain('[llm-proxy-ts vision fallback]')
+    },
+  )
 
   it.each([
     { name: 'without conversation or store', conversation: undefined, store: undefined },

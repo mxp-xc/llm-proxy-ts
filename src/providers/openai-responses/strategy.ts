@@ -3,12 +3,17 @@ import type {
   ProtocolProviderAwareMapping,
   ProtocolRenderEnrichment,
   ProtocolStrategy,
+  ProtocolVisionInputFilter,
 } from '../shared/strategy.js'
 import { openAIErrorFormat } from '../shared/error-format.js'
 import { validateOpenAIResponsesRequest, mapResponsesRequestToAISDKInput } from './protocol.js'
 import { buildResponsesEnrichment } from './enrichment.js'
 import { renderOpenAIResponse, renderOpenAIResponseSSE } from './renderer.js'
 import { prepareOpenAIResponsesPassthroughExecution } from './passthrough.js'
+import {
+  applyUnsupportedOpenAIResponsesVisionInput,
+  planUnsupportedOpenAIResponsesVisionInput,
+} from './vision-input.js'
 import type { OpenAIResponsesRequest } from './protocol.js'
 import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 
@@ -20,7 +25,11 @@ export const openaiResponsesStrategy: ProtocolStrategy<
 > &
   ProtocolProviderAwareMapping<OpenAIResponsesRequest> &
   ProtocolRenderEnrichment<OpenAIResponsesRequest, ResponsesEnrichment> &
-  ProtocolExecutionOverride<OpenAIResponseStreamEvent, OpenAIResponse, ResponsesEnrichment> = {
+  ProtocolExecutionOverride<OpenAIResponseStreamEvent, OpenAIResponse, ResponsesEnrichment> &
+  ProtocolVisionInputFilter = {
+  visionInputProtocol: 'openai-responses',
+  planUnsupportedVisionInput: planUnsupportedOpenAIResponsesVisionInput,
+  applyUnsupportedVisionInput: applyUnsupportedOpenAIResponsesVisionInput,
   validate: validateOpenAIResponsesRequest,
   validationMessage: 'Invalid OpenAI Responses request',
   getModel: (req) => req.model,

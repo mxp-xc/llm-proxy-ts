@@ -5,6 +5,96 @@ import type { ProtocolErrorFormatter } from './error-format.js'
 import type { LanguageModelOptions } from '../registry.js'
 import type { GatewayGenerateOptions, GatewayStreamOptions } from '../../server/types.js'
 
+export type VisionInputProtocol =
+  'openai-chat-completions' | 'openai-responses' | 'anthropic-messages'
+
+export type VisionToolResultContainerType =
+  'tool_message' | 'function_call_output' | 'custom_tool_call_output' | 'tool_result'
+
+export type VisionArtifactUnavailableReason =
+  | 'storage_not_configured'
+  | 'remote_url'
+  | 'file_id'
+  | 'unsupported_source'
+  | 'invalid_base64'
+  | 'invalid_image_data'
+  | 'unsupported_media_type'
+  | 'image_too_large'
+  | 'request_too_large'
+  | 'storage_quota_exceeded'
+  | 'storage_error'
+  | 'request_rejected'
+
+export type VisionToolResultImageSource =
+  | { type: 'base64'; mediaType: string; data: string }
+  | { type: 'data_url'; dataUrl: string }
+  | {
+      type: 'unavailable'
+      reason: Extract<
+        VisionArtifactUnavailableReason,
+        'remote_url' | 'file_id' | 'unsupported_source'
+      >
+    }
+
+export interface VisionToolResultImageCandidate {
+  path: string
+  source: VisionToolResultImageSource
+}
+
+export interface VisionInputPlan {
+  body: unknown
+  imageCount: number
+  toolResultImages: VisionToolResultImageCandidate[]
+  rejection?: 'unsupported_vision_input'
+}
+
+export type VisionToolResultReplacement =
+  | {
+      text: string
+      artifactStatus: 'stored'
+      artifactId: string
+    }
+  | {
+      text: string
+      artifactStatus: 'unavailable'
+      unavailableReason: VisionArtifactUnavailableReason
+    }
+
+export type VisionInputChange =
+  | {
+      action: 'remove_image'
+      path: string
+      role?: string
+      blockType: 'image_url' | 'input_image' | 'image'
+    }
+  | {
+      action: 'replace_tool_result_image'
+      path: string
+      role?: string
+      blockType: 'image_url' | 'input_image' | 'image'
+      containerType: VisionToolResultContainerType
+      artifactStatus: VisionToolResultReplacement['artifactStatus']
+      unavailableReason?: VisionArtifactUnavailableReason
+    }
+
+export interface VisionInputTransformResult {
+  body: unknown
+  changes: VisionInputChange[]
+  removedImageCount: number
+  affectedMessageCount: number
+  fallbackNoticeCount: number
+  rejection?: 'unsupported_vision_input'
+}
+
+export interface ProtocolVisionInputFilter {
+  readonly visionInputProtocol: VisionInputProtocol
+  planUnsupportedVisionInput(rawBody: unknown): VisionInputPlan
+  applyUnsupportedVisionInput(
+    plan: VisionInputPlan,
+    replacements: ReadonlyMap<string, VisionToolResultReplacement>,
+  ): VisionInputTransformResult
+}
+
 /**
  * 策略模式接口：封装特定协议的验证、映射、渲染和错误格式化逻辑。
  * 每种协议格式（openai-compatible、openai-responses、anthropic）提供一个实现。
@@ -52,6 +142,7 @@ export interface ProtocolProviderAwareMapping<TRequest> {
 export interface ExecutionOverrideInput {
   providerType: string
   rawBody: unknown
+  rawBodyWasTransformed: boolean
 }
 
 export interface ExecutionOverrideConfig<TSSEData, TResult, TEnrichment extends object> {

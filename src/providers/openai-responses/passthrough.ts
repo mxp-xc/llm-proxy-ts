@@ -1,11 +1,10 @@
 import type { ExecutionOverrideInput, ExecutionOverrideConfig } from '../shared/strategy.js'
-import {
-  ADDITIONAL_TOOLS_ANCHOR_PREFIX,
-  AGENT_MESSAGE_ANCHOR_PREFIX,
-  type OpenAIResponsesRequest,
-} from './protocol.js'
-import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 import { renderOpenAIResponsesRawResponse, renderOpenAIResponsesRawSSE } from './renderer.js'
+import {
+  patchOpenAIResponsesPassthroughInput,
+  sdkInputAlreadyContainsInstructions,
+} from './passthrough-input.js'
+import type { OpenAIResponse, OpenAIResponseStreamEvent, ResponsesEnrichment } from './types.js'
 
 /** 响应头中需剔除的：content-encoding/length 由 Response 重新计算。 */
 const SKIP_RESPONSE_HEADERS = new Set([
@@ -18,6 +17,9 @@ const SKIP_RESPONSE_HEADERS = new Set([
 type FetchWrapper = (baseFetch?: typeof fetch) => typeof fetch
 export interface OpenAIResponsesPassthroughFetchState {
   responseHeaders?: Headers
+}
+export interface OpenAIResponsesRequestBodyMergeOptions {
+  restoreFilteredInputItems?: boolean
 }
 const WEB_SEARCH_RAW_ONLY_FIELDS = ['search_content_types', 'index_gated_web_access'] as const
 
@@ -42,31 +44,6 @@ function isResponsesUrl(input: RequestInfo | URL): boolean {
   } catch {
     return false
   }
-}
-
-function contentIncludesText(content: unknown, text: string): boolean {
-  if (typeof content === 'string') return content.includes(text)
-  if (Array.isArray(content)) return content.some((part) => contentIncludesText(part, text))
-  if (!isRecord(content)) return false
-
-  if (typeof content.text === 'string' && content.text.includes(text)) return true
-  if ('content' in content) return contentIncludesText(content.content, text)
-  return false
-}
-
-function sdkInputAlreadyContainsInstructions(
-  sdkBody: Record<string, unknown>,
-  instructions: string,
-): boolean {
-  const input = sdkBody.input
-  if (!Array.isArray(input)) return false
-
-  return input.some((item) => {
-    if (!isRecord(item)) return false
-    const role = item.role
-    if (role !== 'developer' && role !== 'system') return false
-    return contentIncludesText(item.content, instructions)
-  })
 }
 
 function patchWebSearchTools(
@@ -113,183 +90,10 @@ function mergeRequestHeadersForBody(
   return mergedHeaders
 }
 
-function isInputItemAnchor(item: unknown, prefix: string): boolean {
-  if (
-    !isRecord(item) ||
-    item.type !== 'message' ||
-    item.role !== 'assistant' ||
-    item.phase !== 'commentary'
-  ) {
-    return false
-  }
-  if (!Array.isArray(item.content) || item.content.length !== 1) {
-    return false
-  }
-
-  const content = item.content[0]
-  if (!isRecord(content) || content.type !== 'output_text' || typeof content.text !== 'string') {
-    return false
-  }
-  const marker = content.text.slice(prefix.length)
-  return (
-    content.text.startsWith(prefix) &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(marker)
-  )
-}
-
-function isAdditionalToolsAnchor(item: unknown): boolean {
-  return isInputItemAnchor(item, ADDITIONAL_TOOLS_ANCHOR_PREFIX)
-}
-
-function isAgentMessageAnchor(item: unknown): boolean {
-  return isInputItemAnchor(item, AGENT_MESSAGE_ANCHOR_PREFIX)
-}
-
-function restoreMessageItemType(item: unknown): unknown {
-  if (!isRecord(item) || 'type' in item || !('content' in item)) return item
-  if (
-    item.role !== 'system' &&
-    item.role !== 'developer' &&
-    item.role !== 'user' &&
-    item.role !== 'assistant'
-  ) {
-    return item
-  }
-  return { type: 'message', ...item }
-}
-
-function restoreMessageItemTypes(body: Record<string, unknown>): Record<string, unknown> {
-  const input = body.input
-  if (!Array.isArray(input)) return body
-
-  let changed = false
-  const restoredInput = input.map((item) => {
-    const restored = restoreMessageItemType(item)
-    if (restored !== item) changed = true
-    return restored
-  })
-  return changed ? { ...body, input: restoredInput } : body
-}
-
-function patchAgentMessagesInput(
-  sdkBody: Record<string, unknown>,
-  rawBody: Record<string, unknown>,
-): Record<string, unknown> {
-  const rawInput = rawBody.input
-  if (!Array.isArray(rawInput)) return sdkBody
-
-  const rawAgentMessages = rawInput.filter(
-    (item): item is Record<string, unknown> => isRecord(item) && item.type === 'agent_message',
-  )
-  if (rawAgentMessages.length === 0) return sdkBody
-
-  const sdkInput = sdkBody.input
-  if (!Array.isArray(sdkInput)) {
-    throw new Error('Cannot align agent_message with non-array SDK input')
-  }
-
-  const nativeAgentMessageCount = sdkInput.filter(
-    (item) => isRecord(item) && item.type === 'agent_message',
-  ).length
-  if (nativeAgentMessageCount > 0) {
-    if (nativeAgentMessageCount !== rawAgentMessages.length) {
-      throw new Error(
-        `Cannot align agent_message with SDK input: expected ${rawAgentMessages.length} native items, found ${nativeAgentMessageCount}`,
-      )
-    }
-    let agentMessageIndex = 0
-    const patchedInput: unknown[] = []
-    for (const item of sdkInput) {
-      if (isAgentMessageAnchor(item)) continue
-      if (isRecord(item) && item.type === 'agent_message') {
-        patchedInput.push(rawAgentMessages[agentMessageIndex++])
-        continue
-      }
-      patchedInput.push(item)
-    }
-    return { ...sdkBody, input: patchedInput }
-  }
-
-  const anchorCount = sdkInput.filter(isAgentMessageAnchor).length
-  if (anchorCount !== rawAgentMessages.length) {
-    throw new Error(
-      `Cannot align agent_message with SDK input: expected ${rawAgentMessages.length} anchors, found ${anchorCount}`,
-    )
-  }
-
-  let agentMessageIndex = 0
-  return {
-    ...sdkBody,
-    input: sdkInput.map((item) =>
-      isAgentMessageAnchor(item) ? rawAgentMessages[agentMessageIndex++] : item,
-    ),
-  }
-}
-
-function patchAdditionalToolsInput(
-  sdkBody: Record<string, unknown>,
-  rawBody: Record<string, unknown>,
-): Record<string, unknown> {
-  const rawInput = rawBody.input
-  if (!Array.isArray(rawInput)) return sdkBody
-  if (!rawInput.some((item) => isRecord(item) && item.type === 'additional_tools')) {
-    return sdkBody
-  }
-
-  const sdkInput = sdkBody.input
-  if (!Array.isArray(sdkInput)) {
-    throw new Error('Cannot align additional_tools with non-array SDK input')
-  }
-  if (sdkInput.some((item) => isRecord(item) && item.type === 'additional_tools')) {
-    if (!sdkInput.some(isAdditionalToolsAnchor)) return sdkBody
-    return { ...sdkBody, input: sdkInput.filter((item) => !isAdditionalToolsAnchor(item)) }
-  }
-
-  const rawAdditionalTools = rawInput.filter(
-    (item): item is Record<string, unknown> => isRecord(item) && item.type === 'additional_tools',
-  )
-  const anchorCount = sdkInput.filter(isAdditionalToolsAnchor).length
-  let patchedInput: unknown[]
-  if (anchorCount > 0) {
-    if (anchorCount !== rawAdditionalTools.length) {
-      throw new Error('Cannot align additional_tools with SDK input: anchor count mismatch')
-    }
-    let additionalIndex = 0
-    patchedInput = sdkInput.map((item) =>
-      isAdditionalToolsAnchor(item) ? rawAdditionalTools[additionalIndex++] : item,
-    )
-  } else {
-    patchedInput = []
-    let sdkIndex = 0
-    for (const rawItem of rawInput) {
-      if (isRecord(rawItem) && rawItem.type === 'additional_tools') {
-        patchedInput.push(rawItem)
-        continue
-      }
-      if (isRecord(rawItem) && rawItem.type === 'web_search_call') continue
-      if (sdkIndex >= sdkInput.length) {
-        throw new Error('Cannot align additional_tools with SDK input: missing SDK item')
-      }
-      patchedInput.push(sdkInput[sdkIndex])
-      sdkIndex += 1
-    }
-    if (sdkIndex !== sdkInput.length) {
-      throw new Error('Cannot align additional_tools with SDK input: unused SDK items')
-    }
-  }
-
-  const patched: Record<string, unknown> = {
-    ...sdkBody,
-    input: patchedInput,
-  }
-  if (Array.isArray(rawBody.tools)) patched.tools = rawBody.tools
-  else delete patched.tools
-  return patched
-}
-
 export function mergeOpenAIResponsesRequestBody(
   sdkBody: Record<string, unknown>,
   rawBody: unknown,
+  options: OpenAIResponsesRequestBodyMergeOptions = {},
 ): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...sdkBody }
   if (!isRecord(rawBody)) return merged
@@ -315,14 +119,17 @@ export function mergeOpenAIResponsesRequestBody(
       merged[key] = value
     }
   }
-  const restoredMessages = restoreMessageItemTypes(merged)
-  const patchedAgentMessages = patchAgentMessagesInput(restoredMessages, rawBody)
-  return patchAdditionalToolsInput(patchedAgentMessages, rawBody)
+  return patchOpenAIResponsesPassthroughInput(
+    merged,
+    rawBody,
+    options.restoreFilteredInputItems === true,
+  )
 }
 
 export function createOpenAIResponsesRequestBodyMergeFetch(
   rawBody: unknown,
   state?: OpenAIResponsesPassthroughFetchState,
+  options: OpenAIResponsesRequestBodyMergeOptions = {},
 ): FetchWrapper {
   return (baseFetch) => {
     const fetchFn = baseFetch ?? globalThis.fetch
@@ -347,7 +154,7 @@ export function createOpenAIResponsesRequestBodyMergeFetch(
         return sendResponsesRequest(input, init)
       }
 
-      const mergedBody = mergeOpenAIResponsesRequestBody(sdkBody, rawBody)
+      const mergedBody = mergeOpenAIResponsesRequestBody(sdkBody, rawBody, options)
       const mergedInit: RequestInit = { ...init, body: JSON.stringify(mergedBody) }
       const mergedHeaders = mergeRequestHeadersForBody(init?.headers, mergedBody)
       if (mergedHeaders !== undefined) mergedInit.headers = mergedHeaders
@@ -381,7 +188,9 @@ export function prepareOpenAIResponsesPassthroughExecution(
 
   return {
     languageModelOptions: {
-      customFetch: createOpenAIResponsesRequestBodyMergeFetch(input.rawBody, fetchState),
+      customFetch: createOpenAIResponsesRequestBodyMergeFetch(input.rawBody, fetchState, {
+        restoreFilteredInputItems: input.rawBodyWasTransformed,
+      }),
     },
     generateOptions: {
       include: { requestBody: true, responseBody: true },

@@ -80,6 +80,73 @@ describe('Anthropic Messages protocol mapping', () => {
     expect(input.system).toBe('You are a helpful assistant.\nBe concise.')
   })
 
+  it('validates and maps a top-level base64 image to a tagged AI SDK file part', () => {
+    const request = validateAnthropicMessagesRequest({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = mapAnthropicMessagesRequestToAISDKInput(request)
+
+    expect(input.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image/png',
+            data: { type: 'data', data: 'iVBORw0KGgo=' },
+          },
+        ],
+      },
+    ])
+  })
+
+  it('validates and maps a top-level URL image to a tagged AI SDK file part', () => {
+    const request = validateAnthropicMessagesRequest({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'url', url: 'https://example.com/image.png' },
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = mapAnthropicMessagesRequestToAISDKInput(request)
+
+    expect(input.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: { type: 'url', url: new URL('https://example.com/image.png') },
+          },
+        ],
+      },
+    ])
+  })
+
   it('maps tool_use content blocks to AI SDK tool-call parts', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
@@ -181,6 +248,174 @@ describe('Anthropic Messages protocol mapping', () => {
     expect(parts[0]?.toolName).toBe('search')
   })
 
+  it('maps mixed tool_result content to ordered AI SDK text and file parts', () => {
+    const request = validateAnthropicMessagesRequest({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'read_image', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [
+                { type: 'text', text: 'before' },
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+                },
+                { type: 'text', text: 'after' },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = mapAnthropicMessagesRequestToAISDKInput(request)
+    const toolMessage = input.messages[1]! as Record<string, unknown>
+    const parts = toolMessage.content as Array<Record<string, unknown>>
+
+    expect(parts[0]?.output).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: 'before' },
+        {
+          type: 'file',
+          mediaType: 'image/png',
+          data: { type: 'data', data: 'iVBORw0KGgo=' },
+        },
+        { type: 'text', text: 'after' },
+      ],
+    })
+  })
+
+  it('maps an image-only tool_result to AI SDK content output', () => {
+    const request = validateAnthropicMessagesRequest({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'read_image', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = mapAnthropicMessagesRequestToAISDKInput(request)
+    const toolMessage = input.messages[1]! as Record<string, unknown>
+    const parts = toolMessage.content as Array<Record<string, unknown>>
+
+    expect(parts[0]?.output).toEqual({
+      type: 'content',
+      value: [
+        {
+          type: 'file',
+          mediaType: 'image/png',
+          data: { type: 'data', data: 'iVBORw0KGgo=' },
+        },
+      ],
+    })
+  })
+
+  it('rejects image tool_result content when is_error is true', () => {
+    expect(() =>
+      validateAnthropicMessagesRequest({
+        model: 'claude/sonnet',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_1',
+                is_error: true,
+                content: [
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'iVBORw0KGgo=',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow('tool_result with image content cannot set is_error to true')
+  })
+
+  it('rejects unsupported file image sources', () => {
+    expect(() =>
+      validateAnthropicMessagesRequest({
+        model: 'claude/sonnet',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: { type: 'file', file_id: 'file_123' },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow()
+  })
+
+  it.each(['assistant', 'system'] as const)(
+    'rejects top-level image content in %s messages',
+    (role) => {
+      expect(() =>
+        validateAnthropicMessagesRequest({
+          model: 'claude/sonnet',
+          max_tokens: 1024,
+          messages: [
+            {
+              role,
+              content: [
+                {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: 'image/png',
+                    data: 'iVBORw0KGgo=',
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      ).toThrow('image content blocks are only allowed in user messages')
+    },
+  )
+
   it('splits user message with mixed tool_result and text into tool + user messages', () => {
     const input = mapAnthropicMessagesRequestToAISDKInput({
       model: 'claude/sonnet',
@@ -204,6 +439,80 @@ describe('Anthropic Messages protocol mapping', () => {
     expect(input.messages).toHaveLength(3)
     expect(input.messages[1]!.role).toBe('tool')
     expect(input.messages[2]!.role).toBe('user')
+  })
+
+  it('preserves source order for non-tool-result content blocks', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'lookup', input: {} },
+            { type: 'text', text: 'after tool call' },
+          ],
+        },
+      ],
+    })
+
+    expect(input.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: 'toolu_1',
+          toolName: 'lookup',
+          input: {},
+        },
+        { type: 'text', text: 'after tool call' },
+      ],
+    })
+  })
+
+  it('keeps remaining content in source order after splitting tool_result blocks', () => {
+    const input = mapAnthropicMessagesRequestToAISDKInput({
+      model: 'claude/sonnet',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'url', url: 'https://example.com/image.png' },
+            },
+            { type: 'tool_result', tool_use_id: 'toolu_1', content: 'result' },
+            { type: 'text', text: 'after result' },
+          ],
+        },
+      ],
+    })
+
+    expect(input.messages).toEqual([
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'toolu_1',
+            toolName: 'toolu_1',
+            output: { type: 'text', value: 'result' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: { type: 'url', url: new URL('https://example.com/image.png') },
+          },
+          { type: 'text', text: 'after result' },
+        ],
+      },
+    ])
   })
 
   it('does not emit user message when tool_result has no text blocks', () => {

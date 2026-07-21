@@ -16,6 +16,22 @@ const textContentBlockSchema = z.object({
   cache_control: cacheControlSchema.optional(),
 })
 
+const imageContentBlockSchema = z.object({
+  type: z.literal('image'),
+  source: z.union([
+    z.object({
+      type: z.literal('base64'),
+      media_type: z.string().min(1),
+      data: z.string().min(1),
+    }),
+    z.object({
+      type: z.literal('url'),
+      url: z.string().url(),
+    }),
+  ]),
+  cache_control: cacheControlSchema.optional(),
+})
+
 const toolUseContentBlockSchema = z.object({
   type: z.literal('tool_use'),
   id: z.string().min(1),
@@ -23,16 +39,33 @@ const toolUseContentBlockSchema = z.object({
   input: z.record(z.string(), z.unknown()),
 })
 
-const toolResultContentBlockSchema = z.object({
-  type: z.literal('tool_result'),
-  tool_use_id: z.string().min(1),
-  content: z.union([z.string(), z.array(textContentBlockSchema)]).optional(),
-  is_error: z.boolean().optional(),
-  cache_control: cacheControlSchema.optional(),
-})
+const toolResultContentBlockSchema = z
+  .object({
+    type: z.literal('tool_result'),
+    tool_use_id: z.string().min(1),
+    content: z
+      .union([z.string(), z.array(z.union([textContentBlockSchema, imageContentBlockSchema]))])
+      .optional(),
+    is_error: z.boolean().optional(),
+    cache_control: cacheControlSchema.optional(),
+  })
+  .superRefine((block, ctx) => {
+    if (
+      block.is_error === true &&
+      Array.isArray(block.content) &&
+      block.content.some((part) => part.type === 'image')
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['content'],
+        message: 'tool_result with image content cannot set is_error to true',
+      })
+    }
+  })
 
 const contentBlockSchema = z.union([
   textContentBlockSchema,
+  imageContentBlockSchema,
   toolUseContentBlockSchema,
   toolResultContentBlockSchema,
 ])
@@ -47,10 +80,24 @@ const systemTextBlockSchema = z.object({
 
 // ─── Message Schema ────────────────────────────────────────────
 
-const messageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'system']),
-  content: z.union([z.string(), z.array(contentBlockSchema)]),
-})
+const messageSchema = z
+  .object({
+    role: z.enum(['user', 'assistant', 'system']),
+    content: z.union([z.string(), z.array(contentBlockSchema)]),
+  })
+  .superRefine((message, ctx) => {
+    if (message.role === 'user' || typeof message.content === 'string') return
+
+    for (let index = 0; index < message.content.length; index++) {
+      if (message.content[index]?.type !== 'image') continue
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['content', index],
+        message: 'image content blocks are only allowed in user messages',
+      })
+    }
+  })
 
 // ─── Tool Schema ───────────────────────────────────────────────
 
@@ -234,15 +281,16 @@ function mapMessage(
   }
 
   // 处理 content block 数组
-  const textParts: ProtocolMessagePart[] = []
   const toolResultParts: ProtocolMessagePart[] = []
-  const toolCallParts: ProtocolMessagePart[] = []
+  const remainingParts: ProtocolMessagePart[] = []
 
   for (const block of message.content) {
     if (block.type === 'text') {
-      textParts.push({ type: 'text', text: block.text })
+      remainingParts.push({ type: 'text', text: block.text })
+    } else if (block.type === 'image') {
+      remainingParts.push(mapImageContentBlock(block))
     } else if (block.type === 'tool_use') {
-      toolCallParts.push({
+      remainingParts.push({
         type: 'tool-call',
         toolCallId: block.id,
         toolName: block.name,
@@ -265,7 +313,6 @@ function mapMessage(
     // tool-result 部分放在 role:'tool' 消息里（排在前面）
     result.push({ role: 'tool', content: toolResultParts })
     // 非 tool-result 部分保留原角色（仅在有内容时）
-    const remainingParts = [...textParts, ...toolCallParts]
     if (remainingParts.length > 0) {
       result.push({ role: message.role as 'user' | 'assistant', content: remainingParts })
     }
@@ -273,21 +320,46 @@ function mapMessage(
   }
 
   // 无 tool_result 的场景，合并所有部分
-  return [{ role: message.role as 'user' | 'assistant', content: [...textParts, ...toolCallParts] }]
+  return [{ role: message.role as 'user' | 'assistant', content: remainingParts }]
+}
+
+function mapImageContentBlock(block: z.infer<typeof imageContentBlockSchema>) {
+  if (block.source.type === 'base64') {
+    return {
+      type: 'file' as const,
+      mediaType: block.source.media_type,
+      data: { type: 'data' as const, data: block.source.data },
+    }
+  }
+
+  return {
+    type: 'file' as const,
+    mediaType: 'image',
+    data: { type: 'url' as const, url: new URL(block.source.url) },
+  }
 }
 
 function mapToolResultOutput(
-  content: string | Array<{ type: 'text'; text: string }> | undefined,
+  content: z.infer<typeof toolResultContentBlockSchema>['content'],
   isError?: boolean,
-):
-  | { type: 'text'; value: string }
-  | { type: 'error-text'; value: string }
-  | { type: 'json'; value: unknown } {
+): Extract<ProtocolMessagePart, { type: 'tool-result' }>['output'] {
   const outputType = isError ? 'error-text' : 'text'
   if (content === undefined) return { type: outputType, value: '' }
   if (typeof content === 'string') return { type: outputType, value: content }
+
+  if (content.some((block) => block.type === 'image')) {
+    return {
+      type: 'content',
+      value: content.map((block) =>
+        block.type === 'text'
+          ? { type: 'text' as const, text: block.text }
+          : mapImageContentBlock(block),
+      ),
+    }
+  }
+
   // 数组形式的 text blocks → 拼接文本
-  const text = content.map((block) => block.text).join('')
+  const text = content.map((block) => (block.type === 'text' ? block.text : '')).join('')
   return { type: outputType, value: text }
 }
 

@@ -1,4 +1,11 @@
-import type { FilePart, ToolSet, FinishReason, LanguageModelUsage, ProviderMetadata } from 'ai'
+import type {
+  FilePart,
+  ToolResultPart,
+  ToolSet,
+  FinishReason,
+  LanguageModelUsage,
+  ProviderMetadata,
+} from 'ai'
 
 /** 协议映射器产生的消息内容分片 */
 export type ProtocolMessagePart =
@@ -29,6 +36,7 @@ export type ProtocolMessagePart =
         | { type: 'text'; value: string }
         | { type: 'error-text'; value: string }
         | { type: 'json'; value: unknown } // json value 本质任意，属工具结果例外
+        | Extract<ToolResultPart['output'], { type: 'content' }>
     }
 
 /** 协议映射器产生的消息 — 统一三种协议的消息表达 */

@@ -4,10 +4,13 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { createApp } from '../../src/server/app.js'
 import { ErrorLogger, getErrorLogFileName } from '../../src/server/error-logger.js'
-import type { GenerateTextReturn } from '../../src/server/types.js'
+import type { GenerateTextReturn, ModelGateway } from '../../src/server/types.js'
 import type { Settings } from '../../src/index.js'
 import { OAuthError } from '../../src/index.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
+import { openaiCompatibleStrategy } from '../../src/providers/openai-compatible/strategy.js'
+import { openaiResponsesStrategy } from '../../src/providers/openai-responses/strategy.js'
+import { anthropicStrategy } from '../../src/providers/anthropic/strategy.js'
 import type { ProviderRegistry } from '../../src/providers/registry.js'
 import type { PipelinePluginRegistry, ResolvedPlugin } from '../../src/plugins/registry.js'
 import type { ProxyPlugin } from '../../src/plugins/types.js'
@@ -30,6 +33,7 @@ interface MakeAppOptions {
   providerRegistry?: ProviderRegistry
   pluginRegistry?: PipelinePluginRegistry
   logger?: pino.Logger
+  visionArtifactStore?: NonNullable<Parameters<typeof createApp>[0]['visionArtifactStore']>
 }
 
 /**
@@ -67,6 +71,7 @@ function makeApp(gateway: ReturnType<typeof makeGateway>, opts: MakeAppOptions =
       ...(opts.pluginRegistry && { pluginRegistry: opts.pluginRegistry }),
       errorLogger,
       ...(opts.logger && { logger: opts.logger }),
+      ...(opts.visionArtifactStore && { visionArtifactStore: opts.visionArtifactStore }),
     }),
     tmpLogDir,
   }
@@ -1087,4 +1092,714 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
       expect(readErrors(tmpLogDir)).toHaveLength(ndjsonCount)
     },
   )
+})
+
+function visionDisabledProviders(): Settings['providers'] {
+  return {
+    openrouter: {
+      type: 'openai-compatible',
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: 'secret',
+      headers: {},
+      plugins: [],
+      options: { supports_vision: false },
+      models: {
+        chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
+      },
+    },
+  }
+}
+
+function successfulGenerateResult(): GenerateTextReturn {
+  return {
+    text: 'ok',
+    finishReason: 'stop',
+    response: { id: 'vision-test' },
+  } as GenerateTextReturn
+}
+
+function visionLogPayloads(info: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+  return info.mock.calls
+    .map(([payload]) => payload)
+    .filter(
+      (payload): payload is Record<string, unknown> =>
+        typeof payload === 'object' &&
+        payload !== null &&
+        payload.event === 'vision_input_filtered',
+    )
+}
+
+describe('handleProtocolRequest vision input filtering', () => {
+  it('forwards filtered Chat input and emits one safe summary log', async () => {
+    const sensitiveImage = 'data:image/png;base64,vision-secret-base64'
+    const sensitivePath = '<image path="C:\\secret\\capture.png">'
+    const accidentalChangeField = 'must-not-leak-from-transform-change'
+    const originalApply = openaiCompatibleStrategy.applyUnsupportedVisionInput
+    const filter = vi
+      .spyOn(openaiCompatibleStrategy, 'applyUnsupportedVisionInput')
+      .mockImplementation((plan, replacements) => {
+        const result = originalApply(plan, replacements)
+        return {
+          ...result,
+          changes: result.changes.map((change) => ({
+            ...change,
+            accidentalSensitiveField: accidentalChangeField,
+          })),
+        }
+      })
+    const generate = vi.fn(async (_input: Parameters<ModelGateway['generate']>[0]) =>
+      successfulGenerateResult(),
+    )
+    const languageModel = vi.fn(() => ({ model: {} as never }))
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      providerRegistry: createProviderRegistryStub({ languageModel }),
+      logger,
+    })
+
+    try {
+      const response = await app.request(
+        '/v1/chat/completions',
+        chatRequest({
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: sensitivePath },
+                { type: 'image_url', image_url: { url: sensitiveImage } },
+                { type: 'text', text: '</image>' },
+              ],
+            },
+          ],
+        }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(languageModel).toHaveBeenCalledOnce()
+      expect(generate).toHaveBeenCalledOnce()
+      expect(generate.mock.calls[0]?.[0].callInput.messages[0]).toEqual({
+        role: 'user',
+        content: [
+          { type: 'text', text: sensitivePath },
+          { type: 'text', text: '</image>' },
+        ],
+      })
+
+      const logs = visionLogPayloads(info)
+      expect(logs).toEqual([
+        expect.objectContaining({
+          protocol: 'openai-chat-completions',
+          provider: 'openrouter',
+          requestedModel: 'openrouter/chat',
+          actualModel: 'openrouter/chat',
+          supportsVision: false,
+          outcome: 'forwarded',
+          removedImageCount: 1,
+          affectedMessageCount: 1,
+          fallbackNoticeCount: 0,
+          storedArtifactCount: 0,
+          unavailableArtifactCount: 0,
+          changes: [
+            {
+              action: 'remove_image',
+              path: '/messages/0/content/1',
+              role: 'user',
+              blockType: 'image_url',
+            },
+          ],
+        }),
+      ])
+      const serializedLog = JSON.stringify(logs)
+      expect(serializedLog).not.toContain(sensitiveImage)
+      expect(serializedLog).not.toContain(sensitivePath)
+      expect(serializedLog).not.toContain(accidentalChangeField)
+    } finally {
+      filter.mockRestore()
+    }
+  })
+
+  it('uses the selected alias model vision override', async () => {
+    const generate = vi.fn(async () => successfulGenerateResult())
+    const languageModel = vi.fn(() => ({ model: {} as never }))
+    const providers: Settings['providers'] = {
+      openrouter: {
+        type: 'openai-compatible',
+        baseURL: 'https://openrouter.ai/api/v1',
+        apiKey: 'secret',
+        headers: {},
+        plugins: [],
+        options: { supports_vision: true },
+        models: {
+          chat: {
+            upstreamModel: 'openrouter/chat',
+            aliases: [{ name: 'text-only', flat: false }],
+            supports_vision: false,
+            headers: {},
+            plugins: [],
+          },
+        },
+      },
+    }
+    const { app } = makeApp(makeGateway({ generate }), {
+      providers,
+      providerRegistry: createProviderRegistryStub({ languageModel }),
+    })
+
+    const response = await app.request(
+      '/v1/chat/completions',
+      chatRequest({
+        model: 'openrouter/text-only',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,x' } }],
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(languageModel).not.toHaveBeenCalled()
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'Chat Completions',
+      path: '/v1/chat/completions',
+      candidatePath: '/messages/0/content/0',
+      body: {
+        model: 'openrouter/chat',
+        messages: [
+          {
+            role: 'tool',
+            tool_call_id: 'call-chat',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: 'data:image/png;base64,tool-secret-chat' },
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      name: 'OpenAI Responses',
+      path: '/v1/responses',
+      candidatePath: '/input/0/output/0',
+      body: {
+        model: 'openrouter/chat',
+        input: [
+          {
+            type: 'function_call_output',
+            call_id: 'call-responses',
+            output: [
+              {
+                type: 'input_image',
+                image_url: 'data:image/png;base64,tool-secret-responses',
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      name: 'Anthropic Messages',
+      path: '/v1/messages',
+      candidatePath: '/messages/0/content/0/content/0',
+      body: {
+        model: 'openrouter/chat',
+        max_tokens: 16,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call-anthropic',
+                content: [
+                  {
+                    type: 'image',
+                    source: {
+                      type: 'base64',
+                      media_type: 'image/png',
+                      data: 'tool-secret-anthropic',
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ])(
+    'replaces image-only $name tool results with a stored-artifact notice',
+    async ({ path, body, candidatePath }) => {
+      const generate = vi.fn(async (_input: Parameters<ModelGateway['generate']>[0]) =>
+        successfulGenerateResult(),
+      )
+      const languageModel = vi.fn(() => ({ model: {} as never }))
+      const persistBatch = vi.fn(async (candidates: readonly { path: string }[]) => ({
+        results: new Map(
+          candidates.map((candidate) => [
+            candidate.path,
+            {
+              path: candidate.path,
+              status: 'stored' as const,
+              artifactId: 'artifact-sensitive-id',
+              agentVisiblePath: '/shared/vision-safe.png',
+            },
+          ]),
+        ),
+        errors: [],
+      }))
+      const { logger, info } = makeTestLogger()
+      const { app } = makeApp(makeGateway({ generate }), {
+        providers: visionDisabledProviders(),
+        providerRegistry: createProviderRegistryStub({ languageModel }),
+        visionArtifactStore: { persistBatch },
+        logger,
+      })
+
+      const response = await app.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      expect(response.status).toBe(200)
+      expect(persistBatch).toHaveBeenCalledOnce()
+      expect(persistBatch.mock.calls[0]?.[0]).toEqual([
+        expect.objectContaining({ path: candidatePath }),
+      ])
+      expect(generate).toHaveBeenCalledOnce()
+      const forwarded = JSON.stringify(generate.mock.calls[0]?.[0].callInput)
+      expect(forwarded).toContain('[llm-proxy-ts vision fallback]')
+      expect(forwarded).toContain('/shared/vision-safe.png')
+      expect(forwarded).not.toContain('tool-secret-')
+
+      const logs = visionLogPayloads(info)
+      expect(logs).toEqual([
+        expect.objectContaining({
+          outcome: 'forwarded',
+          removedImageCount: 0,
+          fallbackNoticeCount: 1,
+          storedArtifactCount: 1,
+          unavailableArtifactCount: 0,
+          changes: [
+            expect.objectContaining({
+              action: 'replace_tool_result_image',
+              path: candidatePath,
+              artifactStatus: 'stored',
+            }),
+          ],
+        }),
+      ])
+      const serializedLogs = JSON.stringify(logs)
+      expect(serializedLogs).not.toContain('artifact-sensitive-id')
+      expect(serializedLogs).not.toContain('/shared/vision-safe.png')
+      expect(serializedLogs).not.toContain('[llm-proxy-ts vision fallback]')
+    },
+  )
+
+  it('continues with an unavailable notice and logs the full artifact write error', async () => {
+    const writeError = Object.assign(new Error('artifact disk failed'), { code: 'EACCES' })
+    const persistBatch = vi.fn(async (candidates: readonly { path: string }[]) => ({
+      results: new Map(
+        candidates.map((candidate) => [
+          candidate.path,
+          {
+            path: candidate.path,
+            status: 'unavailable' as const,
+            reason: 'storage_error' as const,
+          },
+        ]),
+      ),
+      errors: [{ phase: 'vision_artifact_persist' as const, err: writeError }],
+    }))
+    const generate = vi.fn(async (_input: Parameters<ModelGateway['generate']>[0]) =>
+      successfulGenerateResult(),
+    )
+    const { logger, info, error } = makeTestLogger()
+    const { app } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      visionArtifactStore: { persistBatch },
+      logger,
+    })
+
+    const response = await app.request(
+      '/v1/chat/completions',
+      chatRequest({
+        messages: [
+          {
+            role: 'tool',
+            tool_call_id: 'call-write-failure',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: 'data:image/png;base64,write-failure-secret' },
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const forwarded = JSON.stringify(generate.mock.calls[0]?.[0].callInput)
+    expect(forwarded).toContain('No artifact path is available')
+    expect(forwarded).not.toContain('write-failure-secret')
+    expect(visionLogPayloads(info)).toEqual([
+      expect.objectContaining({
+        fallbackNoticeCount: 1,
+        storedArtifactCount: 0,
+        unavailableArtifactCount: 1,
+        unavailableReasonCounts: { storage_error: 1 },
+      }),
+    ])
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'vision_artifact_persistence_failed',
+        phase: 'vision_artifact_persist',
+        err: writeError,
+      }),
+      'vision artifact persistence failed',
+    )
+  })
+
+  it.each([
+    {
+      name: 'Chat Completions',
+      path: '/v1/chat/completions',
+      body: {
+        model: 'openrouter/chat',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: 'data:image/png;base64,rejected-chat-secret' },
+              },
+            ],
+          },
+        ],
+      },
+      expectedBody: {
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_vision_input',
+          message: 'Vision input is not supported by the selected model',
+        },
+      },
+    },
+    {
+      name: 'OpenAI Responses',
+      path: '/v1/responses',
+      body: {
+        model: 'openrouter/chat',
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_image',
+                image_url: 'data:image/png;base64,rejected-responses-secret',
+              },
+            ],
+          },
+        ],
+      },
+      expectedBody: {
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_vision_input',
+          message: 'Vision input is not supported by the selected model',
+        },
+      },
+    },
+    {
+      name: 'Anthropic Messages',
+      path: '/v1/messages',
+      body: {
+        model: 'openrouter/chat',
+        max_tokens: 16,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'rejected-anthropic-secret',
+                },
+              },
+            ],
+          },
+        ],
+      },
+      expectedBody: {
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          code: 'unsupported_vision_input',
+          message: 'Vision input is not supported by the selected model',
+        },
+      },
+    },
+  ])(
+    'rejects image-only $name input before resolving a provider model',
+    async ({ path, body, expectedBody }) => {
+      const generate = vi.fn(async () => successfulGenerateResult())
+      const stream = vi.fn()
+      const languageModel = vi.fn(() => ({ model: {} as never }))
+      const persistBatch = vi.fn()
+      const { logger, info } = makeTestLogger()
+      const { app } = makeApp(makeGateway({ generate, stream }), {
+        providers: visionDisabledProviders(),
+        providerRegistry: createProviderRegistryStub({ languageModel }),
+        visionArtifactStore: { persistBatch },
+        logger,
+      })
+
+      const response = await app.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual(expectedBody)
+      expect(languageModel).not.toHaveBeenCalled()
+      expect(generate).not.toHaveBeenCalled()
+      expect(stream).not.toHaveBeenCalled()
+      expect(persistBatch).not.toHaveBeenCalled()
+      expect(visionLogPayloads(info)).toEqual([
+        expect.objectContaining({ outcome: 'rejected', removedImageCount: 1 }),
+      ])
+    },
+  )
+
+  it('does not emit a vision mutation log when no image is present', async () => {
+    const generate = vi.fn(async () => successfulGenerateResult())
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(200)
+    expect(generate).toHaveBeenCalledOnce()
+    expect(visionLogPayloads(info)).toEqual([])
+  })
+
+  it('returns a protocol-safe 500 when filtered Chat input fails revalidation', async () => {
+    const originalValidate = openaiCompatibleStrategy.validate
+    const validationError = Object.assign(new Error('filtered Chat request is invalid'), {
+      issues: [{ path: ['messages', 0, 'content'], message: 'synthetic test failure' }],
+    })
+    const validate = vi
+      .spyOn(openaiCompatibleStrategy, 'validate')
+      .mockImplementationOnce((body) => originalValidate(body))
+      .mockImplementationOnce(() => {
+        throw validationError
+      })
+    const generate = vi.fn(async () => successfulGenerateResult())
+    const languageModel = vi.fn(() => ({ model: {} as never }))
+    const { logger, info, error } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      providerRegistry: createProviderRegistryStub({ languageModel }),
+      settingsOverrides: { errorLogging: { enabled: true, maxBodyLength: 1024 } },
+      logger,
+    })
+
+    try {
+      const response = await app.request(
+        '/v1/chat/completions',
+        chatRequest({
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'keep me' },
+                {
+                  type: 'image_url',
+                  image_url: { url: 'data:image/png;base64,internal-secret' },
+                },
+              ],
+            },
+          ],
+        }),
+      )
+
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({
+        error: {
+          type: 'internal_error',
+          code: 'internal_server_error',
+          message: 'Internal server error',
+        },
+      })
+      expect(languageModel).not.toHaveBeenCalled()
+      expect(generate).not.toHaveBeenCalled()
+      expect(readErrors(tmpLogDir)).toEqual([])
+      expect(visionLogPayloads(info)).toEqual([
+        expect.objectContaining({ outcome: 'internal_error' }),
+      ])
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'vision_transform_validation_failed',
+          phase: 'vision-transform-validation',
+          err: validationError,
+          issues: validationError.issues,
+          protocol: 'openai-chat-completions',
+        }),
+        'vision-transformed request validation failed',
+      )
+    } finally {
+      validate.mockRestore()
+    }
+  })
+
+  it('returns an OpenAI 500 before Responses prepareExecution when revalidation fails', async () => {
+    const originalValidate = openaiResponsesStrategy.validate
+    const validationError = Object.assign(new Error('filtered Responses request is invalid'), {
+      issues: [{ path: ['input', 0, 'content'], message: 'synthetic test failure' }],
+    })
+    const validate = vi
+      .spyOn(openaiResponsesStrategy, 'validate')
+      .mockImplementationOnce((body) => originalValidate(body))
+      .mockImplementationOnce(() => {
+        throw validationError
+      })
+    const prepareExecution = vi.spyOn(openaiResponsesStrategy, 'prepareExecution')
+    const generate = vi.fn(async () => successfulGenerateResult())
+    const languageModel = vi.fn(() => ({ model: {} as never }))
+    const { logger, info, error } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      providerRegistry: createProviderRegistryStub({ languageModel }),
+      settingsOverrides: { errorLogging: { enabled: true, maxBodyLength: 1024 } },
+      logger,
+    })
+
+    try {
+      const response = await app.request('/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openrouter/chat',
+          input: [
+            {
+              role: 'user',
+              content: [
+                { type: 'input_text', text: 'keep me' },
+                { type: 'input_image', image_url: 'data:image/png;base64,internal-secret' },
+              ],
+            },
+          ],
+        }),
+      })
+
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({
+        error: {
+          type: 'internal_error',
+          code: 'internal_server_error',
+          message: 'Internal server error',
+        },
+      })
+      expect(prepareExecution).not.toHaveBeenCalled()
+      expect(languageModel).not.toHaveBeenCalled()
+      expect(generate).not.toHaveBeenCalled()
+      expect(readErrors(tmpLogDir)).toEqual([])
+      expect(visionLogPayloads(info)).toEqual([
+        expect.objectContaining({ outcome: 'internal_error' }),
+      ])
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'vision_transform_validation_failed',
+          err: validationError,
+          protocol: 'openai-responses',
+        }),
+        'vision-transformed request validation failed',
+      )
+    } finally {
+      validate.mockRestore()
+      prepareExecution.mockRestore()
+    }
+  })
+
+  it('returns an Anthropic 500 when filtered Messages input fails revalidation', async () => {
+    const originalValidate = anthropicStrategy.validate
+    const validationError = Object.assign(new Error('filtered Anthropic request is invalid'), {
+      issues: [{ path: ['messages', 0, 'content'], message: 'synthetic test failure' }],
+    })
+    const validate = vi
+      .spyOn(anthropicStrategy, 'validate')
+      .mockImplementationOnce((body) => originalValidate(body))
+      .mockImplementationOnce(() => {
+        throw validationError
+      })
+    const generate = vi.fn(async () => successfulGenerateResult())
+    const languageModel = vi.fn(() => ({ model: {} as never }))
+    const { logger, info, error } = makeTestLogger()
+    const { app } = makeApp(makeGateway({ generate }), {
+      providers: visionDisabledProviders(),
+      providerRegistry: createProviderRegistryStub({ languageModel }),
+      logger,
+    })
+
+    try {
+      const response = await app.request('/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openrouter/chat',
+          max_tokens: 16,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'keep me' },
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: 'internal-secret' },
+                },
+              ],
+            },
+          ],
+        }),
+      })
+
+      expect(response.status).toBe(500)
+      expect(await response.json()).toEqual({
+        type: 'error',
+        error: { type: 'api_error', message: 'Internal server error' },
+      })
+      expect(languageModel).not.toHaveBeenCalled()
+      expect(generate).not.toHaveBeenCalled()
+      expect(visionLogPayloads(info)).toEqual([
+        expect.objectContaining({ outcome: 'internal_error' }),
+      ])
+      expect(error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'vision_transform_validation_failed',
+          err: validationError,
+          protocol: 'anthropic-messages',
+        }),
+        'vision-transformed request validation failed',
+      )
+    } finally {
+      validate.mockRestore()
+    }
+  })
 })

@@ -8,6 +8,7 @@ import type { ProviderAuthStatus } from './oauth/startup.js'
 import type { CodexCatalogCache } from '../codex-catalog.js'
 import type { ErrorLogger } from './error-logger.js'
 import type { Logger } from '../types.js'
+import type { VisionArtifactStore } from './vision-artifact-store.js'
 
 export type { Settings } from '../config.js'
 
@@ -60,6 +61,7 @@ export interface AppDependencies {
   codexCatalogCache?: CodexCatalogCache
   errorLogger?: ErrorLogger
   errorLogDir?: string
+  visionArtifactStore?: Pick<VisionArtifactStore, 'persistBatch'>
 }
 
 export type RequestOutcome =
