@@ -1,3 +1,4 @@
+import { generateText, type ModelMessage } from 'ai'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const requestMock = vi.hoisted(() =>
@@ -27,6 +28,7 @@ vi.mock('undici', () => ({
 import {
   applyProviderAuth,
   createDirectFetch,
+  createOpenAICompatibleProvider,
   createProxyFetch,
   sanitizeHeaders,
 } from '../../src/providers/shared/provider-factory.js'
@@ -207,5 +209,98 @@ describe('provider auth option helpers', () => {
     expect(options.apiKey).toBe('oauth-placeholder')
     expect(options.fetch).toBe(composedFetch)
     expect(customFetch).toHaveBeenCalledWith(proxyFetch)
+  })
+})
+
+describe('openai-compatible provider request mapping', () => {
+  it('serializes image detail inside image_url and passes remote URLs through', async () => {
+    let capturedBody: Record<string, unknown> | undefined
+    const upstreamFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+      return new Response(
+        JSON.stringify({
+          id: 'test-response',
+          object: 'chat.completion',
+          created: 0,
+          model: 'test-model',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: 'ok' },
+              finish_reason: 'stop',
+              logprobs: null,
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    const provider = createOpenAICompatibleProvider({
+      providerName: 'test-provider',
+      provider: {
+        type: 'openai-compatible',
+        baseURL: 'http://127.0.0.1:1/v1',
+        headers: {},
+        plugins: [],
+        models: {},
+      },
+      modelHeaders: {},
+      selectedApiKey: 'test-key',
+      customFetch: undefined,
+      proxyFetch: upstreamFetch,
+    })
+    const dataUrl = 'data:image/png;base64,AA=='
+    const remoteUrl = new URL('https://example.com/image.png')
+    const download = vi.fn(async () => [null])
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe' },
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: dataUrl,
+            providerOptions: {
+              openaiCompatible: { imageDetail: 'high' },
+            },
+          },
+          {
+            type: 'file',
+            mediaType: 'image',
+            data: remoteUrl,
+            providerOptions: {
+              openaiCompatible: { imageDetail: 'auto' },
+            },
+          },
+        ],
+      },
+    ] satisfies ModelMessage[]
+
+    const result = await generateText({
+      model: provider('test-model'),
+      messages,
+      experimental_download: download,
+    })
+
+    expect(result.text).toBe('ok')
+    expect(download).toHaveBeenCalledWith([{ url: remoteUrl, isUrlSupportedByModel: true }])
+    expect(capturedBody?.['messages']).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'describe' },
+          {
+            type: 'image_url',
+            image_url: { url: dataUrl, detail: 'high' },
+          },
+          {
+            type: 'image_url',
+            image_url: { url: remoteUrl.toString(), detail: 'auto' },
+          },
+        ],
+      },
+    ])
   })
 })

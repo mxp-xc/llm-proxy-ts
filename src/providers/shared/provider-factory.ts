@@ -2,6 +2,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { Agent, EnvHttpProxyAgent, request } from 'undici'
 import type { Dispatcher } from 'undici'
 import type { OpenAICompatibleProviderConfig, ProviderConfig } from '../../config.js'
+import { isRecord } from '../protocol-types.js'
 
 export interface ProviderBuildInput<TProvider extends ProviderConfig = ProviderConfig> {
   providerName: string
@@ -38,11 +39,52 @@ export function createOpenAICompatibleProvider(
     // 让上游在流式响应中返回 usage（stream_options: { include_usage: true }）
     // 可在 provider 配置中设 includeUsage: false 禁用（适用于不支持 stream_options 的上游）
     includeUsage: provider.options?.includeUsage ?? true,
+    supportedUrls: () => ({ 'image/*': [/^https?:\/\//] }),
+    transformRequestBody: transformOpenAICompatibleRequestBody,
   }
 
   applyProviderAuth(options, selectedApiKey, customFetch, proxyFetch)
 
   return createOpenAICompatible(options)
+}
+
+function transformOpenAICompatibleRequestBody(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(body.messages)) return body
+
+  let bodyChanged = false
+  const messages = body.messages.map((message) => {
+    if (!isRecord(message) || !Array.isArray(message.content)) return message
+
+    let messageChanged = false
+    const content = message.content.map((part) => {
+      if (
+        !isRecord(part) ||
+        part.type !== 'image_url' ||
+        typeof part.imageDetail !== 'string' ||
+        !isRecord(part.image_url)
+      ) {
+        return part
+      }
+
+      const { imageDetail, ...rest } = part
+      messageChanged = true
+      return {
+        ...rest,
+        image_url: {
+          ...part.image_url,
+          detail: imageDetail,
+        },
+      }
+    })
+
+    if (!messageChanged) return message
+    bodyChanged = true
+    return { ...message, content }
+  })
+
+  return bodyChanged ? { ...body, messages } : body
 }
 
 /**

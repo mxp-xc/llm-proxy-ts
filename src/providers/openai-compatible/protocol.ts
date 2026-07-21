@@ -212,12 +212,51 @@ function mapMessage(
     }
   }
 
+  if (message.role === 'user' && Array.isArray(message.content)) {
+    return {
+      role: 'user',
+      content: message.content.map(mapUserContentPart),
+    }
+  }
+
   // user or assistant messages: content is string | content-part array | undefined
   const content = message.content ?? ''
   return { role: message.role as 'user' | 'assistant', content } as ProtocolMessage
 }
 
 type MessageContent = z.infer<typeof messageSchema>['content']
+
+function mapUserContentPart(part: Record<string, unknown>): ProtocolMessagePart {
+  if (part.type !== 'image_url' || !isRecord(part.image_url)) {
+    return part as ProtocolMessagePart
+  }
+
+  const imageUrl = part.image_url
+  if (typeof imageUrl.url !== 'string') {
+    return part as ProtocolMessagePart
+  }
+
+  const isDataUrl = /^data:/i.test(imageUrl.url)
+  const isRemoteUrl = /^https?:\/\//i.test(imageUrl.url) && URL.canParse(imageUrl.url)
+  if (!isDataUrl && !isRemoteUrl) {
+    return part as ProtocolMessagePart
+  }
+
+  const detail = typeof imageUrl.detail === 'string' ? imageUrl.detail : undefined
+  return {
+    type: 'file',
+    mediaType: 'image',
+    data: isDataUrl ? imageUrl.url : new URL(imageUrl.url),
+    ...(detail
+      ? {
+          providerOptions: {
+            openai: { imageDetail: detail },
+            openaiCompatible: { imageDetail: detail },
+          },
+        }
+      : {}),
+  }
+}
 
 function extractSystemText(content: MessageContent): string {
   if (typeof content === 'string') return content

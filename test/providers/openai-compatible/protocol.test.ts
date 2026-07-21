@@ -1,4 +1,4 @@
-import { assistantModelMessageSchema, toolModelMessageSchema } from 'ai'
+import { assistantModelMessageSchema, toolModelMessageSchema, userModelMessageSchema } from 'ai'
 import { describe, expect, it } from 'vitest'
 import type { ProtocolMessagePart } from '../../../src/providers/shared/aisdk-types.js'
 import {
@@ -34,6 +34,70 @@ describe('OpenAI chat protocol mapping', () => {
       maxOutputTokens: 123,
       stopSequences: ['END'],
     })
+  })
+
+  it('maps OpenAI image_url content to AI SDK file parts without changing order', () => {
+    const dataUrl = 'data:image/png;base64,AA=='
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openrouter/chat',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'before' },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
+            { type: 'text', text: 'between' },
+            {
+              type: 'image_url',
+              image_url: { url: 'https://example.com/image.png', detail: 'auto' },
+            },
+            { type: 'text', text: 'after' },
+          ],
+        },
+      ],
+    })
+
+    expect(input.messages[0]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'text', text: 'before' },
+        {
+          type: 'file',
+          mediaType: 'image',
+          data: dataUrl,
+          providerOptions: {
+            openai: { imageDetail: 'high' },
+            openaiCompatible: { imageDetail: 'high' },
+          },
+        },
+        { type: 'text', text: 'between' },
+        {
+          type: 'file',
+          mediaType: 'image',
+          data: new URL('https://example.com/image.png'),
+          providerOptions: {
+            openai: { imageDetail: 'auto' },
+            openaiCompatible: { imageDetail: 'auto' },
+          },
+        },
+        { type: 'text', text: 'after' },
+      ],
+    })
+    expect(userModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
+
+  it('leaves unsupported image URL schemes and unknown parts unchanged', () => {
+    const content = [
+      { type: 'image_url', image_url: { url: 'file:///C:/secret.png', detail: 'high' } },
+      { type: 'image_url', image_url: { url: 'ftp://example.com/image.png' } },
+      { type: 'custom', value: 'kept' },
+    ]
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openrouter/chat',
+      messages: [{ role: 'user', content }],
+    })
+
+    expect(input.messages[0]).toEqual({ role: 'user', content })
   })
 
   it('maps function tools without execute handlers', () => {
