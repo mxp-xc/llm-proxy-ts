@@ -5,9 +5,9 @@ import type { TokenManager } from '../oauth/token-manager.js'
 import type { ProviderRegistry, KeySelection } from '../providers/registry.js'
 import type { PipelinePluginRegistry } from '../plugins/registry.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
-import type pino from 'pino'
 import type { CodexCatalogCache } from '../codex-catalog.js'
 import type { ErrorLogger } from './error-logger.js'
+import type { Logger } from '../types.js'
 
 export type { Settings } from '../config.js'
 
@@ -52,26 +52,69 @@ export interface AppDependencies {
   settings: Settings
   providerRegistry: ProviderRegistry
   gateway?: ModelGateway
-  logger?: pino.Logger
+  logger?: Logger
   tokenManager?: TokenManager
   nonce?: string
   getAuthStatuses?: () => ProviderAuthStatus[]
   pluginRegistry?: PipelinePluginRegistry
   codexCatalogCache?: CodexCatalogCache
   errorLogger?: ErrorLogger
+  errorLogDir?: string
 }
 
-export interface RequestLogContext {
-  provider: string
-  requestedModel: string
-  actualModel: string
+export type RequestOutcome =
+  | 'success'
+  | 'validation_error'
+  | 'routing_error'
+  | 'client_error'
+  | 'auth_required'
+  | 'rate_limited'
+  | 'timeout'
+  | 'upstream_error'
+  | 'upstream_aborted'
+  | 'incomplete_stream'
+  | 'client_cancelled'
+  | 'internal_error'
+
+export type RequestExecutionMode = 'generate' | 'stream' | 'stream-only'
+
+export interface RequestTelemetryContext {
+  requestId: string
+  startedAt: number
+  method: string
+  path: string
+  status?: number
+  outcome?: RequestOutcome
+  provider?: string
+  requestedModel?: string
+  actualModel?: string
+  executionMode?: RequestExecutionMode
   keySelection?: KeySelection
+  finishReason?: string
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  cacheReadTokens?: number
+  reasoningTokens?: number
+  upstreamRequestId?: string
+  upstreamDurationMs?: number
+  firstChunkMs?: number
+  terminalPart?: 'finish' | 'error' | 'abort' | 'eof'
+  terminalError?: string
+  explicitFailure?: boolean
+  failureLogged?: boolean
+  pendingStreamError?: unknown
+  ndjsonWritten: boolean
+  completed: boolean
 }
+
+/** @deprecated Use RequestTelemetryContext. */
+export type RequestLogContext = RequestTelemetryContext
 
 export type AppEnv = {
   Variables: {
     requestId: string
-    logger: pino.Logger
-    requestLogContext?: RequestLogContext
+    logger: Logger
+    requestLogContext?: RequestTelemetryContext
   }
 }

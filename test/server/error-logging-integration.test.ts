@@ -9,6 +9,7 @@ import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
 import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
+import { noopLogger } from '../../src/types.js'
 
 const tmpLogRoot = mkdtempSync(join(tmpdir(), 'errint-'))
 afterAll(() => {
@@ -41,6 +42,7 @@ function makeAppWithErrors(
     logDir: tmpLogDir,
     enabled: settings.errorLogging.enabled,
     maxBodyLength: settings.errorLogging.maxBodyLength,
+    logger: noopLogger,
   })
   return {
     app: createApp({ settings, gateway, providerRegistry: stubRegistry, errorLogger }),
@@ -148,6 +150,46 @@ describe('error logging integration — streaming', () => {
     )
     expect(record).toBeDefined()
     expect(record!.response).toEqual([])
+  })
+
+  it('writes an in-band upstream error once but skips abort and incomplete EOF outcomes', async () => {
+    async function requestStream(app: ReturnType<typeof makeAppWithErrors>['app']) {
+      const response = await app.request('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'openrouter/chat',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      })
+      await response.text().catch(() => undefined)
+    }
+
+    const inBand = makeAppWithErrors(
+      makeGateway({
+        stream: () =>
+          (async function* () {
+            yield { type: 'openai-error', body: { error: { type: 'upstream_error' } } }
+          })() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    await requestStream(inBand.app)
+    expect(readErrors(inBand.tmpLogDir)).toHaveLength(1)
+
+    for (const terminal of ['abort', 'incomplete'] as const) {
+      const result = makeAppWithErrors(
+        makeGateway({
+          stream: () =>
+            (async function* () {
+              if (terminal === 'abort') yield { type: 'abort', reason: 'upstream closed' }
+              else yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+            })() as AsyncIterable<ProxyStreamPart>,
+        }),
+      )
+      await requestStream(result.app)
+      expect(readErrors(result.tmpLogDir)).toHaveLength(0)
+    }
   })
 })
 

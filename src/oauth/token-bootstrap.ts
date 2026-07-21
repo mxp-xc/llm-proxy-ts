@@ -1,4 +1,5 @@
 import { TokenManager } from './token-manager.js'
+import type { Logger } from '../types.js'
 
 /**
  * 仅当存在 OAuth provider 时创建并加载 TokenManager，否则返回 undefined。
@@ -9,9 +10,10 @@ import { TokenManager } from './token-manager.js'
 export async function createTokenManagerIfNeeded(
   authFilePath: string,
   hasOAuth: boolean,
+  logger?: Logger,
 ): Promise<TokenManager | undefined> {
   if (!hasOAuth) return undefined
-  const tokenManager = TokenManager.fromFile(authFilePath)
+  const tokenManager = TokenManager.fromFile(authFilePath, undefined, logger)
   await tokenManager.load()
   return tokenManager
 }

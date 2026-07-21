@@ -2,7 +2,6 @@ import { Command } from 'commander'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
-import { logger } from '../server/logging.js'
 
 export function createServeCommand(): Command {
   return new Command('serve')
@@ -13,7 +12,7 @@ export function createServeCommand(): Command {
       const serverPath = resolve(cliDir, '../server/server.ts')
       const runner = 'bun'
       const args = opts.watch ? ['--watch', serverPath] : [serverPath]
-      logger.info(`${runner} ${args.join(' ')}`)
+      console.info(`${runner} ${args.join(' ')}`)
       const child = spawn(runner, args, { stdio: 'inherit', shell: true })
       child.on('exit', (code) => {
         process.exit(code ?? 0)

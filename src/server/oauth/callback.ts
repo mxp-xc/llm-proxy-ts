@@ -79,26 +79,32 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
   })
 
   app.get('/callback', async (c) => {
+    const log = c.get('logger') ?? logger
     const code = c.req.query('code')
     const stateParam = c.req.query('state')
     const error = c.req.query('error')
 
     if (error) {
+      const errorCode = /^[a-zA-Z0-9_.-]{1,128}$/.test(error) ? error : 'provider_error'
+      log.warn({ errorCode }, 'oauth.callback.rejected')
       return c.html(renderErrorPage(error, c.req.query('error_description') ?? ''))
     }
 
     if (!code || !stateParam) {
+      log.warn({ hasCode: Boolean(code), hasState: Boolean(stateParam) }, 'oauth.callback.invalid')
       return c.html(renderErrorPage('invalid_request', 'Missing code or state parameter'))
     }
 
     const decoded = decodeState(stateParam)
     if (!decoded || decoded.nonce !== nonce) {
+      log.warn({ reason: 'invalid_state' }, 'oauth.callback.invalid')
       return c.html(renderErrorPage('invalid_state', 'Invalid state parameter — possible CSRF'))
     }
 
     const providerName = decoded.provider
     const provider = settings.providers[providerName]
     if (!provider?.oauth) {
+      log.warn({ provider: providerName, reason: 'invalid_provider' }, 'oauth.callback.invalid')
       return c.html(
         renderErrorPage(
           'invalid_provider',
@@ -112,12 +118,13 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
 
     try {
       await tokenManager.exchangeCode(providerName, oauth, code, redirectUri)
+      log.info({ provider: providerName }, 'oauth.callback.succeeded')
       return c.html(renderSuccessPage(providerName))
     } catch (err) {
-      const log = c.get('logger') ?? logger
-      log.error({ err, provider: providerName }, 'oauth code exchange failed')
-      const message = err instanceof Error ? err.message : String(err)
-      return c.html(renderErrorPage('exchange_failed', message))
+      log.error({ err, provider: providerName }, 'oauth.callback.failed')
+      return c.html(
+        renderErrorPage('exchange_failed', 'OAuth token exchange failed. Check server logs.'),
+      )
     }
   })
 

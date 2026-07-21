@@ -2,7 +2,7 @@ import type { Settings, OAuthConfig, ProviderConfig } from '../../config.js'
 import { classifyStatus } from '../../oauth/token-manager.js'
 import type { TokenManager } from '../../oauth/token-manager.js'
 import type { AuthStatus } from '../../oauth/types.js'
-import { logger } from '../logging.js'
+import { noopLogger, type Logger } from '../../types.js'
 import { buildOAuthLoginUrl } from './urls.js'
 
 export interface ProviderAuthStatus {
@@ -28,6 +28,7 @@ async function resolveProviderAuthStatus(
   name: string,
   provider: ProviderConfig,
   tokenManager: TokenManager,
+  logger: Logger,
 ): Promise<ProviderAuthStatus> {
   const oauth: OAuthConfig = provider.oauth!
   const status = tokenManager.getStatus(name, oauth)
@@ -63,12 +64,13 @@ async function resolveProviderAuthStatus(
 export async function validateOAuthStatus(
   settings: Settings,
   tokenManager: TokenManager,
+  logger: Logger = noopLogger,
 ): Promise<ProviderAuthStatus[]> {
   const results: ProviderAuthStatus[] = []
 
   for (const [name, provider] of Object.entries(settings.providers)) {
     if (!provider.oauth) continue
-    results.push(await resolveProviderAuthStatus(settings, name, provider, tokenManager))
+    results.push(await resolveProviderAuthStatus(settings, name, provider, tokenManager, logger))
   }
 
   return results
@@ -88,6 +90,7 @@ export async function validateOAuthStatus(
 export async function refreshAuthStatuses(
   settings: Settings,
   tokenManager: TokenManager,
+  logger: Logger = noopLogger,
 ): Promise<ProviderAuthStatus[]> {
   const oauthProviders = Object.entries(settings.providers)
     .filter(([, p]) => p.oauth)
@@ -95,7 +98,7 @@ export async function refreshAuthStatuses(
 
   const settled = await Promise.allSettled(
     oauthProviders.map(({ name, provider }) =>
-      resolveProviderAuthStatus(settings, name, provider, tokenManager),
+      resolveProviderAuthStatus(settings, name, provider, tokenManager, logger),
     ),
   )
 

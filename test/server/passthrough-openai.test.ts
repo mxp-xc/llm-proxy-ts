@@ -27,7 +27,7 @@ import { authCodeConfig, createMemoryPersistence } from '../helpers/oauth.js'
 import type { LanguageModelOptions, ProviderRegistry } from '../../src/providers/registry.js'
 import type { ModelGateway } from '../../src/server/types.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
-import type pino from 'pino'
+import type { Logger } from '../../src/types.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -108,16 +108,15 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
 
   function makeTestLogger() {
     const error = vi.fn()
-    const child = vi.fn()
-    const logger = {
+    const warn = vi.fn()
+    const logger: Logger = {
       info: vi.fn(),
-      warn: vi.fn(),
+      warn,
       error,
       fatal: vi.fn(),
-      child,
-    } as unknown as pino.Logger
-    child.mockReturnValue(logger)
-    return { logger, error }
+      child: () => logger,
+    }
+    return { logger, error, warn }
   }
 
   it('does not re-add raw instructions when the SDK input already contains them', () => {
@@ -1118,7 +1117,7 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     const tokenManager = new TokenManager(createMemoryPersistence())
     await tokenManager.load()
     const providerRegistry = await createProviderRegistry(settings, tokenManager)
-    const { logger, error } = makeTestLogger()
+    const { logger, warn } = makeTestLogger()
     const app = createApp({ settings, providerRegistry, logger })
 
     const res = await app.request('/v1/responses', {
@@ -1134,12 +1133,12 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       code: 'oauth_login_needed',
     })
     expect(body.error.loginUrl).toContain('/oauth/login/openai')
-    expect(error).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.objectContaining({ code: 'auth_required' }),
         phase: 'generate',
       }),
-      'upstream request failed',
+      'upstream authentication required',
     )
   })
 })

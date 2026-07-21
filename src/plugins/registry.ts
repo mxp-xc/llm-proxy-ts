@@ -1,4 +1,5 @@
 import type { PluginStore } from './types.js'
+import { PluginHookError } from './types.js'
 import type {
   Plugin,
   ProxyPlugin,
@@ -248,11 +249,11 @@ export class PluginRegistry {
         return rp.plugin.name
       }),
     )
-    for (const r of results) {
+    for (const [index, r] of results.entries()) {
       if (r.status === 'fulfilled') {
         log.info({ plugin: r.value }, 'plugin initialized')
       } else {
-        log.error({ err: r.reason }, 'plugin init failed')
+        log.error({ err: r.reason, plugin: initables[index]!.plugin.name }, 'plugin init failed')
       }
     }
   }
@@ -301,7 +302,12 @@ export class PluginRegistry {
     authFilePath?: string,
   ): Promise<((baseFetch?: typeof fetch) => typeof fetch) | undefined> {
     const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath)
-    return resolved ? resolved.rp.plugin.createFetch(resolved.ctx) : undefined
+    if (!resolved) return undefined
+    try {
+      return await resolved.rp.plugin.createFetch(resolved.ctx)
+    } catch (cause) {
+      throwPluginHookError(resolved.rp.plugin.name, providerId, 'createFetch', cause)
+    }
   }
 
   /** 为指定 provider 发现模型列表。 */
@@ -313,7 +319,12 @@ export class PluginRegistry {
     const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath, {
       requireDiscoverModels: true,
     })
-    return resolved?.rp.plugin.discoverModels?.(resolved.ctx)
+    if (!resolved?.rp.plugin.discoverModels) return undefined
+    try {
+      return await resolved.rp.plugin.discoverModels(resolved.ctx)
+    } catch (cause) {
+      throwPluginHookError(resolved.rp.plugin.name, providerId, 'discoverModels', cause)
+    }
   }
 
   // ─── Per-request pipeline ─────────────────────────────────────
@@ -422,6 +433,16 @@ export class PluginRegistry {
     }
     return result
   }
+}
+
+function throwPluginHookError(
+  plugin: string,
+  provider: string,
+  hook: 'createFetch' | 'discoverModels',
+  cause: unknown,
+): never {
+  if (cause instanceof PluginHookError) throw cause
+  throw new PluginHookError(plugin, provider, hook, cause)
 }
 
 // ─── Type guards ─────────────────────────────────────────────────

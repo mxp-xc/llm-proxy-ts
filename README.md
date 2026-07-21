@@ -67,8 +67,25 @@ bun dev serve
 - **oauth** — 支持 Authorization Code 和 Client Credentials 两种流程
 - **codex** — 全局 Codex 兼容配置，含 `models_catalog`（catalog override，如 `templateSlug`、`context_window` 默认 200000，可被 `provider.options.codex`、`model.codex` 覆盖）和 `install`（codex install 写入 `~/.codex/config.toml` 的 provider 配置）
 
+## 日志
+
+`serve` 使用现有 Pino 结构化日志记录运行状态和请求遥测；其他一次性 CLI 命令只使用终端输出，不创建日志文件。日志可通过以下环境变量配置：
+
+| 环境变量               | 默认值   | 说明                                  |
+| ---------------------- | -------- | ------------------------------------- |
+| `LLM_PROXY_LOG_LEVEL`  | `info`   | Pino 日志级别；非法值会使服务启动失败 |
+| `LLM_PROXY_LOG_DIR`    | `./logs` | 普通日志和错误 NDJSON 的目录          |
+| `LLM_PROXY_LOG_FORMAT` | `pretty` | `pretty` 文本或 `json` 结构化输出     |
+
+每个协议请求最多包含三个稳定事件：`request.received`、上游调用前的 `request.route_resolved`，以及恰好一次的 `request.completed`。终态包含 HTTP `status`、`durationMs`、路由和执行模式；成功时还会记录可用的 finish reason、token usage 和上游 request ID。流式响应即使已经返回 HTTP 200，流内错误仍会通过 `outcome` 反映真实结果。
+
+`outcome` 固定为：`success`、`validation_error`、`routing_error`、`client_error`、`auth_required`、`rate_limited`、`timeout`、`upstream_error`、`upstream_aborted`、`incomplete_stream`、`client_cancelled`、`internal_error`。成功的 `/health` 探针不写请求事件。
+
+普通日志按中国日期跨日轮转并保留 7 天；启用 `errorLogging` 时，上游超时和真实上游/流失败另写脱敏、截断后的 `errors-YYYY-MM-DD.ndjson`，保留 30 天。验证、路由、认证、限流、上游 abort 和客户端取消不写错误 NDJSON。
+
 ## 安全
 
 - 禁止提交 `.env*`、`config/settings.jsonc`、`config/auth.json`、日志或真实 API key
-- 日志自动脱敏 `apikey`、`authorization`、`x-api-key` 等敏感字段
-- API key 选择日志仅记录 provider 名称和 key 索引
+- 日志递归脱敏 API key、Authorization、OAuth token、client secret、cookie 等敏感字段
+- 普通请求遥测不记录 prompt、completion、tool input、raw chunk、headers、OAuth code/state/nonce 或凭据
+- API key 选择日志仅记录 provider 名称以及 `{ index, count }`，不记录 key、片段或指纹

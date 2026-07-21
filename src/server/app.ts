@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { randomUUID } from 'node:crypto'
 import type { Settings, TokenManager, AuthStatus } from '../index.js'
 import {
   listModels,
@@ -7,9 +8,7 @@ import {
   openaiResponsesStrategy,
   anthropicStrategy,
 } from '../index.js'
-import type { ProviderRegistry, KeySelection } from '../index.js'
-import pino from 'pino'
-import { logger as defaultLogger, requestId, LOG_DIR } from './logging.js'
+import { noopLogger, type Logger } from '../types.js'
 import { createOAuthCallbackApp } from './oauth/callback.js'
 import { createCodexApp } from './codex.js'
 import { CodexCatalogCache } from '../codex-catalog.js'
@@ -18,8 +17,14 @@ import { handleProtocolRequest } from './handle-protocol.js'
 import type { ProtocolContext } from './handle-protocol.js'
 import { createProtocolRequestScope } from './hono-protocol-adapter.js'
 import { defaultGateway } from './gateway.js'
-import { ErrorLogger } from './error-logger.js'
-import type { ModelGateway, AppDependencies, AppEnv } from './types.js'
+import { ErrorLogger, normalizeErrorForLog } from './error-logger.js'
+import type {
+  ModelGateway,
+  AppDependencies,
+  AppEnv,
+  RequestOutcome,
+  RequestTelemetryContext,
+} from './types.js'
 
 export type { Settings } from '../index.js'
 export type { ModelGateway, AppDependencies, AppEnv } from './types.js'
@@ -35,10 +40,13 @@ interface HealthResponse {
 
 function wrapStreamWithTerminalLog<T>(
   body: ReadableStream<T>,
+  telemetry: RequestTelemetryContext,
+  logger: Logger,
   logCompleted: () => void,
 ): ReadableStream<T> {
   const reader = body.getReader()
   let logged = false
+  let cancelled = false
   const logOnce = () => {
     if (logged) return
     logged = true
@@ -47,8 +55,10 @@ function wrapStreamWithTerminalLog<T>(
 
   return new ReadableStream<T>({
     async pull(controller) {
+      if (cancelled) return
       try {
         const { done, value } = await reader.read()
+        if (cancelled || controller.desiredSize === null) return
         if (done) {
           logOnce()
           controller.close()
@@ -56,13 +66,53 @@ function wrapStreamWithTerminalLog<T>(
         }
         controller.enqueue(value)
       } catch (err) {
+        if (cancelled) return
+        if (!telemetry.explicitFailure) {
+          telemetry.outcome = 'internal_error'
+          telemetry.explicitFailure = true
+          telemetry.terminalPart = 'error'
+        }
+        telemetry.terminalError = err instanceof Error ? err.name : 'Error'
+        if (!telemetry.failureLogged) {
+          telemetry.failureLogged = true
+          logger.error(
+            {
+              err: normalizeErrorForLog(err),
+              phase: 'stream-consume',
+              provider: telemetry.provider,
+              requestedModel: telemetry.requestedModel,
+              actualModel: telemetry.actualModel,
+              executionMode: telemetry.executionMode,
+              keySelection: telemetry.keySelection,
+            },
+            'stream response consumption failed',
+          )
+        }
         logOnce()
         controller.error(err)
       }
     },
     async cancel(reason) {
+      cancelled = true
+      if (!telemetry.explicitFailure) {
+        telemetry.outcome = 'client_cancelled'
+        telemetry.explicitFailure = true
+      }
       try {
         await reader.cancel(reason)
+      } catch (err) {
+        logger.error(
+          {
+            err: normalizeErrorForLog(err),
+            phase: 'stream-cancel',
+            provider: telemetry.provider,
+            requestedModel: telemetry.requestedModel,
+            actualModel: telemetry.actualModel,
+            executionMode: telemetry.executionMode,
+            keySelection: telemetry.keySelection,
+          },
+          'stream cancellation cleanup failed',
+        )
       } finally {
         logOnce()
       }
@@ -73,7 +123,7 @@ function wrapStreamWithTerminalLog<T>(
 export function createApp({
   settings,
   tokenManager,
-  logger = defaultLogger,
+  logger = noopLogger,
   providerRegistry,
   gateway = defaultGateway,
   nonce,
@@ -81,6 +131,7 @@ export function createApp({
   pluginRegistry,
   codexCatalogCache,
   errorLogger,
+  errorLogDir = 'logs',
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -93,9 +144,10 @@ export function createApp({
     errorLogger:
       errorLogger ??
       new ErrorLogger({
-        logDir: LOG_DIR,
+        logDir: errorLogDir,
         enabled: settings.errorLogging.enabled,
         maxBodyLength: settings.errorLogging.maxBodyLength,
+        logger,
       }),
   }
 
@@ -106,14 +158,24 @@ export function createApp({
   const modelsById = new Map(modelsList.data.map((m) => [m.id, m]))
 
   app.use('*', async (c, next) => {
-    const id = requestId()
+    const id = randomUUID()
     c.set('requestId', id)
     const reqLogger = logger.child({ requestId: id })
     c.set('logger', reqLogger)
+    const telemetry: RequestTelemetryContext = {
+      requestId: id,
+      startedAt: performance.now(),
+      method: c.req.method,
+      path: c.req.path,
+      ndjsonWritten: false,
+      completed: false,
+    }
+    c.set('requestLogContext', telemetry)
+    const isHealth = c.req.path === '/health'
+    if (!isHealth) {
+      reqLogger.info({ method: telemetry.method, path: telemetry.path }, 'request.received')
+    }
 
-    reqLogger.info({ method: c.req.method, path: c.req.path }, 'request received')
-
-    const start = performance.now()
     await next()
 
     // SSE 流式响应的 body 是 ReadableStream，await next() 在 Response 创建时就 resolve，
@@ -121,26 +183,21 @@ export function createApp({
     // 非 SSE 响应（c.json 等）虽然 body 也是 ReadableStream，但 await next() 已等完整响应，
     // 无需延迟。
     const logCompleted = () => {
-      const duration = performance.now() - start
-      const requestLogContext = c.get('requestLogContext')
-      reqLogger.info(
-        {
-          method: c.req.method,
-          path: c.req.path,
-          status: c.res.status,
-          durationMs: Math.round(duration),
-          provider: requestLogContext?.provider,
-          requestedModel: requestLogContext?.requestedModel,
-          actualModel: requestLogContext?.actualModel,
-        },
-        'request completed',
-      )
+      if (telemetry.completed) return
+      telemetry.completed = true
+      telemetry.status = c.res.status
+      telemetry.outcome ??= outcomeFromStatus(telemetry.status)
+      if (isHealth && telemetry.outcome === 'success') return
+      if (isHealth) {
+        reqLogger.info({ method: telemetry.method, path: telemetry.path }, 'request.received')
+      }
+      writeCompletedLog(reqLogger, telemetry)
     }
 
     const isSSE = c.res.headers.get('content-type')?.includes('text/event-stream')
     if (isSSE && c.res.body instanceof ReadableStream) {
       const body = c.res.body
-      c.res = new Response(wrapStreamWithTerminalLog(body, logCompleted), {
+      c.res = new Response(wrapStreamWithTerminalLog(body, telemetry, reqLogger, logCompleted), {
         status: c.res.status,
         statusText: c.res.statusText,
         headers: c.res.headers,
@@ -160,9 +217,17 @@ export function createApp({
   app.onError((err, c) => {
     const reqLogger = c.get('logger') ?? logger
     const requestLogContext = c.get('requestLogContext')
+    if (requestLogContext) {
+      if (!requestLogContext.explicitFailure) {
+        requestLogContext.outcome = 'internal_error'
+        requestLogContext.explicitFailure = true
+      }
+      requestLogContext.terminalError = err.name
+      requestLogContext.failureLogged = true
+    }
     reqLogger.error(
       {
-        err,
+        err: normalizeErrorForLog(err),
         method: c.req.method,
         path: c.req.path,
         provider: requestLogContext?.provider,
@@ -240,4 +305,36 @@ export function createApp({
   app.route('/codex', createCodexApp({ settings, protocolCtx, catalogCache }))
 
   return app
+}
+
+function outcomeFromStatus(status: number): RequestOutcome {
+  if (status < 400) return 'success'
+  if (status < 500) return 'client_error'
+  return 'internal_error'
+}
+
+function writeCompletedLog(logger: Logger, telemetry: RequestTelemetryContext): void {
+  const fields = {
+    method: telemetry.method,
+    path: telemetry.path,
+    status: telemetry.status,
+    outcome: telemetry.outcome,
+    durationMs: Math.round(performance.now() - telemetry.startedAt),
+    provider: telemetry.provider,
+    requestedModel: telemetry.requestedModel,
+    actualModel: telemetry.actualModel,
+    executionMode: telemetry.executionMode,
+    keySelection: telemetry.keySelection,
+    finishReason: telemetry.finishReason,
+    inputTokens: telemetry.inputTokens,
+    outputTokens: telemetry.outputTokens,
+    totalTokens: telemetry.totalTokens,
+    cacheReadTokens: telemetry.cacheReadTokens,
+    reasoningTokens: telemetry.reasoningTokens,
+    upstreamRequestId: telemetry.upstreamRequestId,
+    upstreamDurationMs: telemetry.upstreamDurationMs,
+    firstChunkMs: telemetry.firstChunkMs,
+    terminalPart: telemetry.terminalPart,
+  }
+  logger.info(fields, 'request.completed')
 }

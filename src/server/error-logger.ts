@@ -1,11 +1,33 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { redact, logger as fallbackLogger } from './logging.js'
+import { formatCNDate, formatCNTimestamp, redact } from './logging.js'
+import { RequestTimeoutError } from '../request-timeout.js'
+import type { KeySelection } from '../providers/registry.js'
+import type { Logger } from '../types.js'
 
 export const ERROR_LOG_RETENTION_DAYS = 30
 
 /** 错误日志记录的 phase — 由 error-logger 拥有,handle-protocol 导入 */
 export type ErrorPhase = 'stream' | 'stream-only' | 'generate'
+
+export interface NormalizedErrorForLog {
+  name: string
+  message: string
+  stack?: string
+  code?: string
+  statusCode?: number
+  responseBodyBytes?: number
+  upstreamErrorType?: string
+  upstreamErrorCode?: string
+  isRetryable?: boolean
+  retryReason?: string
+  attempts?: number
+  timeoutMs?: number
+  plugin?: string
+  provider?: string
+  hook?: string
+  cause?: NormalizedErrorForLog
+}
 
 export interface ErrorLogEntry {
   timestamp: string
@@ -14,15 +36,8 @@ export interface ErrorLogEntry {
   provider: string
   requestedModel: string
   actualModel: string
-  error: {
-    name: string
-    message: string
-    stack?: string
-    code?: string
-    statusCode?: number
-    responseBody?: string
-    isRetryable?: boolean
-  }
+  error: NormalizedErrorForLog
+  keySelection?: KeySelection
   request: unknown
   response: unknown
 }
@@ -31,41 +46,28 @@ export interface ErrorLoggerOptions {
   logDir: string
   enabled: boolean
   maxBodyLength: number
+  logger: Logger
 }
 
 const PREVIEW_LENGTH = 1024
-
-/** 中国时区（+08:00）格式化为 YYYY-MM-DD HH:MM:SS，不标注时区 */
-function formatCNTimestamp(date: Date = new Date()): string {
-  const cn = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  const y = cn.getUTCFullYear()
-  const m = String(cn.getUTCMonth() + 1).padStart(2, '0')
-  const d = String(cn.getUTCDate()).padStart(2, '0')
-  const h = String(cn.getUTCHours()).padStart(2, '0')
-  const min = String(cn.getUTCMinutes()).padStart(2, '0')
-  const s = String(cn.getUTCSeconds()).padStart(2, '0')
-  return `${y}-${m}-${d} ${h}:${min}:${s}`
-}
+const REDACTED_UPSTREAM_ERROR_MESSAGE = 'Upstream provider request failed'
 
 export function getErrorLogFileName(date: Date = new Date()): string {
-  const cn = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  const y = cn.getUTCFullYear()
-  const m = String(cn.getUTCMonth() + 1).padStart(2, '0')
-  const d = String(cn.getUTCDate()).padStart(2, '0')
-  return `errors-${y}-${m}-${d}.ndjson`
+  return `errors-${formatCNDate(date)}.ndjson`
 }
 
 /** 截断超大 body：序列化后超限则替换为 { _truncated, originalLength, preview } */
 function truncateBody(value: unknown, maxBodyLength: number): unknown {
   const redacted = redact(value)
   const serialized = JSON.stringify(redacted)
+  if (serialized === undefined) return redacted
   if (serialized.length <= maxBodyLength) {
     return redacted
   }
   return {
     _truncated: true,
     originalLength: serialized.length,
-    preview: serialized.slice(0, PREVIEW_LENGTH),
+    preview: serialized.slice(0, Math.min(PREVIEW_LENGTH, maxBodyLength)),
   }
 }
 
@@ -78,11 +80,13 @@ export class ErrorLogger {
   private readonly logDir: string
   private readonly enabled: boolean
   private readonly maxBodyLength: number
+  private readonly logger: Logger
 
   constructor(opts: ErrorLoggerOptions) {
     this.logDir = opts.logDir
     this.enabled = opts.enabled
     this.maxBodyLength = opts.maxBodyLength
+    this.logger = opts.logger
   }
 
   log(entry: Omit<ErrorLogEntry, 'timestamp'>): void {
@@ -99,7 +103,7 @@ export class ErrorLogger {
       const filePath = resolve(this.logDir, getErrorLogFileName())
       appendFileSync(filePath, `${line}\n`)
     } catch (err) {
-      fallbackLogger.error(
+      this.logger.error(
         {
           err,
           requestId: entry.requestId,
@@ -115,22 +119,116 @@ export class ErrorLogger {
 }
 
 /** 将任意错误值安全转换为 ErrorLogEntry.error 形状 */
-export function normalizeErrorForLog(error: unknown): ErrorLogEntry['error'] {
+export function normalizeErrorForLog(error: unknown): NormalizedErrorForLog {
+  return normalizeError(error, new Set(), 0)
+}
+
+function normalizeError(error: unknown, seen: Set<object>, depth: number): NormalizedErrorForLog {
   const record =
     typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : undefined
+  if (record && seen.has(record)) {
+    return { name: 'Error', message: '[Circular error cause]' }
+  }
+  if (record) seen.add(record)
   const lastError =
     typeof record?.lastError === 'object' && record.lastError !== null
       ? (record.lastError as Record<string, unknown>)
       : undefined
   const details = lastError ?? record
+  const responseBody = typeof details?.responseBody === 'string' ? details.responseBody : undefined
+  const { upstreamErrorMessage, ...upstreamError } = extractUpstreamError(responseBody)
+  const errorName = error instanceof Error ? error.name : 'Error'
+  const apiCallErrorMessage =
+    errorName === 'AI_APICallError' && error instanceof Error
+      ? error.message
+      : errorName === 'AI_RetryError' &&
+          lastError?.name === 'AI_APICallError' &&
+          typeof lastError.message === 'string'
+        ? lastError.message
+        : undefined
+  const apiCallMessageAppearsInResponseBody =
+    responseBody !== undefined &&
+    apiCallErrorMessage !== undefined &&
+    apiCallErrorMessage.length > 0 &&
+    (responseBody === apiCallErrorMessage ||
+      responseBody.includes(JSON.stringify(apiCallErrorMessage)) ||
+      (upstreamErrorMessage !== undefined && apiCallErrorMessage.includes(upstreamErrorMessage)))
+  const hasResponseBodyDerivedText =
+    apiCallMessageAppearsInResponseBody &&
+    (errorName === 'AI_APICallError' ||
+      (error instanceof Error && error.message.includes(apiCallErrorMessage)))
+  const errorMessage =
+    error instanceof Error
+      ? hasResponseBodyDerivedText
+        ? REDACTED_UPSTREAM_ERROR_MESSAGE
+        : error.message
+      : String(error)
+  const retryReason = safeUpstreamValue(record?.reason)
+  const statusCode =
+    typeof details?.statusCode === 'number'
+      ? details.statusCode
+      : typeof details?.status === 'number'
+        ? details.status
+        : undefined
+  const cause =
+    depth < 4 && record?.cause !== undefined
+      ? normalizeError(record.cause, seen, depth + 1)
+      : undefined
 
   return {
-    name: error instanceof Error ? error.name : 'Error',
-    message: error instanceof Error ? error.message : String(error),
-    ...(error instanceof Error && error.stack && { stack: error.stack }),
+    name: errorName,
+    message: errorMessage,
+    ...(!hasResponseBodyDerivedText &&
+      error instanceof Error &&
+      error.stack && { stack: error.stack }),
     ...(typeof record?.code === 'string' && { code: record.code }),
-    ...(typeof details?.statusCode === 'number' && { statusCode: details.statusCode }),
-    ...(typeof details?.responseBody === 'string' && { responseBody: details.responseBody }),
+    ...(statusCode !== undefined && { statusCode }),
+    ...(responseBody !== undefined && {
+      responseBodyBytes: Buffer.byteLength(responseBody, 'utf8'),
+    }),
+    ...upstreamError,
     ...(typeof details?.isRetryable === 'boolean' && { isRetryable: details.isRetryable }),
+    ...(retryReason !== undefined && { retryReason }),
+    ...(Array.isArray(record?.errors) && { attempts: record.errors.length }),
+    ...(error instanceof RequestTimeoutError && { timeoutMs: error.timeoutMs }),
+    ...(typeof record?.plugin === 'string' && { plugin: record.plugin }),
+    ...(typeof record?.provider === 'string' && { provider: record.provider }),
+    ...(typeof record?.hook === 'string' && { hook: record.hook }),
+    ...(cause !== undefined && { cause }),
+  }
+}
+
+const SAFE_UPSTREAM_VALUE_LENGTH = 256
+
+function safeUpstreamValue(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  return value.slice(0, SAFE_UPSTREAM_VALUE_LENGTH)
+}
+
+function extractUpstreamError(responseBody: string | undefined): {
+  upstreamErrorType?: string
+  upstreamErrorCode?: string
+  upstreamErrorMessage?: string
+} {
+  if (responseBody === undefined) return {}
+  try {
+    const parsed = JSON.parse(responseBody) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    const candidate = (parsed as Record<string, unknown>).error
+    if (typeof candidate !== 'object' || candidate === null) return {}
+    const upstream = candidate as Record<string, unknown>
+    const upstreamErrorType = safeUpstreamValue(upstream.type)
+    const upstreamErrorCode = safeUpstreamValue(upstream.code)
+    const upstreamErrorMessage =
+      typeof upstream.message === 'string' && upstream.message.length > 0
+        ? upstream.message
+        : undefined
+    return {
+      ...(upstreamErrorType !== undefined && { upstreamErrorType }),
+      ...(upstreamErrorCode !== undefined && { upstreamErrorCode }),
+      ...(upstreamErrorMessage !== undefined && { upstreamErrorMessage }),
+    }
+  } catch {
+    return {}
   }
 }

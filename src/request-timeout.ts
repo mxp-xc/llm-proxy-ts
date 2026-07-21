@@ -1,7 +1,10 @@
 export class RequestTimeoutError extends Error {
-  constructor() {
-    super('Request timed out')
+  readonly timeoutMs: number
+
+  constructor(timeoutMs: number) {
+    super(`Request timed out after ${timeoutMs}ms`)
     this.name = 'RequestTimeoutError'
+    this.timeoutMs = timeoutMs
   }
 }
 
@@ -13,8 +16,10 @@ export async function withRequestTimeout<T>(
   let timeout: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      abortController.abort()
-      reject(new RequestTimeoutError())
+      const timeoutError = new RequestTimeoutError(timeoutMs)
+      // Queue the timeout rejection first so a synchronous abort listener cannot win the race.
+      reject(timeoutError)
+      abortController.abort(timeoutError)
     }, timeoutMs)
   })
 

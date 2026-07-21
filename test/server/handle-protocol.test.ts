@@ -15,6 +15,7 @@ import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { createProviderRegistryStub, stubRegistry } from '../helpers/registry.js'
 import type pino from 'pino'
+import { noopLogger } from '../../src/types.js'
 
 const tmpLogRoot = mkdtempSync(join(tmpdir(), 'hp-branches-'))
 afterAll(() => {
@@ -56,6 +57,7 @@ function makeApp(gateway: ReturnType<typeof makeGateway>, opts: MakeAppOptions =
     logDir: tmpLogDir,
     enabled: settings.errorLogging.enabled,
     maxBodyLength: settings.errorLogging.maxBodyLength,
+    logger: opts.logger ?? noopLogger,
   })
   return {
     app: createApp({
@@ -71,16 +73,18 @@ function makeApp(gateway: ReturnType<typeof makeGateway>, opts: MakeAppOptions =
 }
 
 function makeTestLogger() {
+  const info = vi.fn()
   const error = vi.fn()
+  const warn = vi.fn()
   const logger = {
-    info: vi.fn(),
-    warn: vi.fn(),
+    info,
+    warn,
     error,
     fatal: vi.fn(),
     child: vi.fn(),
   } as unknown as pino.Logger & { child: ReturnType<typeof vi.fn> }
   logger.child.mockReturnValue(logger)
-  return { logger, error }
+  return { logger, info, error, warn }
 }
 
 function readErrors(tmpLogDir: string): any[] {
@@ -102,6 +106,43 @@ function chatRequest(extra: Record<string, unknown> = {}) {
       ...extra,
     }),
   }
+}
+
+function streamOnlyProviders(): Settings['providers'] {
+  return {
+    openrouter: {
+      type: 'openai-compatible',
+      baseURL: 'https://openrouter.ai/api/v1',
+      apiKey: 'secret',
+      headers: {},
+      plugins: [],
+      options: { streamOnly: true },
+      models: {
+        chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
+      },
+    },
+  }
+}
+
+function aiSdkApiCallError(statusCode: number, message: string): Error {
+  const errorBody =
+    statusCode === 429
+      ? { type: 'rate_limit_error', code: 'rate_limit_exceeded', message }
+      : { type: 'upstream_error', code: 'upstream_request_failed', message }
+  return Object.assign(new Error(message), {
+    name: 'AI_APICallError',
+    statusCode,
+    responseBody: JSON.stringify({ error: errorBody }),
+    responseHeaders: { 'retry-after': '1', 'x-sensitive-header': 'do-not-log' },
+    isRetryable: true,
+  })
+}
+
+function aiSdkRetryError(lastError: Error): Error {
+  return Object.assign(new Error('Failed after 3 attempts'), {
+    name: 'AI_RetryError',
+    lastError,
+  })
 }
 
 function makeStreamInspectRegistry(
@@ -126,7 +167,7 @@ function makeStreamInspectRegistry(
 
 describe('handleProtocolRequest branch matrix — generate path', () => {
   it('returns 400 and logs full validation errors when request validation fails', async () => {
-    const { logger, error } = makeTestLogger()
+    const { logger, warn } = makeTestLogger()
     const { app } = makeApp(makeGateway(), { logger })
 
     const response = await app.request('/v1/chat/completions', {
@@ -136,7 +177,7 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     })
 
     expect(response.status).toBe(400)
-    expect(error).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.anything(),
         phase: 'validation',
@@ -145,8 +186,34 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     )
   })
 
+  it('does not include malformed JSON request content in validation logs', async () => {
+    const { logger, warn } = makeTestLogger()
+    const { app } = makeApp(makeGateway(), { logger })
+    const secret = 'prompt-and-token-must-not-be-logged'
+
+    const response = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: `{"model":"openrouter/chat","accessToken":"${secret}"`,
+    })
+
+    expect(response.status).toBe(400)
+    const validationLog = warn.mock.calls.find(
+      ([, message]) => message === 'request validation failed',
+    )
+    expect(validationLog?.[0]).toMatchObject({
+      err: {
+        name: 'SyntaxError',
+        message: 'Request body is not valid JSON',
+        stack: expect.any(String),
+      },
+      phase: 'validation',
+    })
+    expect(JSON.stringify(validationLog?.[0])).not.toContain(secret)
+  })
+
   it('returns 400 for malformed Responses tool_search items', async () => {
-    const { logger, error } = makeTestLogger()
+    const { logger, warn } = makeTestLogger()
     const { app } = makeApp(makeGateway(), { logger })
 
     const response = await app.request('/v1/responses', {
@@ -159,7 +226,7 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     })
 
     expect(response.status).toBe(400)
-    expect(error).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.anything(),
         phase: 'validation',
@@ -198,6 +265,41 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     )
   })
 
+  it('does not leak AI SDK response details from app.onError logs', async () => {
+    const sensitiveError = Object.assign(new Error('registry unavailable'), {
+      responseBody: '{"token":"response-body-secret"}',
+      responseHeaders: { authorization: 'Bearer response-header-secret' },
+      headers: { cookie: 'session=header-secret' },
+      secret: 'custom-property-secret',
+    })
+    const providerRegistry: ProviderRegistry = createProviderRegistryStub({
+      languageModel() {
+        throw sensitiveError
+      },
+    })
+    const { logger, error } = makeTestLogger()
+    const { app } = makeApp(makeGateway(), { logger, providerRegistry })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(500)
+    const failedLog = error.mock.calls.find(([, message]) => message === 'request failed')
+    expect(failedLog).toBeDefined()
+    expect(failedLog?.[0]).toMatchObject({
+      err: expect.objectContaining({ name: 'Error', message: 'registry unavailable' }),
+    })
+    const loggedError = (failedLog?.[0] as { err: Record<string, unknown> }).err
+    expect(loggedError).toHaveProperty('responseBodyBytes')
+    expect(loggedError).not.toHaveProperty('responseBody')
+    expect(loggedError).not.toHaveProperty('responseHeaders')
+    expect(loggedError).not.toHaveProperty('headers')
+    expect(loggedError).not.toHaveProperty('secret')
+    const serializedLog = JSON.stringify(failedLog?.[0])
+    expect(serializedLog).not.toContain('response-body-secret')
+    expect(serializedLog).not.toContain('header-secret')
+    expect(serializedLog).not.toContain('custom-property-secret')
+  })
+
   it('returns 200 with rendered message for a successful non-streaming generate', async () => {
     const gateway = makeGateway({
       async generate() {
@@ -225,7 +327,12 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
         throw new Error('upstream failed')
       },
     })
-    const { app, tmpLogDir } = makeApp(gateway)
+    const providerRegistry = createProviderRegistryStub({
+      languageModel() {
+        return { model: {} as never, keySelection: { index: 1, count: 2 } }
+      },
+    })
+    const { app, tmpLogDir } = makeApp(gateway, { providerRegistry })
 
     const response = await app.request('/v1/chat/completions', chatRequest())
 
@@ -236,6 +343,105 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     expect(record.phase).toBe('generate')
     expect(record.response).toBeNull()
     expect(record.error.message).toBe('upstream failed')
+    expect(record.keySelection).toEqual({ index: 1, count: 2 })
+  })
+
+  it('classifies an AI SDK generate 429 as rate_limited without writing NDJSON', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        throw aiSdkRetryError(aiSdkApiCallError(429, 'generate rate limited'))
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+    await response.text()
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'rate_limited' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('classifies renderResult failures as internal_error without writing NDJSON', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: 'hello',
+          finishReason: 'stop',
+          response: {
+            timestamp: {
+              getTime() {
+                throw new Error('renderResult failed')
+              },
+            },
+          },
+        } as unknown as GenerateTextReturn
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: 'internal_error', code: 'internal_server_error' },
+    })
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'internal_error' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('classifies responseHeaders callback failures as internal_error without writing NDJSON', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: '',
+          finishReason: 'stop',
+          response: {
+            id: 'resp_headers_failure',
+            body: { id: 'resp_headers_failure', object: 'response', output: [] },
+            get headers() {
+              throw new Error('responseHeaders failed')
+            },
+          },
+        } as unknown as GenerateTextReturn
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, {
+      logger,
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi' }),
+    })
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: 'internal_error', code: 'internal_server_error' },
+    })
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'internal_error' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
   })
 
   it('returns 504 and logs RequestTimeoutError when generate exceeds requestTimeoutMs', async () => {
@@ -253,10 +459,11 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     const records = readErrors(tmpLogDir)
     expect(records).toHaveLength(1)
     expect(records[0]!.error.name).toBe('RequestTimeoutError')
+    expect(records[0]!.error.timeoutMs).toBe(5)
   })
 
   it('returns 503 with oauth login body when resolving the model requires login', async () => {
-    const { logger, error } = makeTestLogger()
+    const { logger, warn } = makeTestLogger()
     const providerRegistry: ProviderRegistry = createProviderRegistryStub({
       languageModel() {
         throw new OAuthError('auth_required', 'OAuth login required')
@@ -274,7 +481,7 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
       message: 'OAuth login required',
     })
     expect(body.error.loginUrl).toContain('/oauth/login/openrouter')
-    expect(error).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({
         err: expect.any(OAuthError),
         phase: 'resolve-model',
@@ -305,10 +512,28 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     })
     expect(body.error.loginUrl).toContain('/oauth/login/openrouter')
   })
+
+  it('classifies an AI SDK retry error wrapping OAuth auth_required', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        throw aiSdkRetryError(new OAuthError('auth_required', 'OAuth login required'))
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(503)
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'auth_required' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
 })
 
 describe('handleProtocolRequest branch matrix — stream path', () => {
-  it('logs AI SDK stream errors through the request-scoped logger with a compact error', async () => {
+  it('does not log a transient AI SDK onError when the stream reaches finish', async () => {
     async function* goodStream(): AsyncIterable<unknown> {
       yield {
         type: 'finish',
@@ -336,19 +561,7 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
     await response.text()
 
-    expect(error).toHaveBeenCalledWith(
-      {
-        err: expect.objectContaining({
-          message: 'Failed after 3 attempts',
-          statusCode: 502,
-        }),
-      },
-      'stream error from AI SDK',
-    )
-    const loggedError = error.mock.calls.find(
-      ([, message]) => message === 'stream error from AI SDK',
-    )?.[0]
-    expect(JSON.stringify(loggedError)).not.toContain('requestBodyValues')
+    expect(error).not.toHaveBeenCalled()
   })
 
   it('returns 200 text/event-stream for a healthy stream', async () => {
@@ -393,6 +606,234 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(record!.response).toEqual([])
   })
 
+  it('does not write NDJSON when an upstream stream requires OAuth login', async () => {
+    const gateway = makeGateway({
+      stream() {
+        throw new OAuthError('auth_required', 'OAuth login required')
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: 'auth_required', code: 'oauth_login_needed' },
+    })
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'auth_required' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('classifies an AI SDK stream 429 as rate_limited without writing NDJSON', async () => {
+    const apiCallError = aiSdkApiCallError(429, 'stream rate limited')
+    const retryError = aiSdkRetryError(apiCallError)
+    const gateway = makeGateway({
+      stream(input) {
+        input.onError?.(retryError)
+        return (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'error', error: retryError }
+        })()
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await response.text()
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'rate_limited' })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('classifies an AI SDK retry error wrapping AbortError as upstream_aborted', async () => {
+    const abortError = Object.assign(new Error('upstream aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    })
+    const retryError = aiSdkRetryError(abortError)
+    const gateway = makeGateway({
+      stream() {
+        return (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'error', error: retryError }
+        })()
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await response.text()
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'upstream_aborted',
+      terminalPart: 'abort',
+    })
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('keeps client cancellation quiet when upstream cleanup rejects with AbortError', async () => {
+    let markSecondPullStarted: (() => void) | undefined
+    const secondPullStarted = new Promise<void>((resolve) => {
+      markSecondPullStarted = resolve
+    })
+    const abortError = Object.assign(new Error('cleanup aborted'), {
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+    })
+    const gateway = makeGateway({
+      stream(input) {
+        const abortSignal = input.abortSignal
+        if (!abortSignal) throw new Error('expected request abort signal')
+        return (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+          markSecondPullStarted?.()
+          await new Promise<never>((_resolve, reject) => {
+            const rejectOnAbort = () => reject(abortError)
+            if (abortSignal.aborted) rejectOnAbort()
+            else abortSignal.addEventListener('abort', rejectOnAbort, { once: true })
+          })
+        })()
+      },
+    })
+    const { logger, info, warn, error } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await secondPullStarted
+    await response.body!.cancel('client disconnected')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'client_cancelled' })
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('lets a real upstream failure override cancellation without duplicate consumption errors', async () => {
+    let markSecondPullStarted: (() => void) | undefined
+    const secondPullStarted = new Promise<void>((resolve) => {
+      markSecondPullStarted = resolve
+    })
+    const upstreamError = new Error('upstream failed during cancellation')
+    const gateway = makeGateway({
+      stream(input) {
+        const abortSignal = input.abortSignal
+        if (!abortSignal) throw new Error('expected request abort signal')
+        return (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+          markSecondPullStarted?.()
+          await new Promise<never>((_resolve, reject) => {
+            const rejectOnAbort = () => reject(upstreamError)
+            if (abortSignal.aborted) rejectOnAbort()
+            else abortSignal.addEventListener('abort', rejectOnAbort, { once: true })
+          })
+        })()
+      },
+    })
+    const { logger, info, warn, error } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await secondPullStarted
+    await response.body!.cancel('client disconnected')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'upstream_error',
+      terminalPart: 'error',
+    })
+    expect(warn).not.toHaveBeenCalled()
+    expect(
+      error.mock.calls.filter(([, message]) => message === 'upstream stream failed'),
+    ).toHaveLength(1)
+    expect(
+      error.mock.calls.filter(([, message]) => message === 'stream response consumption failed'),
+    ).toHaveLength(0)
+    expect(readErrors(tmpLogDir)).toHaveLength(1)
+  })
+
+  it('keeps cancellation quiet when the pending upstream pull ends normally', async () => {
+    let markSecondPullStarted: (() => void) | undefined
+    const secondPullStarted = new Promise<void>((resolve) => {
+      markSecondPullStarted = resolve
+    })
+    const gateway = makeGateway({
+      stream(input) {
+        const abortSignal = input.abortSignal
+        if (!abortSignal) throw new Error('expected request abort signal')
+        return (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+          markSecondPullStarted?.()
+          await new Promise<void>((resolve) => {
+            const resolveOnAbort = () => resolve()
+            if (abortSignal.aborted) resolveOnAbort()
+            else abortSignal.addEventListener('abort', resolveOnAbort, { once: true })
+          })
+        })()
+      },
+    })
+    const { logger, info, warn, error } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await secondPullStarted
+    await response.body!.cancel('client disconnected')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'client_cancelled' })
+    expect((completed[0]?.[0] as { terminalPart?: unknown }).terminalPart).toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('keeps a pending AI SDK stream error as upstream_error when the stream ends at EOF', async () => {
+    const retryError = aiSdkRetryError(aiSdkApiCallError(502, 'upstream unavailable'))
+    const gateway = makeGateway({
+      stream(input) {
+        input.onError?.(retryError)
+        return (async function* (): AsyncIterable<ProxyStreamPart> {})()
+      },
+    })
+    const { logger, info, error } = makeTestLogger()
+    const { app } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await response.text()
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'upstream_error' })
+    const failedLog = error.mock.calls.find(([, message]) => message === 'upstream stream failed')
+    expect(failedLog?.[0]).toMatchObject({
+      err: expect.objectContaining({
+        name: 'AI_RetryError',
+        message: 'Failed after 3 attempts',
+        statusCode: 502,
+      }),
+    })
+    const loggedError = (failedLog?.[0] as { err: Record<string, unknown> }).err
+    expect(loggedError).toHaveProperty('responseBodyBytes')
+    expect(loggedError).toHaveProperty('stack')
+    expect(loggedError).not.toHaveProperty('responseBody')
+    expect(loggedError).not.toHaveProperty('responseHeaders')
+    expect(JSON.stringify(failedLog?.[0])).not.toContain('upstream unavailable')
+    expect(JSON.stringify(failedLog?.[0])).not.toContain('do-not-log')
+  })
+
   it('returns 502, logs, and closes upstream stream when first-chunk inspection throws', async () => {
     let streamReturned = false
     async function* inspectedStream(): AsyncIterable<unknown> {
@@ -415,10 +856,9 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(response.status).toBe(502)
     expect(streamReturned).toBe(true)
     const records = readErrors(tmpLogDir)
-    const record = records.find(
-      (r) => r.phase === 'stream' && r.error.message === 'inspect first boom',
-    )
+    const record = records.find((r) => r.phase === 'stream' && r.error.name === 'PluginHookError')
     expect(record).toBeDefined()
+    expect(record!.error.message).toContain("Plugin 'test-stream-inspector' hook")
     expect(record!.response).toEqual([])
   })
 
@@ -431,7 +871,8 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     const gateway = makeGateway({
       stream: () => breakingStream() as AsyncIterable<ProxyStreamPart>,
     })
-    const { app, tmpLogDir } = makeApp(gateway)
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, { logger })
 
     const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
 
@@ -444,6 +885,9 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(record.error.message).toBe('stream broke')
     expect(Array.isArray(record.response)).toBe(true)
     expect((record.response as unknown[]).length).toBe(2)
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({ outcome: 'upstream_error' })
   })
 
   it('logs buffered chunks and closes upstream stream when later inspection throws', async () => {
@@ -473,9 +917,7 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     await response.text().catch(() => undefined)
     expect(streamReturned).toBe(true)
     const records = readErrors(tmpLogDir)
-    const record = records.find(
-      (r) => r.phase === 'stream' && r.error.message === 'inspect later boom',
-    )
+    const record = records.find((r) => r.phase === 'stream' && r.error.name === 'PluginHookError')
     expect(record).toBeDefined()
     expect(record!.response).toEqual([{ type: 'text-delta', id: 'txt-1', text: 'first' }])
   })
@@ -559,21 +1001,7 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     const gateway = makeGateway({
       stream: () => breakingStream() as AsyncIterable<ProxyStreamPart>,
     })
-    const { app, tmpLogDir } = makeApp(gateway, {
-      providers: {
-        openrouter: {
-          type: 'openai-compatible',
-          baseURL: 'https://openrouter.ai/api/v1',
-          apiKey: 'secret',
-          headers: {},
-          plugins: [],
-          options: { streamOnly: true },
-          models: {
-            chat: { upstreamModel: 'openrouter/chat', aliases: [], headers: {}, plugins: [] },
-          },
-        },
-      },
-    })
+    const { app, tmpLogDir } = makeApp(gateway, { providers: streamOnlyProviders() })
 
     const response = await app.request('/v1/chat/completions', chatRequest())
 
@@ -584,4 +1012,79 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(records[0]!.error.message).toBe('streamOnly broke')
     expect(records[0]!.response).toEqual([{ type: 'text-delta', id: 'txt-1', text: 'partial' }])
   })
+
+  it.each([
+    {
+      terminal: 'error',
+      stream: () =>
+        (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'error', error: new Error('in-band failure') }
+        })(),
+      status: 502,
+      outcome: 'upstream_error',
+      terminalPart: 'error',
+      warnCount: 0,
+      errorCount: 1,
+      ndjsonCount: 1,
+    },
+    {
+      terminal: 'openai-error',
+      stream: () =>
+        (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'openai-error', body: {}, status: 429 }
+        })(),
+      status: 429,
+      outcome: 'rate_limited',
+      terminalPart: 'error',
+      warnCount: 1,
+      errorCount: 0,
+      ndjsonCount: 0,
+    },
+    {
+      terminal: 'abort',
+      stream: () =>
+        (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'abort', reason: 'upstream closed' }
+        })(),
+      status: 502,
+      outcome: 'upstream_aborted',
+      terminalPart: 'abort',
+      warnCount: 1,
+      errorCount: 0,
+      ndjsonCount: 0,
+    },
+    {
+      terminal: 'EOF',
+      stream: () =>
+        (async function* (): AsyncIterable<ProxyStreamPart> {
+          yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+        })(),
+      status: 502,
+      outcome: 'incomplete_stream',
+      terminalPart: 'eof',
+      warnCount: 1,
+      errorCount: 0,
+      ndjsonCount: 1,
+    },
+  ])(
+    'does not render a successful streamOnly response after $terminal',
+    async ({ stream, status, outcome, terminalPart, warnCount, errorCount, ndjsonCount }) => {
+      const gateway = makeGateway({ stream })
+      const { logger, info, warn, error } = makeTestLogger()
+      const { app, tmpLogDir } = makeApp(gateway, {
+        logger,
+        providers: streamOnlyProviders(),
+      })
+
+      const response = await app.request('/v1/chat/completions', chatRequest())
+
+      expect(response.status).toBe(status)
+      const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+      expect(completed).toHaveLength(1)
+      expect(completed[0]?.[0]).toMatchObject({ outcome, terminalPart })
+      expect(warn).toHaveBeenCalledTimes(warnCount)
+      expect(error).toHaveBeenCalledTimes(errorCount)
+      expect(readErrors(tmpLogDir)).toHaveLength(ndjsonCount)
+    },
+  )
 })

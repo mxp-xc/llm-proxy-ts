@@ -39,8 +39,9 @@ export class OAuthError extends Error {
   constructor(
     public readonly code: 'auth_required' | 'refresh_failed' | 'exchange_failed',
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.name = 'OAuthError'
   }
 }

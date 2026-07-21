@@ -37,6 +37,21 @@ export interface PluginResponse {
   headers?: Record<string, string>
 }
 
+export type PluginHook = 'createFetch' | 'discoverModels' | 'inspectStreamChunk'
+
+/** 插件 hook 失败的统一错误，供请求层按来源做一次结构化记录。 */
+export class PluginHookError extends Error {
+  constructor(
+    public readonly plugin: string,
+    public readonly provider: string,
+    public readonly hook: PluginHook,
+    cause: unknown,
+  ) {
+    super(`Plugin '${plugin}' hook '${hook}' failed for provider '${provider}'`, { cause })
+    this.name = 'PluginHookError'
+  }
+}
+
 // ─── Contexts ────────────────────────────────────────────────────
 
 /** 插件初始化上下文（per-plugin，生命周期 hook 使用） */

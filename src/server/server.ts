@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { dirname, resolve, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
 import { createApp } from './app.js'
@@ -11,57 +11,87 @@ import {
   PluginRegistry,
   createProviderRegistry,
 } from '../index.js'
+import type { Settings } from '../index.js'
 import { createTokenManagerIfNeeded } from '../oauth/index.js'
-import { logger } from './logging.js'
+import { createLoggingRuntime, type LoggingRuntime } from './logging.js'
+import { createShutdownController, type ShutdownController } from './lifecycle.js'
 import { generateNonce, refreshAuthStatuses } from './oauth/startup.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
 
-async function main(): Promise<void> {
-  const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+interface StartedServer {
+  shutdownController: ShutdownController
+}
 
-  loadEnvironmentFiles({ rootDir })
+function countConfiguredPlugins(settings: Settings): number {
+  return Object.values(settings.providers).reduce(
+    (total, provider) =>
+      total +
+      provider.plugins.length +
+      Object.values(provider.models).reduce(
+        (modelTotal, model) => modelTotal + model.plugins.length,
+        0,
+      ),
+    settings.plugins.length,
+  )
+}
 
+async function startServer(rootDir: string, logging: LoggingRuntime): Promise<StartedServer> {
+  const { logger, logDir } = logging
   const settingsPath = resolveSettingsPath({ rootDir })
-  const settings = existsSync(settingsPath)
+  const hasSettingsFile = existsSync(settingsPath)
+  const settings = hasSettingsFile
     ? await loadSettingsFromFile(settingsPath)
-    : (logger.warn({ settingsPath }, 'Settings file not found — starting with empty defaults...'),
-      settingsSchema.parse({}))
+    : (logger.warn({ settingsPath }, 'server.settings_missing'), settingsSchema.parse({}))
 
-  // Auth 文件路径：与 settings.jsonc 同目录
+  const providers = Object.values(settings.providers)
+  logger.info(
+    {
+      settingsPath,
+      settingsSource: hasSettingsFile ? 'file' : 'defaults',
+      host: settings.service.host,
+      port: settings.service.port,
+      providerCount: providers.length,
+      modelCount: providers.reduce(
+        (total, provider) => total + Object.keys(provider.models).length,
+        0,
+      ),
+      pluginCount: countConfiguredPlugins(settings),
+      oauthProviderCount: providers.filter((provider) => provider.oauth !== undefined).length,
+      proxyEnabled: settings.proxy !== null,
+      requestTimeoutMs: settings.requestTimeoutMs,
+      errorLoggingEnabled: settings.errorLogging.enabled,
+      logDir,
+      logLevel: process.env.LLM_PROXY_LOG_LEVEL ?? 'info',
+      logFormat: process.env.LLM_PROXY_LOG_FORMAT ?? 'pretty',
+    },
+    'server.configuration_loaded',
+  )
+
   const authFilePath = join(dirname(settingsPath), 'auth.json')
   const settingsDir = dirname(settingsPath)
-
-  // 加载插件
   const pluginRegistry = await PluginRegistry.fromSettings(settings, settingsDir, logger)
-
-  // 初始化插件
   await pluginRegistry.initAll(logger, authFilePath)
 
-  // OAuth 初始化
-  const hasOAuthProviders = Object.values(settings.providers).some((p) => p.oauth)
-  const tokenManager = await createTokenManagerIfNeeded(authFilePath, hasOAuthProviders)
-  let nonce: string | undefined
-  if (tokenManager) {
-    nonce = generateNonce()
-  }
+  const hasOAuthProviders = providers.some((provider) => provider.oauth !== undefined)
+  const tokenManager = await createTokenManagerIfNeeded(authFilePath, hasOAuthProviders, logger)
+  const nonce = tokenManager ? generateNonce() : undefined
 
-  // 插件 beforeServerStart（可阻塞启动，如 OAuth 登录）
   await pluginRegistry.beforeServerStartAll(logger)
 
-  // OAuth 状态容器：后台刷新回填，/health 通过 getter 懒读取。
-  // 正确性不依赖此预刷新：请求路径的 createOAuthFetch 会独立 ensureValidToken。
   let authStatuses: ProviderAuthStatus[] = []
-
+  const providerRegistry = await createProviderRegistry(
+    settings,
+    tokenManager,
+    logger,
+    pluginRegistry,
+    authFilePath,
+  )
   const app = createApp({
     settings,
+    logger,
+    errorLogDir: logDir,
     pluginRegistry,
-    providerRegistry: await createProviderRegistry(
-      settings,
-      tokenManager,
-      logger,
-      pluginRegistry,
-      authFilePath,
-    ),
+    providerRegistry,
     getAuthStatuses: () => authStatuses,
     ...(tokenManager && nonce ? { tokenManager, nonce } : {}),
   })
@@ -74,68 +104,77 @@ async function main(): Promise<void> {
     },
     (info) => {
       logger.info(
-        { url: `http://${info.address}:${info.port}` },
-        `${settings.service.name} listening`,
+        { service: settings.service.name, url: `http://${info.address}:${info.port}` },
+        'server.listening',
       )
     },
   )
-
-  server.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
-      fatalAndExit(err, `Port ${settings.service.port} is already in use`)
-    } else {
-      fatalAndExit(err, 'Server failed to start')
-    }
+  const shutdownController = createShutdownController({
+    server,
+    logger,
+    closeLogging: logging.close,
+    timeoutMs: settings.requestTimeoutMs + 5000,
   })
 
-  // OAuth 状态后台刷新（非阻塞，不延迟端口监听）
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    void shutdownController.shutdown('serverError', err)
+  })
+
   if (tokenManager) {
-    refreshAuthStatuses(settings, tokenManager)
-      .then((s) => {
-        authStatuses = s
+    refreshAuthStatuses(settings, tokenManager, logger)
+      .then((statuses) => {
+        authStatuses = statuses
       })
       .catch((err) => {
-        logger.error({ err }, 'oauth status refresh failed')
+        logger.error({ err }, 'oauth.status_refresh_failed')
       })
   }
 
-  // 插件 afterServerStart（非阻塞后台任务）。afterServerStartAll 内部用
-  // Promise.allSettled 逐个记录插件失败，不会因此 reject；这里的 .catch 只兜底
-  // filter/map 脚手架本身的意外同步抛错（如畸形插件对象），避免落到 unhandledRejection
-  // 只走 console.error 而绕过 pino。
   pluginRegistry
     .afterServerStartAll(logger)
-    .catch((err) => logger.error({ err }, 'plugin afterServerStart crashed'))
+    .catch((err) => logger.error({ err }, 'plugin.after_server_start_crashed'))
+
+  return { shutdownController }
 }
 
-/**
- * 同步写入 stderr 并退出。
- *
- * pino 通过异步 stream 写入日志；process.exit() 会立即终止进程，
- * 导致 logger.fatal / logger.flush() 的输出可能丢失。
- * 对启动阶段的致命错误，用 console.error（同步写 stderr）保底输出。
- */
-function fatalAndExit(err: unknown, message: string): never {
-  console.error(`FATAL: ${message}`, err)
-  process.exit(1)
+function installProcessHandlers(shutdownController: ShutdownController): void {
+  const shutdown = (trigger: string, err?: unknown): void => {
+    void shutdownController.shutdown(trigger, err).catch((shutdownError) => {
+      process.exitCode = 1
+      console.error('FATAL: server shutdown crashed', shutdownError)
+    })
+  }
+
+  process.on('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  process.on('uncaughtException', (err) => shutdown('uncaughtException', err))
+  process.on('unhandledRejection', (reason) => shutdown('unhandledRejection', reason))
 }
 
 async function start(): Promise<void> {
-  // Global uncaught error handlers — ensure anything that escapes per-request
-  // error handling still reaches pino instead of silently disappearing to stderr.
-  // Installed inside start() so importing this module has no side effects.
-  process.on('uncaughtException', (error) => {
-    fatalAndExit(error, 'uncaught exception')
-  })
-
-  process.on('unhandledRejection', (reason) => {
-    console.error('unhandled rejection', reason)
-  })
+  const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+  let logging: LoggingRuntime
 
   try {
-    await main()
+    loadEnvironmentFiles({ rootDir })
+    logging = createLoggingRuntime()
   } catch (err) {
-    fatalAndExit(err, 'startup failed')
+    process.exitCode = 1
+    console.error('FATAL: logging startup failed', err)
+    return
+  }
+
+  try {
+    const { shutdownController } = await startServer(rootDir, logging)
+    installProcessHandlers(shutdownController)
+  } catch (err) {
+    process.exitCode = 1
+    logging.logger.fatal({ err }, 'server.startup_failed')
+    try {
+      await logging.close()
+    } catch (closeError) {
+      console.error('FATAL: logging shutdown failed', closeError)
+    }
   }
 }
 

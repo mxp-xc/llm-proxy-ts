@@ -9,7 +9,10 @@ import {
   normalizeErrorForLog,
   type ErrorLogEntry,
 } from '../../src/server/error-logger.js'
-import { cleanOldLogs, logger as fallbackLogger } from '../../src/server/logging.js'
+import { cleanOldLogs } from '../../src/server/logging.js'
+import { noopLogger } from '../../src/types.js'
+
+const fallbackLogger = { ...noopLogger, error: vi.fn() }
 
 let tmpLogDir: string
 beforeAll(() => {
@@ -58,7 +61,12 @@ describe('ErrorLogger', () => {
   }
 
   it('writes a valid NDJSON line with CN timestamp', () => {
-    const logger = new ErrorLogger({ logDir: tmpLogDir, enabled: true, maxBodyLength: 262144 })
+    const logger = new ErrorLogger({
+      logDir: tmpLogDir,
+      enabled: true,
+      maxBodyLength: 262144,
+      logger: fallbackLogger,
+    })
     logger.log({ ...baseEntry })
     const records = readErrorLog(tmpLogDir)
     expect(records).toHaveLength(1)
@@ -68,7 +76,12 @@ describe('ErrorLogger', () => {
   })
 
   it('redacts authorization field in request', () => {
-    const logger = new ErrorLogger({ logDir: tmpLogDir, enabled: true, maxBodyLength: 262144 })
+    const logger = new ErrorLogger({
+      logDir: tmpLogDir,
+      enabled: true,
+      maxBodyLength: 262144,
+      logger: fallbackLogger,
+    })
     logger.log({
       ...baseEntry,
       requestId: 'req-redact',
@@ -80,7 +93,12 @@ describe('ErrorLogger', () => {
   })
 
   it('truncates oversized request body', () => {
-    const logger = new ErrorLogger({ logDir: tmpLogDir, enabled: true, maxBodyLength: 100 })
+    const logger = new ErrorLogger({
+      logDir: tmpLogDir,
+      enabled: true,
+      maxBodyLength: 100,
+      logger: fallbackLogger,
+    })
     const bigText = 'x'.repeat(500)
     logger.log({
       ...baseEntry,
@@ -97,7 +115,12 @@ describe('ErrorLogger', () => {
   })
 
   it('does nothing when enabled is false', () => {
-    const logger = new ErrorLogger({ logDir: tmpLogDir, enabled: false, maxBodyLength: 262144 })
+    const logger = new ErrorLogger({
+      logDir: tmpLogDir,
+      enabled: false,
+      maxBodyLength: 262144,
+      logger: fallbackLogger,
+    })
     logger.log({ ...baseEntry, requestId: 'req-skip' })
     const records = readErrorLog(tmpLogDir)
     expect(records.find((r) => r.requestId === 'req-skip')).toBeUndefined()
@@ -111,6 +134,7 @@ describe('ErrorLogger', () => {
       logDir: blockingFile,
       enabled: true,
       maxBodyLength: 262144,
+      logger: fallbackLogger,
     })
     expect(() => logger.log({ ...baseEntry, requestId: 'req-fallback' })).not.toThrow()
     expect(errorSpy).toHaveBeenCalledWith(
@@ -129,6 +153,111 @@ describe('ErrorLogger', () => {
 })
 
 describe('normalizeErrorForLog', () => {
+  it.each([
+    {
+      name: 'AI_APICallError',
+      createError: (sensitiveMessage: string, responseBody: string) =>
+        Object.assign(new Error(sensitiveMessage), {
+          name: 'AI_APICallError',
+          statusCode: 502,
+          responseBody,
+          isRetryable: true,
+        }),
+    },
+    {
+      name: 'AI_RetryError',
+      createError: (sensitiveMessage: string, responseBody: string) => {
+        const lastError = Object.assign(new Error(sensitiveMessage), {
+          name: 'AI_APICallError',
+          statusCode: 502,
+          responseBody,
+          isRetryable: true,
+        })
+        return Object.assign(
+          new Error(`Failed after 3 attempts. Last error: ${sensitiveMessage}`),
+          {
+            name: 'AI_RetryError',
+            lastError,
+            reason: 'maxRetriesExceeded',
+            errors: [lastError, lastError, lastError],
+          },
+        )
+      },
+    },
+  ])('removes response-body-derived text from $name message and stack', ({ createError }) => {
+    const sensitiveMessage = 'account private-response-detail is unavailable'
+    const responseBody = JSON.stringify({
+      error: { type: 'upstream_error', message: sensitiveMessage },
+    })
+
+    const normalized = normalizeErrorForLog(createError(sensitiveMessage, responseBody))
+    const serialized = JSON.stringify(normalized)
+
+    expect(normalized.message).toBe('Upstream provider request failed')
+    expect(normalized).not.toHaveProperty('stack')
+    expect(normalized).toMatchObject({
+      statusCode: 502,
+      responseBodyBytes: Buffer.byteLength(responseBody, 'utf8'),
+      upstreamErrorType: 'upstream_error',
+      isRetryable: true,
+    })
+    expect(serialized).not.toContain(sensitiveMessage)
+    expect(serialized).not.toContain(responseBody)
+  })
+
+  it.each([
+    {
+      name: 'AI_APICallError',
+      createError: (message: string, responseBody: string) =>
+        Object.assign(new Error(message), {
+          name: 'AI_APICallError',
+          statusCode: 502,
+          responseBody,
+        }),
+    },
+    {
+      name: 'AI_RetryError',
+      createError: (message: string, responseBody: string) => {
+        const lastError = Object.assign(new Error(message), {
+          name: 'AI_APICallError',
+          statusCode: 502,
+          responseBody,
+        })
+        return Object.assign(new Error(`Failed after 3 attempts. Last error: ${message}`), {
+          name: 'AI_RetryError',
+          lastError,
+          errors: [lastError, lastError, lastError],
+        })
+      },
+    },
+  ])('preserves $name text when it is not derived from the response body', ({ createError }) => {
+    const responseBody = JSON.stringify({
+      error: { type: 'upstream_error', message: 'private response detail' },
+    })
+    const error = createError('Invalid JSON response', responseBody)
+
+    const normalized = normalizeErrorForLog(error)
+
+    expect(normalized.message).toBe(error.message)
+    expect(normalized.stack).toBe(error.stack)
+  })
+
+  it('preserves useful details for ordinary errors', () => {
+    const cause = new Error('root cause')
+    const error = new TypeError('ordinary failure', { cause })
+
+    expect(normalizeErrorForLog(error)).toEqual({
+      name: 'TypeError',
+      message: 'ordinary failure',
+      stack: error.stack,
+      cause: {
+        name: 'Error',
+        message: 'root cause',
+        stack: cause.stack,
+      },
+    })
+  })
+
   it('keeps useful upstream fields without serializing request bodies', () => {
     const lastError = Object.assign(new Error('Upstream request failed'), {
       statusCode: 502,
@@ -136,7 +265,11 @@ describe('normalizeErrorForLog', () => {
       isRetryable: true,
       requestBodyValues: { model: 'gpt-5.4', input: 'x'.repeat(1_000_000) },
     })
-    const error = Object.assign(new Error('Failed after 3 attempts'), { lastError })
+    const error = Object.assign(new Error('Failed after 3 attempts'), {
+      lastError,
+      reason: 'maxRetriesExceeded',
+      errors: [new Error('one'), new Error('two'), lastError],
+    })
 
     const normalized = normalizeErrorForLog(error)
 
@@ -144,9 +277,13 @@ describe('normalizeErrorForLog', () => {
       name: 'Error',
       message: 'Failed after 3 attempts',
       statusCode: 502,
-      responseBody: '{"error":{"type":"upstream_error"}}',
+      responseBodyBytes: 35,
+      upstreamErrorType: 'upstream_error',
       isRetryable: true,
+      retryReason: 'maxRetriesExceeded',
+      attempts: 3,
     })
+    expect(normalized).not.toHaveProperty('responseBody')
     expect(JSON.stringify(normalized)).not.toContain('requestBodyValues')
     expect(JSON.stringify(normalized)).not.toContain('gpt-5.4')
   })

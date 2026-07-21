@@ -151,4 +151,4 @@ export type ProxyStreamPart =
   | { type: 'abort'; reason?: string }
   | { type: 'error'; error: unknown }
   | { type: 'raw'; rawValue: unknown }
-  | { type: 'openai-error'; body: unknown }
+  | { type: 'openai-error'; body: unknown; status?: number }

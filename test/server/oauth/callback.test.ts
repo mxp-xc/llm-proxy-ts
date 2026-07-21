@@ -29,6 +29,18 @@ const oauthProvider = {
   oauth: authCodeConfig,
 }
 
+function createTestLogger() {
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    child: vi.fn(),
+  }
+  logger.child.mockReturnValue(logger)
+  return logger
+}
+
 describe('OAuth callback', () => {
   let tempDir: string
   let authFilePath: string
@@ -145,13 +157,18 @@ describe('OAuth callback', () => {
       const state = Buffer.from(JSON.stringify({ provider: 'oauth-provider', nonce })).toString(
         'base64url',
       )
-      const app = createOAuthCallbackApp(createDeps(tokenManager))
+      const logger = createTestLogger()
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
       const res = await app.request(`/callback?code=auth-code-123&state=${state}`)
 
       expect(res.status).toBe(200)
       const html = await res.text()
       expect(html).toContain('Authentication Successful')
       expect(html).toContain('oauth-provider')
+      expect(logger.info).toHaveBeenCalledWith(
+        { provider: 'oauth-provider' },
+        'oauth.callback.succeeded',
+      )
     })
 
     it('logs full error object when authorization code exchange fails', async () => {
@@ -159,14 +176,7 @@ describe('OAuth callback', () => {
       const tokenManager = {
         exchangeCode: vi.fn().mockRejectedValue(exchangeError),
       } as unknown as TokenManager
-      const logger = {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        fatal: vi.fn(),
-        child: vi.fn(),
-      }
-      logger.child.mockReturnValue(logger)
+      const logger = createTestLogger()
 
       const state = Buffer.from(JSON.stringify({ provider: 'oauth-provider', nonce })).toString(
         'base64url',
@@ -178,9 +188,10 @@ describe('OAuth callback', () => {
       const html = await res.text()
       expect(html).toContain('Authentication Failed')
       expect(html).toContain('exchange_failed')
+      expect(html).not.toContain('exchange exploded')
       expect(logger.error).toHaveBeenCalledWith(
         { err: exchangeError, provider: 'oauth-provider' },
-        'oauth code exchange failed',
+        'oauth.callback.failed',
       )
     })
 
@@ -191,20 +202,27 @@ describe('OAuth callback', () => {
       const state = Buffer.from(
         JSON.stringify({ provider: 'oauth-provider', nonce: 'wrong-nonce' }),
       ).toString('base64url')
-      const app = createOAuthCallbackApp(createDeps(tokenManager))
+      const logger = createTestLogger()
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
       const res = await app.request(`/callback?code=code&state=${state}`)
 
       expect(res.status).toBe(200)
       const html = await res.text()
       expect(html).toContain('Authentication Failed')
       expect(html).toContain('invalid_state')
+      expect(logger.warn).toHaveBeenCalledWith(
+        { reason: 'invalid_state' },
+        'oauth.callback.invalid',
+      )
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain(state)
     })
 
     it('handles OAuth error response', async () => {
       const tokenManager = TokenManager.fromFile(authFilePath)
       await tokenManager.load()
 
-      const app = createOAuthCallbackApp(createDeps(tokenManager))
+      const logger = createTestLogger()
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
       const res = await app.request(
         '/callback?error=access_denied&error_description=User+cancelled',
       )
@@ -213,18 +231,43 @@ describe('OAuth callback', () => {
       const html = await res.text()
       expect(html).toContain('Authentication Failed')
       expect(html).toContain('access_denied')
+      expect(logger.warn).toHaveBeenCalledWith(
+        { errorCode: 'access_denied' },
+        'oauth.callback.rejected',
+      )
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('User cancelled')
+    })
+
+    it('does not copy arbitrary provider error text into telemetry', async () => {
+      const tokenManager = TokenManager.fromFile(authFilePath)
+      await tokenManager.load()
+
+      const logger = createTestLogger()
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
+      await app.request('/callback?error=secret%20provider%20text')
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        { errorCode: 'provider_error' },
+        'oauth.callback.rejected',
+      )
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('secret provider text')
     })
 
     it('returns error for missing code or state', async () => {
       const tokenManager = TokenManager.fromFile(authFilePath)
       await tokenManager.load()
 
-      const app = createOAuthCallbackApp(createDeps(tokenManager))
+      const logger = createTestLogger()
+      const app = createOAuthCallbackApp({ ...createDeps(tokenManager), logger })
       const res = await app.request('/callback')
 
       expect(res.status).toBe(200)
       const html = await res.text()
       expect(html).toContain('Authentication Failed')
+      expect(logger.warn).toHaveBeenCalledWith(
+        { hasCode: false, hasState: false },
+        'oauth.callback.invalid',
+      )
     })
   })
 })

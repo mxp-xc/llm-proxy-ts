@@ -32,6 +32,19 @@ export { isFlatLookupEnabled } from './config-helpers.js'
 
 // Type exports
 export type { Logger } from './types.js'
+export { createLoggingRuntime } from './server/logging.js'
+export type {
+  LoggingFormat,
+  LoggingLevel,
+  LoggingOptions,
+  LoggingRuntime,
+  LoggingRuntimeOptions,
+} from './server/logging.js'
+export type {
+  RequestExecutionMode,
+  RequestOutcome,
+  RequestTelemetryContext,
+} from './server/types.js'
 
 // Provider exports
 export { flattenUsage } from './providers/shared/renderer-utils.js'
@@ -71,7 +84,9 @@ export type {
   DiscoveredModelList,
   ResolvedPlugin,
   PluginInitContext,
+  PluginHook,
 } from './plugins/types.js'
+export { PluginHookError } from './plugins/types.js'
 export { PluginRegistry, validatePluginConstraints } from './plugins/registry.js'
 export { loadPlugin } from './plugins/loader.js'
 export { inspectVendorSseError } from './plugins/builtins/vendor-sse-error.js'

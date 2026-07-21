@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Settings } from '../../src/index.js'
-import type { ResolvedPlugin, AuthPlugin } from '../../src/plugins/types.js'
+import { PluginHookError, type ResolvedPlugin, type AuthPlugin } from '../../src/plugins/types.js'
 import { PluginRegistry, type AuthFetchRegistry } from '../../src/plugins/registry.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
 import type { Logger } from '../../src/types.js'
@@ -412,6 +412,60 @@ describe('auth plugin provider context', () => {
       await rm(tempDir, { recursive: true, force: true })
     }
   })
+
+  it('wraps auth hook failures with plugin, provider, hook, and cause', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-hook-error-'))
+    try {
+      const pluginPath = join(tempDir, 'failing-auth.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'failing-auth',
+          async createFetch() {
+            throw new Error('create fetch boom')
+          },
+          async discoverModels() {
+            throw new Error('discover models boom')
+          }
+        }`,
+        'utf8',
+      )
+      const settings = makeSettings(
+        {
+          p1: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            apiKey: 'test',
+            headers: {},
+            plugins: [],
+            models: {},
+          },
+        },
+        { plugins: [{ module: pluginPath, config: {}, providers: ['p1'] }] },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+
+      for (const [hook, call] of [
+        ['createFetch', () => registry.createAuthFetch('p1', noopLogger)],
+        ['discoverModels', () => registry.discoverModels('p1', noopLogger)],
+      ] as const) {
+        try {
+          await call()
+          expect.unreachable(`${hook} should have thrown`)
+        } catch (error) {
+          expect(error).toBeInstanceOf(PluginHookError)
+          expect(error).toMatchObject({
+            plugin: 'failing-auth',
+            provider: 'p1',
+            hook,
+            cause: expect.any(Error),
+          })
+        }
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('plugin lifecycle', () => {
@@ -474,6 +528,7 @@ describe('plugin lifecycle', () => {
       expect(errorLogs).toHaveLength(1)
       expect(errorLogs[0]?.msg).toBe('plugin init failed')
       expect(errorLogs[0]?.payload).toMatchObject({ err: expect.any(Error) })
+      expect(errorLogs[0]?.payload).toMatchObject({ plugin: 'failing-init' })
       expect((errorLogs[0]?.payload as { err: Error }).err.message).toBe('init boom')
     } finally {
       await rm(tempDir, { recursive: true, force: true })

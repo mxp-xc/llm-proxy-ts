@@ -1,4 +1,5 @@
 import type { OAuthConfig } from '../config.js'
+import { noopLogger, type Logger } from '../types.js'
 import type { AuthStatus, OAuthToken, OAuthTokenResponse, TokenStore } from './types.js'
 import { OAuthError } from './types.js'
 import { loadAuthFile, extractTokenStore, saveTokenStore } from './token-store.js'
@@ -83,17 +84,18 @@ export async function refreshAccessToken(
     })
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      throw new OAuthError(
-        'refresh_failed',
-        `Token refresh failed: HTTP ${response.status} ${text}`,
-      )
+      throw new OAuthError('refresh_failed', `Token refresh failed: HTTP ${response.status}`)
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'refresh_failed')
+    return parseTokenResponse(
+      await parseTokenEndpointJson(response, 'refresh_failed', 'Token refresh failed'),
+      'refresh_failed',
+    )
   } catch (error) {
     if (error instanceof OAuthError) throw error
-    throw new OAuthError('refresh_failed', `Token refresh failed: ${String(error)}`)
+    throw new OAuthError('refresh_failed', `Token refresh failed: ${String(error)}`, {
+      cause: error,
+    })
   }
 }
 
@@ -122,19 +124,26 @@ export async function fetchClientCredentialsToken(
     })
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '')
       throw new OAuthError(
         'refresh_failed',
-        `Client credentials token fetch failed: HTTP ${response.status} ${text}`,
+        `Client credentials token fetch failed: HTTP ${response.status}`,
       )
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'refresh_failed')
+    return parseTokenResponse(
+      await parseTokenEndpointJson(
+        response,
+        'refresh_failed',
+        'Client credentials token fetch failed',
+      ),
+      'refresh_failed',
+    )
   } catch (error) {
     if (error instanceof OAuthError) throw error
     throw new OAuthError(
       'refresh_failed',
       `Client credentials token fetch failed: ${String(error)}`,
+      { cause: error },
     )
   }
 }
@@ -164,17 +173,29 @@ export async function exchangeAuthorizationCode(
     })
 
     if (!response.ok) {
-      const text = await response.text().catch(() => '')
       throw new OAuthError(
         'exchange_failed',
-        `Authorization code exchange failed: HTTP ${response.status} ${text}`,
+        `Authorization code exchange failed: HTTP ${response.status}`,
       )
     }
 
-    return parseTokenResponse((await response.json()) as OAuthTokenResponse, 'exchange_failed')
+    return parseTokenResponse(
+      await parseTokenEndpointJson(
+        response,
+        'exchange_failed',
+        'Authorization code exchange failed',
+      ),
+      'exchange_failed',
+    )
   } catch (error) {
     if (error instanceof OAuthError) throw error
-    throw new OAuthError('exchange_failed', `Authorization code exchange failed: ${String(error)}`)
+    throw new OAuthError(
+      'exchange_failed',
+      `Authorization code exchange failed: ${String(error)}`,
+      {
+        cause: error,
+      },
+    )
   }
 }
 
@@ -182,6 +203,19 @@ export async function exchangeAuthorizationCode(
  * 解析 OAuth token 端点的 JSON 响应。
  */
 type TokenEndpointFailureCode = 'refresh_failed' | 'exchange_failed'
+
+async function parseTokenEndpointJson(
+  response: Response,
+  failureCode: TokenEndpointFailureCode,
+  operation: string,
+): Promise<OAuthTokenResponse> {
+  try {
+    return (await response.json()) as OAuthTokenResponse
+  } catch {
+    // Native JSON parse errors can include a snippet of the token endpoint body.
+    throw new OAuthError(failureCode, `${operation}: token endpoint returned invalid JSON`)
+  }
+}
 
 function parseTokenResponse(
   data: OAuthTokenResponse,
@@ -218,11 +252,12 @@ function parseTokenResponse(
  */
 export class TokenManager {
   private store: TokenStore = {}
-  private refreshLocks = new Map<string, Promise<OAuthToken>>()
+  private refreshLocks = new Map<string, RefreshOperation>()
 
   constructor(
     private persistence: TokenPersistence,
     private fetchFn: typeof globalThis.fetch = globalThis.fetch,
+    private logger: Logger = noopLogger,
   ) {}
 
   /**
@@ -231,7 +266,11 @@ export class TokenManager {
    * 内部创建基于文件系统的 TokenPersistence 实现，
    * 保持与原构造函数相同的外部行为。
    */
-  static fromFile(authFilePath: string, fetchFn?: typeof globalThis.fetch): TokenManager {
+  static fromFile(
+    authFilePath: string,
+    fetchFn?: typeof globalThis.fetch,
+    logger?: Logger,
+  ): TokenManager {
     const persistence: TokenPersistence = {
       async load(): Promise<TokenStore> {
         const data = await loadAuthFile(authFilePath)
@@ -241,7 +280,7 @@ export class TokenManager {
         await saveTokenStore(authFilePath, store)
       },
     }
-    return new TokenManager(persistence, fetchFn)
+    return new TokenManager(persistence, fetchFn, logger)
   }
 
   /**
@@ -277,14 +316,24 @@ export class TokenManager {
     // 需要刷新 — 并发去重
     const existing = this.refreshLocks.get(providerName)
     if (existing) {
-      return existing
+      existing.joinedRequests++
+      return existing.promise
     }
 
-    const promise = this.doRefresh(providerName, config, token)
-    this.refreshLocks.set(providerName, promise)
+    const flow = resolveRefreshFlow(config, token)
+    if (!flow) {
+      throw new OAuthError(
+        'auth_required',
+        `No valid OAuth token for provider '${providerName}'. Visit /oauth/login/${providerName} to authenticate.`,
+      )
+    }
+
+    const operation = { joinedRequests: 0 } as RefreshOperation
+    operation.promise = this.doRefresh(providerName, config, token, flow, operation)
+    this.refreshLocks.set(providerName, operation)
 
     try {
-      return await promise
+      return await operation.promise
     } finally {
       this.refreshLocks.delete(providerName)
     }
@@ -309,22 +358,62 @@ export class TokenManager {
     providerName: string,
     config: OAuthConfig,
     currentToken: OAuthToken | undefined,
+    flow: OAuthRefreshFlow,
+    operation: RefreshOperation,
   ): Promise<OAuthToken> {
-    let token: OAuthToken
+    const startedAt = Date.now()
+    let stage: OAuthRefreshStage = 'token_endpoint'
+    this.logger.info({ provider: providerName, flow }, 'oauth.refresh.started')
 
-    if (config.flow === 'client_credentials') {
-      token = await fetchClientCredentialsToken(config, this.fetchFn)
-    } else if (currentToken?.refreshToken) {
-      token = await refreshAccessToken(config, currentToken.refreshToken, this.fetchFn)
-    } else {
-      throw new OAuthError(
-        'auth_required',
-        `No valid OAuth token for provider '${providerName}'. Visit /oauth/login/${providerName} to authenticate.`,
+    try {
+      const token =
+        flow === 'client_credentials'
+          ? await fetchClientCredentialsToken(config, this.fetchFn)
+          : await refreshAccessToken(config, currentToken!.refreshToken!, this.fetchFn)
+
+      stage = 'persist'
+      const nextStore = { ...this.store, [providerName]: token }
+      await this.persistence.save(nextStore)
+      this.store = nextStore
+      this.logger.info(
+        {
+          provider: providerName,
+          flow,
+          joinedRequests: operation.joinedRequests,
+          durationMs: Date.now() - startedAt,
+        },
+        'oauth.refresh.succeeded',
       )
+      return token
+    } catch (err) {
+      this.logger.error(
+        {
+          err,
+          provider: providerName,
+          flow,
+          joinedRequests: operation.joinedRequests,
+          durationMs: Date.now() - startedAt,
+          stage,
+        },
+        'oauth.refresh.failed',
+      )
+      throw err
     }
-
-    this.store = { ...this.store, [providerName]: token }
-    await this.persistence.save(this.store)
-    return token
   }
+}
+
+type OAuthRefreshFlow = 'refresh_token' | 'client_credentials'
+type OAuthRefreshStage = 'token_endpoint' | 'persist'
+
+interface RefreshOperation {
+  promise: Promise<OAuthToken>
+  joinedRequests: number
+}
+
+function resolveRefreshFlow(
+  config: OAuthConfig,
+  currentToken: OAuthToken | undefined,
+): OAuthRefreshFlow | undefined {
+  if (config.flow === 'client_credentials') return 'client_credentials'
+  return currentToken?.refreshToken ? 'refresh_token' : undefined
 }

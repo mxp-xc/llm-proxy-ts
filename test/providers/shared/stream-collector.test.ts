@@ -12,6 +12,7 @@ describe('collectStreamResult', () => {
     const stream = chunks(
       { type: 'text-delta', text: 'Hello' },
       { type: 'text-delta', text: ' world' },
+      { type: 'finish', finishReason: 'stop', totalUsage: {} },
     )
     const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
     expect(result.text).toBe('Hello world')
@@ -75,12 +76,34 @@ describe('collectStreamResult', () => {
     expect(result.finishReason).toBe('stop')
   })
 
-  it('handles empty stream gracefully', async () => {
+  it('rejects a stream that ends without a finish chunk', async () => {
     const stream = chunks()
-    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
-    expect(result.text).toBe('')
-    expect(result.finishReason).toBeUndefined()
-    expect(result.usage).toBeUndefined()
+    await expect(
+      collectStreamResult(stream as AsyncIterable<ProxyStreamPart>),
+    ).rejects.toMatchObject({ name: 'IncompleteStreamError' })
+  })
+
+  it('rejects in-band error chunks with the original error', async () => {
+    const error = new Error('stream failed')
+    const stream = chunks({ type: 'error', error })
+
+    await expect(collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)).rejects.toBe(error)
+  })
+
+  it('rejects openai-error chunks with their upstream status', async () => {
+    const stream = chunks({ type: 'openai-error', body: {}, status: 429 })
+
+    await expect(
+      collectStreamResult(stream as AsyncIterable<ProxyStreamPart>),
+    ).rejects.toMatchObject({ message: 'Upstream stream error', statusCode: 429 })
+  })
+
+  it('rejects abort chunks as AbortError', async () => {
+    const stream = chunks({ type: 'abort', reason: 'upstream closed' })
+
+    await expect(
+      collectStreamResult(stream as AsyncIterable<ProxyStreamPart>),
+    ).rejects.toMatchObject({ name: 'AbortError', message: 'upstream closed' })
   })
 
   it('preserves cacheReadTokens and reasoningTokens from finish chunk', async () => {

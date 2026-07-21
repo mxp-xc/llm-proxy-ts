@@ -69,6 +69,17 @@ export async function collectStreamResult(
         toolCalls.push(call)
         break
       }
+      case 'error':
+        throw part.error
+      case 'openai-error':
+        throw Object.assign(new Error('Upstream stream error'), {
+          ...(part.status !== undefined && { statusCode: part.status }),
+        })
+      case 'abort':
+        throw Object.assign(new Error(part.reason ?? 'Upstream stream aborted'), {
+          name: 'AbortError',
+          code: 'ABORT_ERR',
+        })
       case 'finish': {
         finishReason = part.finishReason
         const extracted = extractUsageFromFinishPart(part)
@@ -100,11 +111,7 @@ export async function collectStreamResult(
     }
   }
 
-  const result: CollectedResult = { text }
-  if (finishReason !== undefined) result.finishReason = finishReason
-  if (usage !== undefined) result.usage = usage
-  if (response !== undefined) result.response = response
-  if (toolCalls.length > 0) result.toolCalls = toolCalls
-
-  return result
+  throw Object.assign(new Error('Upstream stream ended without a finish chunk'), {
+    name: 'IncompleteStreamError',
+  })
 }

@@ -1,12 +1,28 @@
 import type { Settings, ProviderConfig } from '../config.js'
-import type { ResolvedPlugin, ProxyPlugin, PluginResponse, Plugin } from '../plugins/types.js'
+import {
+  PluginHookError,
+  type ResolvedPlugin,
+  type ProxyPlugin,
+  type PluginResponse,
+  type Plugin,
+} from '../plugins/types.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
+import type { RequestTelemetryContext } from './types.js'
 
 /** inspectFirstStreamChunk 需要的插件上下文切片 */
 export interface StreamInspectContext {
   requestId: string
   settings: Settings
   provider: { id: string; provider: ProviderConfig }
+  firstChunkStartedAt?: number
+  telemetry?: RequestTelemetryContext
+  abortSignal?: AbortSignal
+  onCleanupError?: (error: unknown) => void
+}
+
+interface IteratorCleanup {
+  close(): Promise<void>
+  detach(): void
 }
 
 function isProxyPluginWithInspect(plugin: Plugin): plugin is ProxyPlugin {
@@ -32,6 +48,40 @@ function buildPluginContext(rp: ResolvedPlugin, ctx: StreamInspectContext, chunk
   }
 }
 
+function wrapPluginHookError(plugin: string, provider: string, cause: unknown): PluginHookError {
+  return cause instanceof PluginHookError
+    ? cause
+    : new PluginHookError(plugin, provider, 'inspectStreamChunk', cause)
+}
+
+function createIteratorCleanup(
+  iterator: AsyncIterator<ProxyStreamPart>,
+  ctx: StreamInspectContext,
+): IteratorCleanup {
+  let closePromise: Promise<void> | undefined
+  const close = (): Promise<void> => {
+    closePromise ??= Promise.resolve(iterator.return?.()).then(
+      () => undefined,
+      (error) => {
+        ctx.onCleanupError?.(error)
+      },
+    )
+    return closePromise
+  }
+  const onAbort = (): void => {
+    void close()
+  }
+  ctx.abortSignal?.addEventListener('abort', onAbort, { once: true })
+  if (ctx.abortSignal?.aborted) onAbort()
+
+  return {
+    close,
+    detach() {
+      ctx.abortSignal?.removeEventListener('abort', onAbort)
+    },
+  }
+}
+
 export async function inspectFirstStreamChunk(
   plugins: ResolvedPlugin[],
   stream: AsyncIterable<ProxyStreamPart>,
@@ -40,30 +90,46 @@ export async function inspectFirstStreamChunk(
   const inspectors = plugins.filter((rp) => isProxyPluginWithInspect(rp.plugin))
 
   const iterator = stream[Symbol.asyncIterator]()
-  const first = await iterator.next()
-  if (first.done) {
-    return { stream: replayStream(undefined, iterator, plugins, ctx) }
-  }
+  const cleanup = createIteratorCleanup(iterator, ctx)
+  try {
+    const first = await iterator.next()
+    if (first.done) {
+      return { stream: replayStream(undefined, iterator, plugins, ctx, cleanup) }
+    }
+    const telemetry = ctx.telemetry
+    if (
+      ctx.firstChunkStartedAt !== undefined &&
+      telemetry !== undefined &&
+      telemetry.firstChunkMs === undefined
+    ) {
+      telemetry.firstChunkMs = Math.round(performance.now() - ctx.firstChunkStartedAt)
+    }
 
-  if (inspectors.length > 0) {
-    try {
+    if (inspectors.length > 0) {
       for (const rp of inspectors) {
         const plugin = rp.plugin as ProxyPlugin
-        const result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, first.value))
+        let result: PluginResponse | void
+        try {
+          result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, first.value))
+        } catch (cause) {
+          throw wrapPluginHookError(rp.plugin.name, ctx.provider.id, cause)
+        }
         if (isPluginResponse(result)) {
-          await iterator.return?.()
+          await cleanup.close()
+          cleanup.detach()
           return {
             error: result,
           }
         }
       }
-    } catch (err) {
-      await iterator.return?.()
-      throw err
     }
-  }
 
-  return { stream: replayStream(first.value, iterator, plugins, ctx) }
+    return { stream: replayStream(first.value, iterator, plugins, ctx, cleanup) }
+  } catch (error) {
+    await cleanup.close()
+    cleanup.detach()
+    throw error
+  }
 }
 
 async function* replayStream(
@@ -71,28 +137,27 @@ async function* replayStream(
   iterator: AsyncIterator<ProxyStreamPart>,
   plugins: ResolvedPlugin[] = [],
   ctx: StreamInspectContext,
+  cleanup: IteratorCleanup = createIteratorCleanup(iterator, ctx),
 ): AsyncIterable<ProxyStreamPart> {
-  if (first !== undefined) {
-    yield first
-  }
-  while (true) {
-    const next = await iterator.next()
-    if (next.done) {
-      return
+  try {
+    if (first !== undefined) {
+      yield first
     }
-    let error: PluginResponse | undefined
-    try {
-      error = await inspectStreamChunk(plugins, next.value, ctx)
-    } catch (err) {
-      await iterator.return?.()
-      throw err
+    while (true) {
+      const next = await iterator.next()
+      if (next.done) {
+        return
+      }
+      const error = await inspectStreamChunk(plugins, next.value, ctx)
+      if (error) {
+        yield { type: 'openai-error', body: error.body, status: error.status }
+        return
+      }
+      yield next.value
     }
-    if (error) {
-      yield { type: 'openai-error', body: error.body }
-      await iterator.return?.()
-      return
-    }
-    yield next.value
+  } finally {
+    cleanup.detach()
+    await cleanup.close()
   }
 }
 
@@ -104,7 +169,12 @@ async function inspectStreamChunk(
   for (const rp of plugins) {
     if (!isProxyPluginWithInspect(rp.plugin)) continue
     const plugin = rp.plugin as ProxyPlugin
-    const result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, chunk))
+    let result: PluginResponse | void
+    try {
+      result = await plugin.inspectStreamChunk!(buildPluginContext(rp, ctx, chunk))
+    } catch (cause) {
+      throw wrapPluginHookError(rp.plugin.name, ctx.provider.id, cause)
+    }
     if (isPluginResponse(result)) {
       return result
     }

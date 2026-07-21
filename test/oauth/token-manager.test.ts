@@ -14,6 +14,7 @@ import {
 import type { OAuthConfig } from '../../src/config.js'
 import type { OAuthToken } from '../../src/oauth/types.js'
 import { OAuthError } from '../../src/oauth/types.js'
+import type { Logger } from '../../src/types.js'
 import {
   makeToken,
   makeExpiredToken,
@@ -34,6 +35,25 @@ async function expectOAuthErrorCode(
     expect(error).toBeInstanceOf(OAuthError)
     expect((error as OAuthError).code).toBe(code)
   }
+}
+
+function createCapturingLogger() {
+  const info: Array<{ payload: unknown; msg: string | undefined }> = []
+  const error: Array<{ payload: unknown; msg: string | undefined }> = []
+  const logger: Logger = {
+    info(payload, msg) {
+      info.push({ payload, msg })
+    },
+    warn() {},
+    error(payload, msg) {
+      error.push({ payload, msg })
+    },
+    fatal() {},
+    child() {
+      return logger
+    },
+  }
+  return { logger, info, error }
 }
 
 describe('token-manager', () => {
@@ -114,15 +134,17 @@ describe('token-manager', () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: false,
         status: 400,
-        text: () => Promise.resolve('bad request'),
+        text: () => Promise.resolve('secret refresh response'),
       })
 
-      await expect(refreshAccessToken(authCodeConfig, 'rt', mockFetch)).rejects.toThrow(OAuthError)
       try {
         await refreshAccessToken(authCodeConfig, 'rt', mockFetch)
+        expect.unreachable('refresh should have failed')
       } catch (error) {
         expect(error).toBeInstanceOf(OAuthError)
         expect((error as OAuthError).code).toBe('refresh_failed')
+        expect((error as Error).message).toBe('Token refresh failed: HTTP 400')
+        expect((error as Error).message).not.toContain('secret refresh response')
       }
     })
 
@@ -160,6 +182,21 @@ describe('token-manager', () => {
       const [, init] = mockFetch.mock.calls[0]!
       expect(init.body).toContain('grant_type=client_credentials')
     })
+
+    it('does not include an HTTP error response body in the error', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve('secret client credentials response'),
+      })
+
+      await expect(fetchClientCredentialsToken(clientCredentialsConfig, mockFetch)).rejects.toThrow(
+        'Client credentials token fetch failed: HTTP 403',
+      )
+      await expect(
+        fetchClientCredentialsToken(clientCredentialsConfig, mockFetch),
+      ).rejects.not.toThrow('secret client credentials response')
+    })
   })
 
   describe('exchangeAuthorizationCode', () => {
@@ -188,17 +225,22 @@ describe('token-manager', () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: false,
         status: 401,
-        text: () => Promise.resolve('unauthorized'),
+        text: () => Promise.resolve('secret exchange response'),
       })
 
-      await expect(
-        exchangeAuthorizationCode(
+      try {
+        await exchangeAuthorizationCode(
           authCodeConfig,
           'bad-code',
           'http://localhost:8000/oauth/callback',
           mockFetch,
-        ),
-      ).rejects.toThrow(OAuthError)
+        )
+        expect.unreachable('exchange should have failed')
+      } catch (error) {
+        expect(error).toBeInstanceOf(OAuthError)
+        expect((error as Error).message).toBe('Authorization code exchange failed: HTTP 401')
+        expect((error as Error).message).not.toContain('secret exchange response')
+      }
     })
 
     it('uses exchange_failed for malformed token responses', async () => {
@@ -236,6 +278,48 @@ describe('token-manager', () => {
     })
   })
 
+  it.each([
+    [
+      'refresh token',
+      (fetchFn: typeof globalThis.fetch) => refreshAccessToken(authCodeConfig, 'rt', fetchFn),
+      'refresh_failed',
+    ],
+    [
+      'client credentials',
+      (fetchFn: typeof globalThis.fetch) =>
+        fetchClientCredentialsToken(clientCredentialsConfig, fetchFn),
+      'refresh_failed',
+    ],
+    [
+      'authorization code',
+      (fetchFn: typeof globalThis.fetch) =>
+        exchangeAuthorizationCode(
+          authCodeConfig,
+          'auth-code-123',
+          'http://localhost:8000/oauth/callback',
+          fetchFn,
+        ),
+      'exchange_failed',
+    ],
+  ] as const)('does not expose malformed %s response bodies', async (_name, request, code) => {
+    const secretBody = 'access_token=malformed-super-secret'
+    const fetchFn = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(new Response(secretBody, { status: 200 }))
+
+    try {
+      await request(fetchFn)
+      expect.unreachable('token request should have failed')
+    } catch (error) {
+      expect(error).toBeInstanceOf(OAuthError)
+      expect((error as OAuthError).code).toBe(code)
+      expect((error as Error).message).toContain('token endpoint returned invalid JSON')
+      expect((error as Error).message).not.toContain(secretBody)
+      expect((error as Error).stack).not.toContain(secretBody)
+      expect((error as Error).cause).toBeUndefined()
+    }
+  })
+
   describe('TokenManager', () => {
     it('load reads from persistence', async () => {
       const token = makeToken()
@@ -249,11 +333,14 @@ describe('token-manager', () => {
     it('ensureValidToken returns cached valid token', async () => {
       const token = makeToken()
       const persistence = createMemoryPersistence({ p: token })
-      const manager = new TokenManager(persistence)
+      const { logger, info, error } = createCapturingLogger()
+      const manager = new TokenManager(persistence, undefined, logger)
       await manager.load()
 
       const result = await manager.ensureValidToken('p', authCodeConfig)
       expect(result.accessToken).toBe(token.accessToken)
+      expect(info).toHaveLength(0)
+      expect(error).toHaveLength(0)
     })
 
     it('ensureValidToken refreshes expired token with refreshToken', async () => {
@@ -337,7 +424,8 @@ describe('token-manager', () => {
       })
 
       const persistence = createMemoryPersistence()
-      const manager = new TokenManager(persistence, mockFetch)
+      const { logger, info, error } = createCapturingLogger()
+      const manager = new TokenManager(persistence, mockFetch, logger)
       await manager.load()
 
       // Fire 5 concurrent calls for same provider
@@ -353,6 +441,96 @@ describe('token-manager', () => {
       expect(results.every((r) => r.accessToken === 'new-access-token')).toBe(true)
       // But only one HTTP call should have been made
       expect(callCount).toBe(1)
+      expect(info).toHaveLength(2)
+      expect(info[0]).toEqual({
+        payload: { provider: 'p', flow: 'client_credentials' },
+        msg: 'oauth.refresh.started',
+      })
+      expect(info[1]).toMatchObject({
+        payload: {
+          provider: 'p',
+          flow: 'client_credentials',
+          joinedRequests: 4,
+          durationMs: expect.any(Number),
+        },
+        msg: 'oauth.refresh.succeeded',
+      })
+      expect(error).toHaveLength(0)
+    })
+
+    it('logs persistence failures with the refresh operation context', async () => {
+      const persistError = new Error('disk unavailable')
+      const persistence = {
+        async load() {
+          return {}
+        },
+        async save() {
+          throw persistError
+        },
+      }
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
+      })
+      const { logger, info, error } = createCapturingLogger()
+      const manager = new TokenManager(persistence, mockFetch, logger)
+      await manager.load()
+
+      await expect(manager.ensureValidToken('p', clientCredentialsConfig)).rejects.toBe(
+        persistError,
+      )
+
+      expect(info).toEqual([
+        {
+          payload: { provider: 'p', flow: 'client_credentials' },
+          msg: 'oauth.refresh.started',
+        },
+      ])
+      expect(error).toHaveLength(1)
+      expect(error[0]).toMatchObject({
+        payload: {
+          err: persistError,
+          provider: 'p',
+          flow: 'client_credentials',
+          joinedRequests: 0,
+          durationMs: expect.any(Number),
+          stage: 'persist',
+        },
+        msg: 'oauth.refresh.failed',
+      })
+    })
+
+    it('logs token endpoint failures with refresh_token flow and full error', async () => {
+      const endpointError = new Error('network unavailable')
+      const persistence = createMemoryPersistence({ p: makeExpiredToken() })
+      const mockFetch = vi.fn().mockRejectedValue(endpointError)
+      const { logger, info, error } = createCapturingLogger()
+      const manager = new TokenManager(persistence, mockFetch, logger)
+      await manager.load()
+
+      await expect(manager.ensureValidToken('p', authCodeConfig)).rejects.toThrow(
+        'Token refresh failed: Error: network unavailable',
+      )
+
+      expect(info).toEqual([
+        {
+          payload: { provider: 'p', flow: 'refresh_token' },
+          msg: 'oauth.refresh.started',
+        },
+      ])
+      expect(error).toHaveLength(1)
+      expect(error[0]).toMatchObject({
+        payload: {
+          err: expect.any(OAuthError),
+          provider: 'p',
+          flow: 'refresh_token',
+          joinedRequests: 0,
+          durationMs: expect.any(Number),
+          stage: 'token_endpoint',
+        },
+        msg: 'oauth.refresh.failed',
+      })
+      expect((error[0]!.payload as { err: Error }).err.cause).toBe(endpointError)
     })
 
     it('persists refreshed token via persistence', async () => {
@@ -443,6 +621,23 @@ describe('token-manager', () => {
       const data = await loadAuthFile(authFilePath)
       const store = extractTokenStore(data)
       expect(store['p']!.accessToken).toBe('new-access-token')
+    })
+
+    it('accepts a logger as the final optional argument', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
+      })
+      const { logger, info } = createCapturingLogger()
+      const manager = TokenManager.fromFile(authFilePath, mockFetch, logger)
+      await manager.load()
+
+      await manager.ensureValidToken('p', clientCredentialsConfig)
+
+      expect(info.map((entry) => entry.msg)).toEqual([
+        'oauth.refresh.started',
+        'oauth.refresh.succeeded',
+      ])
     })
 
     it('preserves plugin store data when saving tokens concurrently', async () => {

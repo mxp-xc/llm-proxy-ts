@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import pino from 'pino'
 import { createApp } from '../../src/server/app.js'
 import type { Settings, TokenManager } from '../../src/index.js'
@@ -47,7 +47,13 @@ function errorCapturingPino(): { logger: pino.Logger; logs: Array<Record<string,
 async function* delayedTextStream(): AsyncIterable<unknown> {
   yield { type: 'text-delta', text: 'hello' }
   await new Promise((resolve) => setTimeout(resolve, 60))
-  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 0, outputTokens: 1 } }
+  yield {
+    type: 'finish',
+    finishReason: 'stop',
+    rawFinishReason: 'stop',
+    totalUsage: { inputTokens: 0, outputTokens: 1 },
+    response: { id: 'stream-request-1' },
+  }
 }
 
 // ── Shared helpers ──────────────────────────────────────────────
@@ -80,6 +86,16 @@ describe('health endpoint', () => {
       service: 'llm-proxy',
       providersConfigured: 0,
     })
+  })
+
+  it('suppresses successful health request telemetry', async () => {
+    const { logger, logs } = capturingPino()
+    const app = createApp({ settings: makeSettings(), providerRegistry: stubRegistry, logger })
+
+    const response = await app.request('/health')
+
+    expect(response.status).toBe(200)
+    expect(logs.filter((entry) => String(entry.msg).startsWith('request.'))).toEqual([])
   })
 })
 
@@ -122,9 +138,18 @@ describe('chat endpoint', () => {
   })
 
   it('returns safe JSON 504 when stream first chunk inspection times out before headers', async () => {
+    let streamReturned = false
+    async function* delayedStream(): AsyncIterable<unknown> {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        yield { type: 'text-delta', text: 'late' }
+      } finally {
+        streamReturned = true
+      }
+    }
     const gateway = makeGateway({
       stream() {
-        return delayedFirstChunk() as AsyncIterable<ProxyStreamPart>
+        return delayedStream() as AsyncIterable<ProxyStreamPart>
       },
     })
     const app = createApp({
@@ -152,6 +177,7 @@ describe('chat endpoint', () => {
         message: 'Upstream provider request timed out',
       },
     })
+    await vi.waitFor(() => expect(streamReturned).toBe(true))
   })
 
   it('returns non-streaming OpenAI-compatible responses', async () => {
@@ -320,6 +346,7 @@ describe('streamOnly provider', () => {
   }
 
   it('returns non-stream JSON when streamOnly and client sends stream: false', async () => {
+    const { logger, logs } = capturingPino()
     const gateway = makeGateway({
       async generate() {
         throw new Error('generate should not be called for streamOnly provider')
@@ -338,7 +365,12 @@ describe('streamOnly provider', () => {
       },
     })
 
-    const app = createApp({ settings: streamOnlySettings, gateway, providerRegistry: stubRegistry })
+    const app = createApp({
+      settings: streamOnlySettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
 
     const response = await app.request('/v1/chat/completions', {
       method: 'POST',
@@ -358,6 +390,19 @@ describe('streamOnly provider', () => {
     expect(body.choices[0].finish_reason).toBe('stop')
     expect(body.usage.prompt_tokens).toBe(10)
     expect(body.usage.completion_tokens).toBe(5)
+    expect(logs.find((entry) => entry.msg === 'request.completed')).toMatchObject({
+      outcome: 'success',
+      executionMode: 'stream-only',
+      finishReason: 'stop',
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+      upstreamRequestId: 'chatcmpl-streamonly',
+      upstreamDurationMs: expect.any(Number),
+    })
+    expect(logs.find((entry) => entry.msg === 'request.completed')).not.toHaveProperty(
+      'firstChunkMs',
+    )
   })
 
   it('still returns SSE when streamOnly and client sends stream: true', async () => {
@@ -473,12 +518,22 @@ describe('streamOnly provider', () => {
   })
 
   it('returns safe JSON 504 when streamOnly collectStreamResult times out after first chunk', async () => {
+    let streamReturned = false
+    async function* delayedStream(): AsyncIterable<unknown> {
+      try {
+        yield { type: 'text-delta', text: 'first' }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+        yield { type: 'finish', finishReason: 'stop' }
+      } finally {
+        streamReturned = true
+      }
+    }
     const gateway = makeGateway({
       async generate() {
         throw new Error('generate should not be called for streamOnly provider')
       },
       stream() {
-        return delayedSecondChunk() as AsyncIterable<ProxyStreamPart>
+        return delayedStream() as AsyncIterable<ProxyStreamPart>
       },
     })
     const app = createApp({
@@ -507,6 +562,7 @@ describe('streamOnly provider', () => {
         message: 'Upstream provider request timed out',
       },
     })
+    await vi.waitFor(() => expect(streamReturned).toBe(true))
   })
 
   it('returns safe JSON 502 when streamOnly first chunk throws upstream error', async () => {
@@ -839,8 +895,8 @@ describe('request logging', () => {
     expect(response.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
     expect(logs).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ msg: 'request received', path: '/oauth/login/oauth' }),
-        expect.objectContaining({ msg: 'request completed', path: '/oauth/login/oauth' }),
+        expect.objectContaining({ msg: 'request.received', path: '/oauth/login/oauth' }),
+        expect.objectContaining({ msg: 'request.completed', path: '/oauth/login/oauth' }),
       ]),
     )
   })
@@ -868,7 +924,7 @@ describe('request logging', () => {
       }),
     })
 
-    const received = logs.find((e) => e.msg === 'request received')
+    const received = logs.find((e) => e.msg === 'request.received')
     expect(received).toBeDefined()
     expect(logs.some((e) => e.msg === 'request started')).toBe(false)
   })
@@ -896,7 +952,7 @@ describe('request logging', () => {
       }),
     })
 
-    const resolved = logs.find((e) => e.msg === 'route resolved')
+    const resolved = logs.find((e) => e.msg === 'request.route_resolved')
     expect(resolved).toBeDefined()
     expect(resolved?.requestModel).toBe('openrouter/chat')
     expect(resolved?.upstreamModel).toBe('openrouter/chat')
@@ -926,9 +982,52 @@ describe('request logging', () => {
       }),
     })
     // 非 SSE 响应在 await next() 返回时就应已记 completed，无需消费 body
-    const completed = logs.find((e) => e.msg === 'request completed')
+    const completed = logs.find((e) => e.msg === 'request.completed')
     expect(completed).toBeDefined()
     expect(completed?.status).toBe(200)
+    expect(completed?.outcome).toBe('success')
+    expect(completed?.executionMode).toBe('generate')
+  })
+
+  it('logs generated outcome, usage, upstream id, and upstream duration', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: 'hi',
+          finishReason: 'stop',
+          response: { id: 'upstream-req-1' },
+          usage: {
+            inputTokens: 11,
+            outputTokens: 7,
+            totalTokens: 18,
+            inputTokenDetails: { cacheReadTokens: 3 },
+            outputTokenDetails: { reasoningTokens: 2 },
+          },
+        } as GenerateTextReturn
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', chatRequestBody())
+
+    expect(logs.find((entry) => entry.msg === 'request.completed')).toMatchObject({
+      outcome: 'success',
+      executionMode: 'generate',
+      finishReason: 'stop',
+      inputTokens: 11,
+      outputTokens: 7,
+      totalTokens: 18,
+      cacheReadTokens: 3,
+      reasoningTokens: 2,
+      upstreamRequestId: 'upstream-req-1',
+      upstreamDurationMs: expect.any(Number),
+    })
   })
 
   it('defers "request completed" until stream body is consumed', async () => {
@@ -956,14 +1055,23 @@ describe('request logging', () => {
     })
 
     // Response object is created but stream not yet consumed → completed not logged
-    expect(logs.some((e) => e.msg === 'request completed')).toBe(false)
+    expect(logs.some((e) => e.msg === 'request.completed')).toBe(false)
 
     // Consume the stream
     await response.text()
 
-    const completed = logs.find((e) => e.msg === 'request completed')
+    const completed = logs.find((e) => e.msg === 'request.completed')
     expect(completed).toBeDefined()
     expect(completed?.status).toBe(200)
+    expect(completed).toMatchObject({
+      outcome: 'success',
+      executionMode: 'stream',
+      finishReason: 'stop',
+      outputTokens: 1,
+      firstChunkMs: expect.any(Number),
+      upstreamRequestId: 'stream-request-1',
+    })
+    expect(completed).not.toHaveProperty('upstreamDurationMs')
     // Stream has a 60ms delay, durationMs should reflect real consumption time
     expect(completed?.durationMs).toBeGreaterThanOrEqual(50)
   })
@@ -994,14 +1102,98 @@ describe('request logging', () => {
 
     await expect(response.text()).rejects.toThrow('stream broke after first chunk')
 
-    const completed = logs.filter((e) => e.msg === 'request completed')
+    const completed = logs.filter((e) => e.msg === 'request.completed')
     expect(completed).toHaveLength(1)
     expect(completed[0]).toMatchObject({
       status: 200,
+      outcome: 'upstream_error',
       provider: 'openrouter',
       requestedModel: 'openrouter/chat',
       actualModel: 'openrouter/chat',
     })
+  })
+
+  it('classifies an in-band stream error as upstream_error exactly once', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream: () => inBandErrorStream() as AsyncIterable<ProxyStreamPart>,
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequestBody({ stream: true }))
+    await response.text().catch(() => undefined)
+
+    const completed = logs.filter((entry) => entry.msg === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]).toMatchObject({ outcome: 'upstream_error', terminalPart: 'error' })
+  })
+
+  it('classifies a stream EOF without a terminal part as incomplete_stream', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream: () => incompleteStream() as AsyncIterable<ProxyStreamPart>,
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequestBody({ stream: true }))
+    await response.text()
+
+    expect(logs.find((entry) => entry.msg === 'request.completed')).toMatchObject({
+      outcome: 'incomplete_stream',
+      terminalPart: 'eof',
+    })
+  })
+
+  it('classifies an upstream abort terminal part without writing success', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream: () => abortedStream() as AsyncIterable<ProxyStreamPart>,
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequestBody({ stream: true }))
+    await response.text()
+
+    expect(logs.filter((entry) => entry.msg === 'request.completed')).toEqual([
+      expect.objectContaining({ outcome: 'upstream_aborted', terminalPart: 'abort' }),
+    ])
+  })
+
+  it('classifies downstream stream cancellation without overriding terminal failures', async () => {
+    const { logger, logs } = capturingPino()
+    const gateway = makeGateway({
+      stream: () => cancellableStream() as AsyncIterable<ProxyStreamPart>,
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequestBody({ stream: true }))
+    const reader = response.body!.getReader()
+    await reader.read()
+    await reader.cancel('client disconnected')
+
+    expect(logs.filter((entry) => entry.msg === 'request.completed')).toEqual([
+      expect.objectContaining({ outcome: 'client_cancelled' }),
+    ])
   })
 
   it('logs keySelection for generated responses', async () => {
@@ -1032,11 +1224,11 @@ describe('request logging', () => {
       }),
     })
 
-    const resolved = logs.find((e) => e.msg === 'route resolved')
+    const resolved = logs.find((e) => e.msg === 'request.route_resolved')
     expect(resolved?.keySelection).toEqual({ index: 1, count: 2 })
 
-    const completed = logs.find((e) => e.msg === 'request completed')
-    expect(completed?.keySelection).toBeUndefined()
+    const completed = logs.find((e) => e.msg === 'request.completed')
+    expect(completed?.keySelection).toEqual({ index: 1, count: 2 })
   })
 
   it('logs keySelection for openai responses AI SDK path', async () => {
@@ -1077,28 +1269,46 @@ describe('request logging', () => {
     })
 
     expect(response.status).toBe(200)
-    const resolved = logs.find((e) => e.msg === 'route resolved')
+    const resolved = logs.find((e) => e.msg === 'request.route_resolved')
     expect(resolved?.keySelection).toEqual({ index: 0, count: 1 })
 
-    const completed = logs.find((e) => e.msg === 'request completed')
-    expect(completed?.keySelection).toBeUndefined()
+    const completed = logs.find((e) => e.msg === 'request.completed')
+    expect(completed?.keySelection).toEqual({ index: 0, count: 1 })
   })
 })
 
+function chatRequestBody(extra: Record<string, unknown> = {}): RequestInit {
+  return {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'openrouter/chat',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...extra,
+    }),
+  }
+}
+
+async function* inBandErrorStream(): AsyncIterable<unknown> {
+  yield { type: 'openai-error', body: { error: { type: 'upstream_error' } } }
+}
+
+async function* incompleteStream(): AsyncIterable<unknown> {
+  yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+}
+
+async function* abortedStream(): AsyncIterable<unknown> {
+  yield { type: 'abort', reason: 'upstream closed' }
+}
+
+async function* cancellableStream(): AsyncIterable<unknown> {
+  while (true) {
+    yield { type: 'text-delta', id: 'txt-1', text: 'partial' }
+  }
+}
+
 async function* throwingFirstChunk(): AsyncIterable<unknown> {
   throw new Error('first chunk secret')
-}
-
-async function* delayedFirstChunk(): AsyncIterable<unknown> {
-  await new Promise((resolve) => setTimeout(resolve, 50))
-  yield { type: 'text-delta', text: 'late' }
-}
-
-/** 首 chunk 立即到达（通过首包检查），第二个 chunk 长时间延迟——用于 streamOnly 收集阶段超时。 */
-async function* delayedSecondChunk(): AsyncIterable<unknown> {
-  yield { type: 'text-delta', text: 'first' }
-  await new Promise((resolve) => setTimeout(resolve, 50))
-  yield { type: 'finish', finishReason: 'stop' }
 }
 
 async function* breakingAfterFirstChunk(): AsyncIterable<unknown> {

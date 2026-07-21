@@ -6,6 +6,7 @@ export function readableStreamFromAsyncIterable<T>(
   iterable: AsyncIterable<SSEOutput<T>>,
   onError: (error: unknown) => void,
   abortController?: AbortController,
+  onCancelError?: (error: unknown) => void,
 ): ReadableStream<Uint8Array> {
   const iterator = iterable[Symbol.asyncIterator]()
   let cancelled = false
@@ -37,8 +38,8 @@ export function readableStreamFromAsyncIterable<T>(
       // 取消迭代器链，触发上游 async generator 的 finally 清理。
       try {
         await iterator.return?.(reason)
-      } catch {
-        // cancel 期间上游清理抛错忽略，不再走 onError。
+      } catch (error) {
+        onCancelError?.(error)
       }
     },
   })
