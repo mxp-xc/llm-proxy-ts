@@ -34,6 +34,21 @@ describe('OpenAI chat renderer', () => {
     })
   })
 
+  it('renders reasoning content in non-streaming completions', () => {
+    const body = renderOpenAIChatCompletion({
+      model: 'openrouter/reasoning-model',
+      text: 'answer',
+      reasoningText: 'thinking step by step',
+      finishReason: 'stop',
+    })
+
+    expect(body.choices[0]!.message).toEqual({
+      role: 'assistant',
+      content: 'answer',
+      reasoning_content: 'thinking step by step',
+    })
+  })
+
   it('computes totalTokens from inputTokens + outputTokens when totalTokens is undefined', () => {
     const body = renderOpenAIChatCompletion({
       model: 'openrouter/chat',
@@ -141,6 +156,31 @@ describe('OpenAI chat renderer', () => {
       outputs.push(chunk)
     }
     expect(outputs.at(-1)).toEqual({ type: 'done' })
+  })
+
+  it('renders reasoning deltas as reasoning_content SSE chunks', async () => {
+    async function* parts() {
+      yield { type: 'reasoning-start', id: 'reasoning-0' }
+      yield { type: 'reasoning-delta', id: 'reasoning-0', text: 'thinking ' }
+      yield { type: 'reasoning-delta', id: 'reasoning-0', text: 'step by step' }
+      yield { type: 'reasoning-end', id: 'reasoning-0' }
+      yield { type: 'text-delta', id: 'text-0', text: 'answer' }
+      yield { type: 'finish', finishReason: 'stop' }
+    }
+
+    const events = await collectSSEFrames<OpenAIChatChunk | OpenAIChatStreamError>(
+      renderOpenAIChatCompletionSSE({
+        model: 'openrouter/reasoning-model',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(events.map((event) => (event.data as OpenAIChatChunk).choices?.[0]?.delta)).toEqual([
+      { reasoning_content: 'thinking ' },
+      { reasoning_content: 'step by step' },
+      { content: 'answer' },
+      {},
+    ])
   })
 
   it('omits usage in SSE finish chunk when usage is all zeros', async () => {

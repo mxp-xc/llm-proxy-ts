@@ -6,6 +6,7 @@ import type { ProxyStreamPart } from './aisdk-types.js'
 /** 流收集结果，结构与 AI SDK generateText() 返回值兼容 */
 export interface CollectedResult {
   text: string
+  reasoningText?: string
   finishReason?: FinishReason
   usage?: RenderResultInput['usage']
   response?: { id?: string; timestamp?: Date }
@@ -26,6 +27,7 @@ export async function collectStreamResult(
   stream: AsyncIterable<ProxyStreamPart>,
 ): Promise<CollectedResult> {
   let text = ''
+  let reasoningText = ''
   let finishReason: FinishReason | undefined
   let usage: RenderResultInput['usage'] | undefined
   let response: { id?: string; timestamp?: Date } | undefined
@@ -41,6 +43,10 @@ export async function collectStreamResult(
     switch (part.type) {
       case 'text-delta': {
         text += part.text
+        break
+      }
+      case 'reasoning-delta': {
+        reasoningText += part.text
         break
       }
       case 'tool-call': {
@@ -102,6 +108,7 @@ export async function collectStreamResult(
         }
         // finish 是 fullStream 最后一个 chunk，提前返回避免依赖流关闭的隐式契约
         const finishResult: CollectedResult = { text }
+        if (reasoningText.length > 0) finishResult.reasoningText = reasoningText
         if (finishReason !== undefined) finishResult.finishReason = finishReason
         if (usage !== undefined) finishResult.usage = usage
         if (response !== undefined) finishResult.response = response

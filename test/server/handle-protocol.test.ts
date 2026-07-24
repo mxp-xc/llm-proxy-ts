@@ -326,6 +326,29 @@ describe('handleProtocolRequest branch matrix — generate path', () => {
     expect(body.choices[0].finish_reason).toBe('stop')
   })
 
+  it('preserves reasoning from a successful non-streaming generate', async () => {
+    const gateway = makeGateway({
+      async generate() {
+        return {
+          text: 'answer',
+          reasoningText: 'thinking step by step',
+          finishReason: 'stop',
+          response: { id: 'reasoning-1' },
+        } as GenerateTextReturn
+      },
+    })
+    const { app } = makeApp(gateway)
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.choices[0].message).toMatchObject({
+      content: 'answer',
+      reasoning_content: 'thinking step by step',
+    })
+  })
+
   it('returns 502 and logs a generate-phase error with null response when generate throws', async () => {
     const gateway = makeGateway({
       async generate() {
@@ -1016,6 +1039,29 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(records[0]!.phase).toBe('stream-only')
     expect(records[0]!.error.message).toBe('streamOnly broke')
     expect(records[0]!.response).toEqual([{ type: 'text-delta', id: 'txt-1', text: 'partial' }])
+  })
+
+  it('preserves reasoning when adapting a streamOnly provider to a non-streaming response', async () => {
+    async function* reasoningStream(): AsyncIterable<unknown> {
+      yield { type: 'reasoning-start', id: 'reasoning-0' }
+      yield { type: 'reasoning-delta', id: 'reasoning-0', text: 'thinking step by step' }
+      yield { type: 'reasoning-end', id: 'reasoning-0' }
+      yield { type: 'text-delta', id: 'text-0', text: 'answer' }
+      yield { type: 'finish', finishReason: 'stop', totalUsage: {} }
+    }
+    const gateway = makeGateway({
+      stream: () => reasoningStream() as AsyncIterable<ProxyStreamPart>,
+    })
+    const { app } = makeApp(gateway, { providers: streamOnlyProviders() })
+
+    const response = await app.request('/v1/chat/completions', chatRequest())
+
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.choices[0].message).toMatchObject({
+      content: 'answer',
+      reasoning_content: 'thinking step by step',
+    })
   })
 
   it.each([

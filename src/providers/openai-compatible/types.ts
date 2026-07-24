@@ -8,6 +8,7 @@ export interface OpenAIChatCompletion {
     message: {
       role: 'assistant'
       content: string | null
+      reasoning_content?: string | null
       tool_calls?: Array<{
         id: string
         type: 'function'
@@ -30,6 +31,7 @@ export interface OpenAIChatChunk {
     delta: {
       role?: 'assistant'
       content?: string | null
+      reasoning_content?: string | null
       tool_calls?: Array<{
         index: number
         id?: string

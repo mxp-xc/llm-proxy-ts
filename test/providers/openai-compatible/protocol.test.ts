@@ -193,6 +193,85 @@ describe('OpenAI chat protocol mapping', () => {
     expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
   })
 
+  it('maps assistant reasoning_content to an AI SDK reasoning part', () => {
+    const request = validateOpenAIChatRequest({
+      model: 'openrouter/reasoning-model',
+      messages: [
+        {
+          role: 'assistant',
+          content: null,
+          reasoning_content: 'thinking step by step',
+        },
+      ],
+    })
+
+    const input = mapOpenAIChatRequestToAISDKInput(request)
+
+    expect(input.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'reasoning', text: 'thinking step by step' }],
+    })
+    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
+
+  it('maps assistant content parts and refusal to AI SDK text parts', () => {
+    const request = validateOpenAIChatRequest({
+      model: 'openrouter/reasoning-model',
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'partial answer' },
+            { type: 'reasoning', text: 'legacy content reasoning' },
+            { type: 'refusal', refusal: 'cannot provide that' },
+          ],
+          reasoning: 'brief reasoning',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'safe_alternative', arguments: '{}' },
+            },
+          ],
+        },
+      ],
+    })
+
+    const input = mapOpenAIChatRequestToAISDKInput(request)
+
+    expect(input.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        { type: 'reasoning', text: 'brief reasoning' },
+        { type: 'text', text: 'partial answer' },
+        { type: 'reasoning', text: 'legacy content reasoning' },
+        { type: 'text', text: 'cannot provide that' },
+        {
+          type: 'tool-call',
+          toolCallId: 'call_1',
+          toolName: 'safe_alternative',
+          input: {},
+        },
+      ],
+    })
+    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
+
+  it('accepts a top-level assistant refusal without content', () => {
+    const request = validateOpenAIChatRequest({
+      model: 'openrouter/chat',
+      messages: [{ role: 'assistant', content: null, refusal: 'cannot provide that' }],
+    })
+
+    const input = mapOpenAIChatRequestToAISDKInput(request)
+
+    expect(input.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'cannot provide that' }],
+    })
+    expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
+  })
+
   it('accepts assistant content null with tool_calls', () => {
     const input = mapOpenAIChatRequestToAISDKInput({
       model: 'openrouter/chat',
@@ -356,6 +435,35 @@ describe('OpenAI chat protocol mapping', () => {
       openai: {
         parallelToolCalls: false,
       },
+    })
+  })
+
+  it('maps reasoning_effort for an OpenAI Responses cross-route', () => {
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openai/reasoning-model',
+      messages: [{ role: 'user', content: 'hello' }],
+      reasoning_effort: 'high',
+    })
+
+    expect(input.providerOptions).toEqual({
+      openaiCompatible: { reasoning_effort: 'high' },
+      openai: {
+        reasoningEffort: 'high',
+        reasoningSummary: 'auto',
+      },
+    })
+  })
+
+  it('does not request a reasoning summary when reasoning_effort is none', () => {
+    const input = mapOpenAIChatRequestToAISDKInput({
+      model: 'openai/reasoning-model',
+      messages: [{ role: 'user', content: 'hello' }],
+      reasoning_effort: 'none',
+    })
+
+    expect(input.providerOptions).toEqual({
+      openaiCompatible: { reasoning_effort: 'none' },
+      openai: { reasoningEffort: 'none' },
     })
   })
 

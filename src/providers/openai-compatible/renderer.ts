@@ -12,6 +12,10 @@ export function renderOpenAIChatCompletion(input: RenderResultInput): OpenAIChat
     content: input.text ?? null,
   }
 
+  if (input.reasoningText) {
+    message.reasoning_content = input.reasoningText
+  }
+
   if (input.toolCalls?.length) {
     message.tool_calls = input.toolCalls.map((call) => ({
       id: call.toolCallId,
@@ -66,6 +70,16 @@ export async function* renderOpenAIChatCompletionSSE(input: {
           created,
           model: input.model,
           choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }],
+        },
+      }
+    } else if (part.type === 'reasoning-delta') {
+      yield {
+        data: {
+          id,
+          object: 'chat.completion.chunk',
+          created,
+          model: input.model,
+          choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }],
         },
       }
     } else if (part.type === 'tool-input-start') {

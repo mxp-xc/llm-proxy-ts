@@ -14,6 +14,18 @@ export interface ResponseOutputMessage {
   content: Array<ResponseOutputText>
 }
 
+export interface ResponseReasoningSummaryItem {
+  type: 'summary_text'
+  text: string
+}
+
+export interface ResponseReasoningItem {
+  id: string
+  type: 'reasoning'
+  summary: ResponseReasoningSummaryItem[]
+  encrypted_content?: string
+}
+
 export interface ResponseFunctionToolCall {
   id: string
   type: 'function_call'
@@ -58,6 +70,7 @@ export interface ResponseToolSearchCall {
 }
 
 export type ResponseOutputItem =
+  | ResponseReasoningItem
   | ResponseOutputMessage
   | ResponseFunctionToolCall
   | ResponseCustomToolCall
@@ -92,12 +105,6 @@ export interface OpenAIResponse {
 }
 
 // ─── Streaming SSE Event Types ──────────────────────────────────
-
-/** Summary item within a reasoning output item */
-interface ReasoningSummaryItem {
-  type: 'summary_text'
-  text: string
-}
 
 /** Message item as it appears in streaming output_item events */
 interface StreamMessageItem {
@@ -137,14 +144,6 @@ interface StreamWebSearchCallItem {
   action: ResponseWebSearchAction | null
 }
 
-/** Reasoning item as it appears in streaming output_item events */
-interface StreamReasoningItem {
-  id: string
-  type: 'reasoning'
-  summary: ReasoningSummaryItem[]
-  encrypted_content?: string
-}
-
 /** Union of all item shapes that can appear in streaming output_item events */
 interface StreamToolSearchCallItem {
   id: string
@@ -161,7 +160,7 @@ type StreamOutputItem =
   | StreamCustomToolCallItem
   | StreamWebSearchCallItem
   | StreamToolSearchCallItem
-  | StreamReasoningItem
+  | ResponseReasoningItem
 
 /** Minimal response object for created/in_progress events */
 interface StreamResponsePartial {

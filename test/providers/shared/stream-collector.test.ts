@@ -18,6 +18,20 @@ describe('collectStreamResult', () => {
     expect(result.text).toBe('Hello world')
   })
 
+  it('collects reasoning from reasoning-delta chunks', async () => {
+    const stream = chunks(
+      { type: 'reasoning-start', id: 'reasoning-0' },
+      { type: 'reasoning-delta', id: 'reasoning-0', text: 'thinking ' },
+      { type: 'reasoning-delta', id: 'reasoning-0', text: 'step by step' },
+      { type: 'reasoning-end', id: 'reasoning-0' },
+      { type: 'finish', finishReason: 'stop', totalUsage: {} },
+    )
+
+    const result = await collectStreamResult(stream as AsyncIterable<ProxyStreamPart>)
+
+    expect(result.reasoningText).toBe('thinking step by step')
+  })
+
   it('collects finishReason and usage from finish chunk', async () => {
     const stream = chunks(
       { type: 'text-delta', text: 'hi' },

@@ -1329,6 +1329,37 @@ describe('mapResponsesRequestToAISDKInput', () => {
     })
   })
 
+  it('maps reasoning.mode to providerOptions.openai.reasoningMode', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5.6',
+      input: 'hi',
+      reasoning: { effort: 'high', mode: 'pro', summary: 'auto' },
+    } as OpenAIResponsesRequest)
+
+    expect(result.providerOptions).toEqual({
+      openai: {
+        reasoningEffort: 'high',
+        reasoningMode: 'pro',
+        reasoningSummary: 'auto',
+      },
+    })
+  })
+
+  it('treats null reasoning mode and context as omitted', () => {
+    const result = mapResponsesRequestToAISDKInput({
+      model: 'gpt-5.6',
+      input: 'hi',
+      reasoning: { effort: 'high', mode: null, context: null, summary: 'auto' },
+    } as OpenAIResponsesRequest)
+
+    expect(result.providerOptions).toEqual({
+      openai: {
+        reasoningEffort: 'high',
+        reasoningSummary: 'auto',
+      },
+    })
+  })
+
   it('maps text.verbosity to providerOptions.openai.textVerbosity', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-5',

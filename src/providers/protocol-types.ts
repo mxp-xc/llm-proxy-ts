@@ -22,6 +22,7 @@ export type NamespaceFlatMap = Map<string, NamespaceFlatEntry>
 export interface RenderResultInput {
   model: string
   text: string
+  reasoningText?: string
   finishReason?: FinishReason
   usage?: {
     inputTokens?: number

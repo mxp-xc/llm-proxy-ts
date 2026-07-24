@@ -989,6 +989,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
     const renderInput: Parameters<typeof strategy.renderResult>[0] = withEnrichment({
       model: requestModel,
       text: collected.text,
+      ...(collected.reasoningText !== undefined && { reasoningText: collected.reasoningText }),
       finishReason: collected.finishReason,
       ...(collected.response && { response: collected.response }),
       ...(collected.toolCalls && { toolCalls: collected.toolCalls }),
@@ -1038,6 +1039,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   const renderInput: Parameters<typeof strategy.renderResult>[0] = withEnrichment({
     model: requestModel,
     text: result.text,
+    ...(result.reasoningText !== undefined && { reasoningText: result.reasoningText }),
     finishReason: result.finishReason,
     response: result.response,
     toolCalls: result.toolCalls,

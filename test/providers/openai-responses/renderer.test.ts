@@ -47,6 +47,21 @@ describe('renderOpenAIResponse', () => {
     })
   })
 
+  it('includes reasoning in non-streaming response output', () => {
+    const result = renderOpenAIResponse({
+      model: 'openrouter/reasoning-model',
+      text: 'answer',
+      reasoningText: 'thinking step by step',
+      finishReason: 'stop',
+    })
+
+    expect(result.output[0]).toMatchObject({
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'thinking step by step' }],
+    })
+    expect(result.output[1]).toMatchObject({ type: 'message' })
+  })
+
   it('renders tool calls', () => {
     const result = renderOpenAIResponse({
       model: 'gpt-4o',
@@ -444,13 +459,13 @@ describe('renderOpenAIResponseSSE', () => {
 
   // reasoning + encrypted_content 透传：@ai-sdk/openai 把 encrypted_content 写入 reasoning part 的 providerMetadata
   async function* reasoningStream() {
+    yield { type: 'reasoning-start', id: 'rs-0' }
+    yield { type: 'reasoning-delta', id: 'rs-0', text: 'thinking' }
     yield {
-      type: 'reasoning-start',
+      type: 'reasoning-end',
       id: 'rs-0',
       providerMetadata: { openai: { reasoningEncryptedContent: 'enc-blob' } },
     }
-    yield { type: 'reasoning-delta', id: 'rs-0', text: 'thinking' }
-    yield { type: 'reasoning-end', id: 'rs-0' }
     yield {
       type: 'finish',
       finishReason: 'stop',
@@ -472,6 +487,12 @@ describe('renderOpenAIResponseSSE', () => {
       expect(item.encrypted_content).toBe('enc-blob')
       expect(item.summary).toEqual([{ type: 'summary_text', text: 'thinking' }])
     }
+
+    const completed = events.find((e) => e.event === 'response.completed')
+    const completedReasoning = (completed!.data as ResponseCompletedEvent).response.output.find(
+      (output) => output.type === 'reasoning',
+    )
+    expect(completedReasoning).toEqual(item)
   })
 
   // apply_patch → custom_tool_call 渲染（AI SDK 把上游 custom_tool_call 映射成 tool-call toolName='apply_patch'）

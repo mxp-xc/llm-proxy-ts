@@ -19,6 +19,9 @@ const messageSchema = z
   .object({
     role: z.enum(['system', 'user', 'assistant', 'tool']),
     content: z.union([z.string(), z.array(z.record(z.string(), z.unknown()))]).nullish(),
+    reasoning_content: z.string().nullish(),
+    reasoning: z.string().nullish(),
+    refusal: z.string().nullish(),
     tool_call_id: z.string().optional(),
     tool_calls: z.array(openAIToolCallSchema).optional(),
   })
@@ -37,11 +40,18 @@ const messageSchema = z
         message: 'content is required for tool messages',
       })
     }
-    if (message.role === 'assistant' && message.content == null && !message.tool_calls?.length) {
+    const reasoningText = message.reasoning_content ?? message.reasoning
+    if (
+      message.role === 'assistant' &&
+      message.content == null &&
+      !message.tool_calls?.length &&
+      !reasoningText &&
+      !message.refusal
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['content'],
-        message: 'assistant content is required without tool_calls',
+        message: 'assistant content, reasoning, or refusal is required without tool_calls',
       })
     }
   })
@@ -165,6 +175,13 @@ export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AI
   if (request.parallel_tool_calls !== undefined) {
     openaiOptions.parallelToolCalls = request.parallel_tool_calls
   }
+  // Chat 没有独立的 summary 控制；请求 auto 才能把 Responses 摘要渲染为 reasoning_content。
+  if (typeof request.reasoning_effort === 'string' && request.reasoning_effort.length > 0) {
+    openaiOptions.reasoningEffort = request.reasoning_effort
+    if (request.reasoning_effort !== 'none') {
+      openaiOptions.reasoningSummary = 'auto'
+    }
+  }
   if (Object.keys(openaiOptions).length > 0) {
     if (input.providerOptions) {
       input.providerOptions.openai = openaiOptions
@@ -180,15 +197,35 @@ function mapMessage(
   message: z.infer<typeof messageSchema>,
   toolCallIdToName: Map<string, string>,
 ): ProtocolMessage {
-  if (message.role === 'assistant' && message.tool_calls?.length) {
-    const content: ProtocolMessagePart[] = message.tool_calls.map((toolCall) => ({
-      type: 'tool-call' as const,
-      toolCallId: toolCall.id,
-      toolName: toolCall.function.name,
-      input: parseToolCallInput(toolCall.function.arguments),
-    }))
+  const reasoningText = message.reasoning_content ?? message.reasoning
+  if (
+    message.role === 'assistant' &&
+    (message.tool_calls?.length ||
+      reasoningText ||
+      message.refusal ||
+      Array.isArray(message.content))
+  ) {
+    const content: ProtocolMessagePart[] = []
+    if (reasoningText) {
+      content.push({ type: 'reasoning', text: reasoningText })
+    }
     if (typeof message.content === 'string' && message.content.length > 0) {
-      content.unshift({ type: 'text', text: message.content })
+      content.push({ type: 'text', text: message.content })
+    } else if (Array.isArray(message.content)) {
+      content.push(...message.content.flatMap(mapAssistantContentPart))
+    }
+    if (message.refusal) {
+      content.push({ type: 'text', text: message.refusal })
+    }
+    if (message.tool_calls?.length) {
+      content.push(
+        ...message.tool_calls.map((toolCall) => ({
+          type: 'tool-call' as const,
+          toolCallId: toolCall.id,
+          toolName: toolCall.function.name,
+          input: parseToolCallInput(toolCall.function.arguments),
+        })),
+      )
     }
 
     return {
@@ -222,6 +259,13 @@ function mapMessage(
   // user or assistant messages: content is string | content-part array | undefined
   const content = message.content ?? ''
   return { role: message.role as 'user' | 'assistant', content } as ProtocolMessage
+}
+
+function mapAssistantContentPart(part: Record<string, unknown>): ProtocolMessagePart[] {
+  if (part.type === 'refusal' && typeof part.refusal === 'string') {
+    return [{ type: 'text', text: part.refusal }]
+  }
+  return [part as ProtocolMessagePart]
 }
 
 type MessageContent = z.infer<typeof messageSchema>['content']

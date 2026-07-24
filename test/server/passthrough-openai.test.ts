@@ -1231,6 +1231,88 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     expect(JSON.stringify(forwardedBody?.input)).not.toContain('raw_part_should_not_be_deep_merged')
   })
 
+  it('preserves reasoning mode in the final upstream request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: 'hi',
+        reasoning: { effort: 'high', mode: 'pro', summary: 'auto' },
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(forwardedBody?.reasoning).toEqual({
+      effort: 'high',
+      mode: 'pro',
+      summary: 'auto',
+    })
+  })
+
+  it('omits null reasoning mode and context from the final upstream request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: 'hi',
+        reasoning: { effort: 'high', mode: null, context: null, summary: 'auto' },
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(forwardedBody?.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
+  it('maps chat reasoning_effort into the final OpenAI Responses request body', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        messages: [{ role: 'user', content: 'hi' }],
+        reasoning_effort: 'high',
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(forwardedBody?.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
   it('preserves positional additional_tools in the final non-streaming SDK request body', async () => {
     const settings = makeOpenaiSettings()
     let forwardedBody: Record<string, unknown> | undefined

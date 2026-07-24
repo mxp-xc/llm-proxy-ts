@@ -1112,16 +1112,19 @@ export function mapResponsesRequestToAISDKInput(
   if (request.parallel_tool_calls !== undefined) {
     providerOptions.parallelToolCalls = request.parallel_tool_calls
   }
-  // reasoning：AI SDK 期望 reasoningEffort/reasoningSummary/reasoningContext（扁平 camelCase），
+  // reasoning：AI SDK 期望 reasoningEffort/reasoningSummary/reasoningContext/reasoningMode
+  //（扁平 camelCase），
   // 非 reasoning.effort 嵌套对象（原样透传会被 zod 丢弃）
   if (request.reasoning !== undefined) {
     const reasoning = request.reasoning as {
       effort?: string
       summary?: string
-      context?: string
+      context?: string | null
+      mode?: 'standard' | 'pro' | null
     }
     if (reasoning.effort !== undefined) providerOptions.reasoningEffort = reasoning.effort
-    if (reasoning.context !== undefined) providerOptions.reasoningContext = reasoning.context
+    if (typeof reasoning.context === 'string') providerOptions.reasoningContext = reasoning.context
+    if (typeof reasoning.mode === 'string') providerOptions.reasoningMode = reasoning.mode
     providerOptions.reasoningSummary = reasoning.summary ?? null
   }
   // text.verbosity：AI SDK 期望 textVerbosity

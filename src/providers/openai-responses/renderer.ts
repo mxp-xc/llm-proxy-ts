@@ -13,6 +13,7 @@ import type {
   ResponseWebSearchCall,
   ResponseWebSearchAction,
   ResponseToolSearchCall,
+  ResponseReasoningItem,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -27,6 +28,7 @@ export type {
   ResponseCustomToolCall,
   ResponseWebSearchCall,
   ResponseToolSearchCall,
+  ResponseReasoningItem,
   ResponseOutputItem,
   ResponseUsage,
   OpenAIResponse,
@@ -189,6 +191,7 @@ export async function* renderOpenAIResponseSSE(
   // output array but do NOT trigger 'incomplete' status (Fix 1). Hosted tools are
   // executed inline by the upstream and do not pause the Codex agent loop.
   const streamedHostedCalls: ResponseWebSearchCall[] = []
+  const streamedReasoningItems: ResponseReasoningItem[] = []
 
   const toolCallFcIds = new Map<string, string>()
   const toolCallToolNames = new Map<string, string>()
@@ -415,6 +418,14 @@ export async function* renderOpenAIResponseSSE(
 
       if (part.type === 'reasoning-end') {
         if (reasoningItemStarted) {
+          const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
+          if (typeof enc === 'string') reasoningEncryptedContent = enc
+          const reasoningItem: ResponseReasoningItem = {
+            id: reasoningItemId,
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: fullReasoning }],
+            ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+          }
           yield {
             event: 'response.reasoning_summary_text.done',
             data: {
@@ -431,16 +442,10 @@ export async function* renderOpenAIResponseSSE(
               type: 'response.output_item.done',
               sequence_number: nextSeq(),
               output_index: outputIndex,
-              item: {
-                id: reasoningItemId,
-                type: 'reasoning',
-                summary: [{ type: 'summary_text', text: fullReasoning }],
-                ...(reasoningEncryptedContent
-                  ? { encrypted_content: reasoningEncryptedContent }
-                  : {}),
-              },
+              item: reasoningItem,
             },
           }
+          streamedReasoningItems.push(reasoningItem)
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
@@ -771,6 +776,12 @@ export async function* renderOpenAIResponseSSE(
 
       if (part.type === 'finish') {
         if (reasoningItemStarted) {
+          const reasoningItem: ResponseReasoningItem = {
+            id: reasoningItemId,
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: fullReasoning }],
+            ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+          }
           yield {
             event: 'response.reasoning_summary_text.done',
             data: {
@@ -787,16 +798,10 @@ export async function* renderOpenAIResponseSSE(
               type: 'response.output_item.done',
               sequence_number: nextSeq(),
               output_index: outputIndex,
-              item: {
-                id: reasoningItemId,
-                type: 'reasoning',
-                summary: [{ type: 'summary_text', text: fullReasoning }],
-                ...(reasoningEncryptedContent
-                  ? { encrypted_content: reasoningEncryptedContent }
-                  : {}),
-              },
+              item: reasoningItem,
             },
           }
+          streamedReasoningItems.push(reasoningItem)
           outputIndex++
           reasoningItemStarted = false
           fullReasoning = ''
@@ -829,7 +834,12 @@ export async function* renderOpenAIResponseSSE(
           created_at: Math.floor(Date.now() / 1000),
           model: input.model,
           status,
-          output: [...textOutput, ...streamedToolCalls, ...streamedHostedCalls],
+          output: [
+            ...streamedReasoningItems,
+            ...textOutput,
+            ...streamedToolCalls,
+            ...streamedHostedCalls,
+          ],
           output_text: fullText,
           instructions: null,
           temperature: null,
@@ -889,6 +899,14 @@ export function renderOpenAIResponse(
   const toolSearchShimmed = input.toolSearchShimmed
   const namespaceFlatMap = input.namespaceFlatMap
   const namespacePassthrough = input.namespacePassthrough
+
+  if (input.reasoningText) {
+    output.push({
+      id: `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: input.reasoningText }],
+    })
+  }
 
   if (input.text != null) {
     output.push({
