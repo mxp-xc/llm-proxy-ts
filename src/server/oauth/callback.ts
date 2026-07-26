@@ -1,7 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { Hono } from 'hono'
 import type { Settings, OAuthConfig } from '../../config.js'
 import type { TokenManager } from '../../oauth/token-manager.js'
-import { isRecord } from '../../providers/protocol-types.js'
 import { noopLogger, type Logger } from '../../types.js'
 import type { AppEnv } from '../types.js'
 import { buildOAuthCallbackUrl } from './urls.js'
@@ -12,9 +12,13 @@ import { buildOAuthCallbackUrl } from './urls.js'
 export interface OAuthCallbackDeps {
   settings: Settings
   tokenManager: TokenManager
-  nonce: string
   logger?: Logger
+  now?: () => number
+  maxPendingStates?: number
 }
+
+const STATE_TTL_MS = 10 * 60 * 1000
+const MAX_PENDING_STATES = 256
 
 /**
  * 创建 OAuth 回调 Hono 子路由。
@@ -24,7 +28,49 @@ export interface OAuthCallbackDeps {
  */
 export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
-  const { settings, tokenManager, nonce, logger = noopLogger } = deps
+  const {
+    settings,
+    tokenManager,
+    logger = noopLogger,
+    now = Date.now,
+    maxPendingStates = MAX_PENDING_STATES,
+  } = deps
+  const pendingStates = new Map<string, { provider: string; expiresAt: number }>()
+
+  if (
+    !Number.isInteger(maxPendingStates) ||
+    maxPendingStates < 1 ||
+    maxPendingStates > MAX_PENDING_STATES
+  ) {
+    throw new RangeError(`maxPendingStates must be an integer between 1 and ${MAX_PENDING_STATES}`)
+  }
+
+  function removeExpiredPendingStates(currentTime: number): void {
+    for (const [state, pending] of pendingStates) {
+      if (pending.expiresAt <= currentTime) pendingStates.delete(state)
+    }
+  }
+
+  function createPendingState(provider: string): string {
+    const currentTime = now()
+    removeExpiredPendingStates(currentTime)
+
+    if (pendingStates.size >= maxPendingStates) {
+      const oldestState = pendingStates.keys().next().value
+      if (oldestState !== undefined) pendingStates.delete(oldestState)
+    }
+
+    const state = randomUUID()
+    pendingStates.set(state, { provider, expiresAt: currentTime + STATE_TTL_MS })
+    return state
+  }
+
+  function consumePendingState(state: string): { provider: string; expiresAt: number } | undefined {
+    removeExpiredPendingStates(now())
+    const pendingState = pendingStates.get(state)
+    pendingStates.delete(state)
+    return pendingState
+  }
 
   app.get('/login/:provider', (c) => {
     const providerName = c.req.param('provider')
@@ -69,7 +115,7 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
     }
 
     const redirectUri = buildOAuthCallbackUrl(settings, oauth)
-    const state = encodeState(providerName, nonce)
+    const state = createPendingState(providerName)
     const scope =
       oauth.scopes.length > 0 ? `&scope=${encodeURIComponent(oauth.scopes.join(' '))}` : ''
 
@@ -84,24 +130,18 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
     const stateParam = c.req.query('state')
     const error = c.req.query('error')
 
-    if (error) {
-      const errorCode = /^[a-zA-Z0-9_.-]{1,128}$/.test(error) ? error : 'provider_error'
-      log.warn({ errorCode }, 'oauth.callback.rejected')
-      return c.html(renderErrorPage(error, c.req.query('error_description') ?? ''))
-    }
-
-    if (!code || !stateParam) {
+    if (!stateParam) {
       log.warn({ hasCode: Boolean(code), hasState: Boolean(stateParam) }, 'oauth.callback.invalid')
       return c.html(renderErrorPage('invalid_request', 'Missing code or state parameter'))
     }
 
-    const decoded = decodeState(stateParam)
-    if (!decoded || decoded.nonce !== nonce) {
+    const pendingState = consumePendingState(stateParam)
+    if (!pendingState) {
       log.warn({ reason: 'invalid_state' }, 'oauth.callback.invalid')
       return c.html(renderErrorPage('invalid_state', 'Invalid state parameter — possible CSRF'))
     }
 
-    const providerName = decoded.provider
+    const providerName = pendingState.provider
     const provider = settings.providers[providerName]
     if (!provider?.oauth) {
       log.warn({ provider: providerName, reason: 'invalid_provider' }, 'oauth.callback.invalid')
@@ -114,13 +154,30 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
     }
 
     const oauth: OAuthConfig = provider.oauth
+
+    if (error) {
+      const errorCode = /^[a-zA-Z0-9_.-]{1,128}$/.test(error) ? error : 'provider_error'
+      log.warn({ errorCode, provider: providerName }, 'oauth.callback.rejected')
+      return c.html(renderErrorPage(errorCode, 'OAuth authorization was rejected by the provider.'))
+    }
+
+    if (!code) {
+      log.warn({ hasCode: false, hasState: true }, 'oauth.callback.invalid')
+      return c.html(renderErrorPage('invalid_request', 'Missing code or state parameter'))
+    }
+
     const redirectUri = buildOAuthCallbackUrl(settings, oauth)
+    const signal = c.get('abortController')?.signal ?? c.req.raw.signal
 
     try {
-      await tokenManager.exchangeCode(providerName, oauth, code, redirectUri)
+      await tokenManager.exchangeCode(providerName, oauth, code, redirectUri, signal)
       log.info({ provider: providerName }, 'oauth.callback.succeeded')
       return c.html(renderSuccessPage(providerName))
     } catch (err) {
+      if (signal.aborted) {
+        log.info({ err, provider: providerName }, 'oauth.callback.aborted')
+        return c.html(renderErrorPage('exchange_failed', 'OAuth token exchange was cancelled.'))
+      }
       log.error({ err, provider: providerName }, 'oauth.callback.failed')
       return c.html(
         renderErrorPage('exchange_failed', 'OAuth token exchange failed. Check server logs.'),
@@ -129,37 +186,6 @@ export function createOAuthCallbackApp(deps: OAuthCallbackDeps): Hono<AppEnv> {
   })
 
   return app
-}
-
-/**
- * 编码 state 参数（base64url JSON）。
- */
-function encodeState(provider: string, nonce: string): string {
-  const json = JSON.stringify({ provider, nonce })
-  return Buffer.from(json, 'utf8').toString('base64url')
-}
-
-interface DecodedState {
-  provider: string
-  nonce: string
-}
-
-function isDecodedState(value: unknown): value is DecodedState {
-  return (
-    isRecord(value) && typeof value['provider'] === 'string' && typeof value['nonce'] === 'string'
-  )
-}
-
-/**
- * 解码 state 参数。
- */
-function decodeState(state: string): DecodedState | null {
-  try {
-    const parsed: unknown = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'))
-    return isDecodedState(parsed) ? parsed : null
-  } catch {
-    return null
-  }
 }
 
 function renderSuccessPage(providerName: string): string {

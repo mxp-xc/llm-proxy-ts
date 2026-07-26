@@ -127,7 +127,6 @@ export function createApp({
   logger = noopLogger,
   providerRegistry,
   gateway = defaultGateway,
-  nonce,
   getAuthStatuses,
   pluginRegistry,
   codexCatalogCache,
@@ -167,9 +166,6 @@ export function createApp({
     c.set('requestId', id)
     const reqLogger = logger.child({ requestId: id })
     c.set('logger', reqLogger)
-    const abortController = new AbortController()
-    const unregisterRequest = activeRequestRegistry?.register(abortController)
-    c.set('abortController', abortController)
     const telemetry: RequestTelemetryContext = {
       requestId: id,
       startedAt: performance.now(),
@@ -179,47 +175,77 @@ export function createApp({
       completed: false,
     }
     c.set('requestLogContext', telemetry)
-    const isHealth = c.req.path === '/health'
-    if (!isHealth) {
-      reqLogger.info({ method: telemetry.method, path: telemetry.path }, 'request.received')
+    const abortController = new AbortController()
+    const incomingSignal = c.req.raw.signal
+    const abortFromIncomingRequest = () => {
+      if (abortController.signal.aborted) return
+      if (!telemetry.explicitFailure) {
+        telemetry.outcome = 'client_cancelled'
+        telemetry.explicitFailure = true
+      }
+      const abortReason =
+        incomingSignal.reason instanceof Error && incomingSignal.reason.name === 'AbortError'
+          ? incomingSignal.reason
+          : new DOMException('Client disconnected', 'AbortError')
+      abortController.abort(abortReason)
     }
-
-    await next()
-
-    // SSE 流式响应的 body 是 ReadableStream，await next() 在 Response 创建时就 resolve，
-    // 流尚未被消费。用 TransformStream 包裹 body，在 flush（流结束）时才记 completed。
-    // 非 SSE 响应（c.json 等）虽然 body 也是 ReadableStream，但 await next() 已等完整响应，
-    // 无需延迟。
-    const logCompleted = () => {
-      if (telemetry.completed) return
-      telemetry.completed = true
+    incomingSignal.addEventListener('abort', abortFromIncomingRequest, { once: true })
+    if (incomingSignal.aborted) abortFromIncomingRequest()
+    const unregisterRequest = activeRequestRegistry?.register(abortController)
+    let requestReleased = false
+    const releaseRequest = () => {
+      if (requestReleased) return
+      requestReleased = true
+      incomingSignal.removeEventListener('abort', abortFromIncomingRequest)
       unregisterRequest?.()
-      telemetry.status = c.res.status
-      telemetry.outcome ??= outcomeFromStatus(telemetry.status)
-      if (isHealth && telemetry.outcome === 'success') return
-      if (isHealth) {
+    }
+    c.set('abortController', abortController)
+    try {
+      const isHealth = c.req.path === '/health'
+      if (!isHealth) {
         reqLogger.info({ method: telemetry.method, path: telemetry.path }, 'request.received')
       }
-      writeCompletedLog(reqLogger, telemetry)
-    }
 
-    const isSSE = c.res.headers.get('content-type')?.includes('text/event-stream')
-    if (isSSE && c.res.body instanceof ReadableStream) {
-      const body = c.res.body
-      c.res = new Response(wrapStreamWithTerminalLog(body, telemetry, reqLogger, logCompleted), {
-        status: c.res.status,
-        statusText: c.res.statusText,
-        headers: c.res.headers,
-      })
-    } else {
-      logCompleted()
+      await next()
+
+      // SSE 流式响应的 body 是 ReadableStream，await next() 在 Response 创建时就 resolve，
+      // 流尚未被消费。用 TransformStream 包裹 body，在 flush（流结束）时才记 completed。
+      // 非 SSE 响应（c.json 等）虽然 body 也是 ReadableStream，但 await next() 已等完整响应，
+      // 无需延迟。
+      const logCompleted = () => {
+        if (telemetry.completed) return
+        telemetry.completed = true
+        releaseRequest()
+        telemetry.status = c.res.status
+        telemetry.outcome ??= outcomeFromStatus(telemetry.status)
+        if (isHealth && telemetry.outcome === 'success') return
+        if (isHealth) {
+          reqLogger.info({ method: telemetry.method, path: telemetry.path }, 'request.received')
+        }
+        writeCompletedLog(reqLogger, telemetry)
+      }
+
+      const isSSE = c.res.headers.get('content-type')?.includes('text/event-stream')
+      if (isSSE && c.res.body instanceof ReadableStream) {
+        const body = c.res.body
+        c.res = new Response(wrapStreamWithTerminalLog(body, telemetry, reqLogger, logCompleted), {
+          status: c.res.status,
+          statusText: c.res.statusText,
+          headers: c.res.headers,
+        })
+      } else {
+        logCompleted()
+      }
+      c.header('x-request-id', id)
+    } catch (error) {
+      releaseRequest()
+      throw error
     }
-    c.header('x-request-id', id)
   })
 
   // 挂载 OAuth 回调路由。必须位于 request middleware 之后,确保 /oauth 也有 requestId/logger。
-  if (tokenManager && nonce) {
-    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, nonce, logger })
+  if (tokenManager) {
+    const oauthApp = createOAuthCallbackApp({ settings, tokenManager, logger })
     app.route('/oauth', oauthApp)
   }
 

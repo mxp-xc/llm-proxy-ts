@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { join } from 'node:path'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import {
   loadAuthFile,
   saveAuthFile,
+  updateAuthFile,
   extractTokenStore,
   mergeTokenStore,
 } from '../../src/oauth/token-store.js'
@@ -67,6 +68,25 @@ describe('token-store', () => {
       expect(extractTokenStore(data)).toEqual(store)
     })
 
+    it.runIf(process.platform !== 'win32')('sets auth file permissions to 0600', async () => {
+      const path = join(tempDir, 'auth.json')
+
+      await saveAuthFile(path, { p: makeToken() })
+
+      expect((await stat(path)).mode & 0o777).toBe(0o600)
+    })
+
+    it('cleans up the temporary file when rename fails', async () => {
+      const path = join(tempDir, 'auth.json')
+      await mkdir(path)
+
+      await expect(saveAuthFile(path, { p: makeToken() })).rejects.toThrow()
+
+      expect((await readdir(tempDir)).filter((name) => name.startsWith('.auth.json.tmp-'))).toEqual(
+        [],
+      )
+    })
+
     it('creates parent directories if needed', async () => {
       const path = join(tempDir, 'sub', 'dir', 'auth.json')
       const store: TokenStore = { p: makeToken() }
@@ -90,6 +110,34 @@ describe('token-store', () => {
 
       const data = await loadAuthFile(path)
       expect([payloadA, payloadB]).toContainEqual(data)
+    })
+
+    it('continues queued updates after an earlier update fails', async () => {
+      const path = join(tempDir, 'auth.json')
+      const firstError = new Error('first update failed')
+      let releaseFirstUpdate: (() => void) | undefined
+      let firstUpdateStarted: (() => void) | undefined
+      const holdFirstUpdate = new Promise<void>((resolve) => {
+        releaseFirstUpdate = resolve
+      })
+      const firstUpdateIsRunning = new Promise<void>((resolve) => {
+        firstUpdateStarted = resolve
+      })
+
+      const firstUpdate = updateAuthFile(path, async () => {
+        firstUpdateStarted?.()
+        await holdFirstUpdate
+        throw firstError
+      })
+      await firstUpdateIsRunning
+      const secondToken = makeToken({ accessToken: 'second-token' })
+      const secondUpdate = updateAuthFile(path, (data) => ({ ...data, second: secondToken }))
+
+      releaseFirstUpdate?.()
+
+      await expect(firstUpdate).rejects.toBe(firstError)
+      await expect(secondUpdate).resolves.toBeUndefined()
+      expect(await loadAuthFile(path)).toEqual({ second: secondToken })
     })
 
     it('overwrites existing store', async () => {

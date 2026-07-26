@@ -5,27 +5,21 @@ import type {
   VisionToolResultImageSource,
   VisionToolResultReplacement,
 } from '../shared/strategy.js'
+import {
+  hasNonBlankTextBlock,
+  isNonArrayRecord,
+  requireVisionToolResultReplacement,
+  toVisionToolResultChangeMetadata,
+} from '../shared/vision-input.js'
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function hasNonEmptyText(content: unknown[]): boolean {
-  return content.some(
-    (block) =>
-      isObject(block) &&
-      block.type === 'text' &&
-      typeof block.text === 'string' &&
-      block.text.trim().length > 0,
-  )
-}
+const OPENAI_CHAT_TEXT_BLOCK_TYPES = ['text'] as const
 
 function getImageSource(block: Record<string, unknown>): VisionToolResultImageSource {
   const imageUrl = block.image_url
   const url =
     typeof imageUrl === 'string'
       ? imageUrl
-      : isObject(imageUrl) && typeof imageUrl.url === 'string'
+      : isNonArrayRecord(imageUrl) && typeof imageUrl.url === 'string'
         ? imageUrl.url
         : undefined
   if (url === undefined) return { type: 'unavailable', reason: 'unsupported_source' }
@@ -34,23 +28,12 @@ function getImageSource(block: Record<string, unknown>): VisionToolResultImageSo
     : { type: 'unavailable', reason: 'remote_url' }
 }
 
-function requireReplacement(
-  replacements: ReadonlyMap<string, VisionToolResultReplacement>,
-  path: string,
-): VisionToolResultReplacement {
-  const replacement = replacements.get(path)
-  if (replacement === undefined) {
-    throw new Error(`Missing tool-result vision replacement for ${path}`)
-  }
-  return replacement
-}
-
 export function planUnsupportedOpenAIChatVisionInput(rawBody: unknown): VisionInputPlan {
   let imageCount = 0
   const toolResultImages: VisionInputPlan['toolResultImages'] = []
   let rejection: VisionInputPlan['rejection']
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.messages)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.messages)) {
     return {
       body: rawBody,
       imageCount,
@@ -60,7 +43,7 @@ export function planUnsupportedOpenAIChatVisionInput(rawBody: unknown): VisionIn
 
   for (let messageIndex = 0; messageIndex < rawBody.messages.length; messageIndex++) {
     const message = rawBody.messages[messageIndex]
-    if (!isObject(message) || !Array.isArray(message.content)) continue
+    if (!isNonArrayRecord(message) || !Array.isArray(message.content)) continue
 
     const role = typeof message.role === 'string' ? message.role : undefined
     let removedImage = false
@@ -68,7 +51,7 @@ export function planUnsupportedOpenAIChatVisionInput(rawBody: unknown): VisionIn
 
     for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
       const block: unknown = message.content[contentIndex]
-      if (isObject(block) && block.type === 'image_url') {
+      if (isNonArrayRecord(block) && block.type === 'image_url') {
         removedImage = true
         imageCount++
         if (role === 'tool') {
@@ -82,7 +65,11 @@ export function planUnsupportedOpenAIChatVisionInput(rawBody: unknown): VisionIn
       }
     }
 
-    if (removedImage && role === 'user' && !hasNonEmptyText(remainingContent)) {
+    if (
+      removedImage &&
+      role === 'user' &&
+      !hasNonBlankTextBlock(remainingContent, OPENAI_CHAT_TEXT_BLOCK_TYPES)
+    ) {
       rejection = 'unsupported_vision_input'
     }
   }
@@ -105,7 +92,7 @@ export function applyUnsupportedOpenAIChatVisionInput(
   let removedImageCount = 0
   let fallbackNoticeCount = 0
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.messages)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.messages)) {
     return {
       body: rawBody,
       changes,
@@ -121,11 +108,11 @@ export function applyUnsupportedOpenAIChatVisionInput(
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const message = messages[messageIndex]
-    if (!isObject(message) || !Array.isArray(message.content)) continue
+    if (!isNonArrayRecord(message) || !Array.isArray(message.content)) continue
 
     const role = typeof message.role === 'string' ? message.role : undefined
     const imageIndexes = message.content.flatMap((block, index) =>
-      isObject(block) && block.type === 'image_url' ? [index] : [],
+      isNonArrayRecord(block) && block.type === 'image_url' ? [index] : [],
     )
     if (imageIndexes.length === 0) continue
 
@@ -134,7 +121,7 @@ export function applyUnsupportedOpenAIChatVisionInput(
     const imageOnlyNotices: string[] = []
     for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
       const block: unknown = message.content[contentIndex]
-      if (!isObject(block) || block.type !== 'image_url') {
+      if (!isNonArrayRecord(block) || block.type !== 'image_url') {
         nextContent.push(block)
         continue
       }
@@ -151,7 +138,7 @@ export function applyUnsupportedOpenAIChatVisionInput(
         continue
       }
 
-      const replacement = requireReplacement(replacements, path)
+      const replacement = requireVisionToolResultReplacement(replacements, path)
       fallbackNoticeCount++
       if (imageOnlyToolResult) imageOnlyNotices.push(replacement.text)
       else nextContent.push({ type: 'text', text: `\n\n${replacement.text}\n\n` })
@@ -161,10 +148,7 @@ export function applyUnsupportedOpenAIChatVisionInput(
         role,
         blockType: 'image_url',
         containerType: 'tool_message',
-        artifactStatus: replacement.artifactStatus,
-        ...(replacement.artifactStatus === 'unavailable'
-          ? { unavailableReason: replacement.unavailableReason }
-          : {}),
+        ...toVisionToolResultChangeMetadata(replacement),
       })
     }
 

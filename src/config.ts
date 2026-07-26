@@ -285,7 +285,7 @@ export const settingsSchema = z.object({
       port: z.number().int().min(1).max(65535).default(8000),
     })
     .default({}),
-  requestTimeoutMs: z.number().positive().default(30000),
+  requestTimeoutMs: z.number().positive().default(300_000),
   proxy: z
     .object({
       url: z.string().url(),

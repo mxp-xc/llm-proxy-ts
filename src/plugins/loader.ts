@@ -29,6 +29,9 @@ interface LoadablePluginEntry {
  * - entry.name → 查找内置插件注册表
  * - entry.module → 动态 import（相对路径 / 绝对路径 / npm 包名）
  * - 两者都有 → module 加载，name 用于日志和引用标识
+ *
+ * `entry.module` 是受信任的本地代码执行边界。动态模块与服务在同一进程中运行，
+ * 拥有当前进程的权限；此 loader 不提供 sandbox。
  */
 export async function loadPlugin(
   entry: LoadablePluginEntry,
@@ -86,10 +89,18 @@ function validatePluginShape(plugin: unknown, source: string): asserts plugin is
     'init',
     'beforeServerStart',
     'afterServerStart',
+    'dispose',
     'inspectStreamChunk',
     'createFetch',
     'discoverModels',
   ] as const
+
+  for (const hookName of hookNames) {
+    if (hookName in p && typeof p[hookName] !== 'function') {
+      throw new Error(`Plugin at '${source}' hook '${hookName}' must be a function`)
+    }
+  }
+
   const hasHook = hookNames.some((h) => typeof p[h] === 'function')
   if (!hasHook) {
     throw new Error(`Plugin at '${source}' must implement at least one hook`)

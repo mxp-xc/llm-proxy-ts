@@ -5,24 +5,18 @@ import type {
   VisionToolResultImageSource,
   VisionToolResultReplacement,
 } from '../shared/strategy.js'
+import {
+  hasNonBlankTextBlock,
+  isNonArrayRecord,
+  requireVisionToolResultReplacement,
+  toVisionToolResultChangeMetadata,
+} from '../shared/vision-input.js'
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function hasNonEmptyText(content: unknown[]): boolean {
-  return content.some(
-    (block) =>
-      isObject(block) &&
-      block.type === 'text' &&
-      typeof block.text === 'string' &&
-      block.text.trim().length > 0,
-  )
-}
+const ANTHROPIC_TEXT_BLOCK_TYPES = ['text'] as const
 
 function getImageSource(block: Record<string, unknown>): VisionToolResultImageSource {
   const source = block.source
-  if (!isObject(source) || typeof source.type !== 'string') {
+  if (!isNonArrayRecord(source) || typeof source.type !== 'string') {
     return { type: 'unavailable', reason: 'unsupported_source' }
   }
   if (
@@ -40,23 +34,12 @@ function getImageSource(block: Record<string, unknown>): VisionToolResultImageSo
   return { type: 'unavailable', reason: 'unsupported_source' }
 }
 
-function requireReplacement(
-  replacements: ReadonlyMap<string, VisionToolResultReplacement>,
-  path: string,
-): VisionToolResultReplacement {
-  const replacement = replacements.get(path)
-  if (replacement === undefined) {
-    throw new Error(`Missing tool-result vision replacement for ${path}`)
-  }
-  return replacement
-}
-
 export function planUnsupportedAnthropicVisionInput(rawBody: unknown): VisionInputPlan {
   let imageCount = 0
   const toolResultImages: VisionInputPlan['toolResultImages'] = []
   let rejection: VisionInputPlan['rejection']
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.messages)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.messages)) {
     return {
       body: rawBody,
       imageCount,
@@ -66,7 +49,7 @@ export function planUnsupportedAnthropicVisionInput(rawBody: unknown): VisionInp
 
   for (let messageIndex = 0; messageIndex < rawBody.messages.length; messageIndex++) {
     const message = rawBody.messages[messageIndex]
-    if (!isObject(message) || !Array.isArray(message.content)) continue
+    if (!isNonArrayRecord(message) || !Array.isArray(message.content)) continue
 
     const role = typeof message.role === 'string' ? message.role : undefined
     const remainingContent: unknown[] = []
@@ -74,7 +57,7 @@ export function planUnsupportedAnthropicVisionInput(rawBody: unknown): VisionInp
 
     for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
       const block: unknown = message.content[contentIndex]
-      if (!isObject(block)) {
+      if (!isNonArrayRecord(block)) {
         remainingContent.push(block)
         continue
       }
@@ -97,7 +80,7 @@ export function planUnsupportedAnthropicVisionInput(rawBody: unknown): VisionInp
 
       for (let nestedIndex = 0; nestedIndex < block.content.length; nestedIndex++) {
         const nestedBlock: unknown = block.content[nestedIndex]
-        if (isObject(nestedBlock) && nestedBlock.type === 'image') {
+        if (isNonArrayRecord(nestedBlock) && nestedBlock.type === 'image') {
           imageCount++
           toolResultImages.push({
             path: `/messages/${messageIndex}/content/${contentIndex}/content/${nestedIndex}`,
@@ -110,12 +93,12 @@ export function planUnsupportedAnthropicVisionInput(rawBody: unknown): VisionInp
 
     const mapsOnlyToToolMessage =
       remainingContent.length > 0 &&
-      remainingContent.every((block) => isObject(block) && block.type === 'tool_result')
+      remainingContent.every((block) => isNonArrayRecord(block) && block.type === 'tool_result')
     if (
       role === 'user' &&
       removedDirectImage &&
       !mapsOnlyToToolMessage &&
-      !hasNonEmptyText(remainingContent)
+      !hasNonBlankTextBlock(remainingContent, ANTHROPIC_TEXT_BLOCK_TYPES)
     ) {
       rejection = 'unsupported_vision_input'
     }
@@ -139,7 +122,7 @@ export function applyUnsupportedAnthropicVisionInput(
   let removedImageCount = 0
   let fallbackNoticeCount = 0
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.messages)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.messages)) {
     return {
       body: rawBody,
       changes,
@@ -155,7 +138,7 @@ export function applyUnsupportedAnthropicVisionInput(
 
   for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
     const message = messages[messageIndex]
-    if (!isObject(message) || !Array.isArray(message.content)) continue
+    if (!isNonArrayRecord(message) || !Array.isArray(message.content)) continue
 
     const role = typeof message.role === 'string' ? message.role : undefined
     const nextContent: unknown[] = []
@@ -163,7 +146,7 @@ export function applyUnsupportedAnthropicVisionInput(
 
     for (let contentIndex = 0; contentIndex < message.content.length; contentIndex++) {
       const block: unknown = message.content[contentIndex]
-      if (!isObject(block)) {
+      if (!isNonArrayRecord(block)) {
         nextContent.push(block)
         continue
       }
@@ -186,7 +169,7 @@ export function applyUnsupportedAnthropicVisionInput(
       }
 
       const imageIndexes = block.content.flatMap((nestedBlock, index) =>
-        isObject(nestedBlock) && nestedBlock.type === 'image' ? [index] : [],
+        isNonArrayRecord(nestedBlock) && nestedBlock.type === 'image' ? [index] : [],
       )
       if (imageIndexes.length === 0) {
         nextContent.push(block)
@@ -199,13 +182,13 @@ export function applyUnsupportedAnthropicVisionInput(
       const imageOnlyNotices: string[] = []
       for (let nestedIndex = 0; nestedIndex < block.content.length; nestedIndex++) {
         const nestedBlock: unknown = block.content[nestedIndex]
-        if (!isObject(nestedBlock) || nestedBlock.type !== 'image') {
+        if (!isNonArrayRecord(nestedBlock) || nestedBlock.type !== 'image') {
           nextToolResultContent.push(nestedBlock)
           continue
         }
 
         const path = `/messages/${messageIndex}/content/${contentIndex}/content/${nestedIndex}`
-        const replacement = requireReplacement(replacements, path)
+        const replacement = requireVisionToolResultReplacement(replacements, path)
         fallbackNoticeCount++
         if (imageOnlyToolResult) imageOnlyNotices.push(replacement.text)
         else nextToolResultContent.push({ type: 'text', text: `\n\n${replacement.text}\n\n` })
@@ -215,10 +198,7 @@ export function applyUnsupportedAnthropicVisionInput(
           ...(role === undefined ? {} : { role }),
           blockType: 'image',
           containerType: 'tool_result',
-          artifactStatus: replacement.artifactStatus,
-          ...(replacement.artifactStatus === 'unavailable'
-            ? { unavailableReason: replacement.unavailableReason }
-            : {}),
+          ...toVisionToolResultChangeMetadata(replacement),
         })
       }
       nextContent.push({

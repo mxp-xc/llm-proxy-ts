@@ -63,7 +63,12 @@ export async function* renderAnthropicMessageSSE(input: {
   let messageStarted = false
   let currentBlockIndex = -1
   let currentBlockType: 'text' | 'tool_use' | null = null
-  const toolCallBlockIndexes = new Map<string, number>()
+  type PendingToolCall = {
+    name: string
+    deltas: string[]
+    complete: boolean
+  }
+  const pendingToolCalls = new Map<string, PendingToolCall>()
 
   function emitMessageStart(): SSEFrame<AnthropicSSEData> {
     messageStarted = true
@@ -114,6 +119,56 @@ export async function* renderAnthropicMessageSSE(input: {
     return result
   }
 
+  function queueToolCall(id: string, name: string): PendingToolCall {
+    const existing = pendingToolCalls.get(id)
+    if (existing) return existing
+    const pending = { name, deltas: [], complete: false }
+    pendingToolCalls.set(id, pending)
+    return pending
+  }
+
+  function* emitPendingToolCalls(force: boolean): Generator<SSEFrame<AnthropicSSEData>> {
+    for (const [id, pending] of pendingToolCalls) {
+      if (!force && !pending.complete) return
+      pendingToolCalls.delete(id)
+      const stopChunk = emitBlockStop()
+      if (stopChunk) yield stopChunk
+      yield emitBlockStart('tool_use', {
+        type: 'tool_use',
+        id,
+        name: pending.name,
+        input: {},
+      })
+      for (const partialJson of pending.deltas) {
+        yield {
+          event: 'content_block_delta',
+          data: {
+            type: 'content_block_delta',
+            index: currentBlockIndex,
+            delta: { type: 'input_json_delta', partial_json: partialJson },
+          },
+        }
+      }
+      const toolStopChunk = emitBlockStop()
+      if (toolStopChunk) yield toolStopChunk
+    }
+  }
+
+  function* emitTerminalError(message: string): Generator<SSEFrame<AnthropicSSEData>> {
+    if (!messageStarted) yield emitMessageStart()
+    yield* emitPendingToolCalls(true)
+    const stopChunk = emitBlockStop()
+    if (stopChunk) yield stopChunk
+    yield {
+      event: 'error',
+      data: {
+        type: 'error',
+        error: { type: 'api_error', message },
+      },
+    }
+    yield { event: 'message_stop', data: { type: 'message_stop' } }
+  }
+
   try {
     for await (const part of input.stream) {
       if (part.type === 'text-delta') {
@@ -135,65 +190,20 @@ export async function* renderAnthropicMessageSSE(input: {
         }
       } else if (part.type === 'tool-input-start') {
         if (!messageStarted) yield emitMessageStart()
-
-        const toolCallId = part.id
-        const toolName = part.toolName
-
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
-        toolCallBlockIndexes.set(toolCallId, currentBlockIndex + 1)
-        yield emitBlockStart('tool_use', {
-          type: 'tool_use',
-          id: toolCallId,
-          name: toolName,
-          input: {},
-        })
+        queueToolCall(part.id, part.toolName)
       } else if (part.type === 'tool-input-delta') {
-        const toolCallId = part.id
-        const argsDelta = part.delta
-
-        const blockIndex = toolCallBlockIndexes.get(toolCallId) ?? currentBlockIndex
-
-        yield {
-          event: 'content_block_delta',
-          data: {
-            type: 'content_block_delta',
-            index: blockIndex,
-            delta: { type: 'input_json_delta', partial_json: argsDelta },
-          },
-        }
+        pendingToolCalls.get(part.id)?.deltas.push(part.delta)
       } else if (part.type === 'tool-call') {
         if (!messageStarted) yield emitMessageStart()
-
-        const toolCallId = part.toolCallId
-        const toolName = part.toolName
-
-        if (!toolCallBlockIndexes.has(toolCallId)) {
-          const stopChunk = emitBlockStop()
-          if (stopChunk) yield stopChunk
-          toolCallBlockIndexes.set(toolCallId, currentBlockIndex + 1)
-          yield emitBlockStart('tool_use', {
-            type: 'tool_use',
-            id: toolCallId,
-            name: toolName,
-            input: {},
-          })
-
-          const inputJson = JSON.stringify(part.input ?? {})
-          yield {
-            event: 'content_block_delta',
-            data: {
-              type: 'content_block_delta',
-              index: currentBlockIndex,
-              delta: { type: 'input_json_delta', partial_json: inputJson },
-            },
-          }
-        }
-
-        const stopChunk = emitBlockStop()
-        if (stopChunk) yield stopChunk
+        const pending = queueToolCall(part.toolCallId, part.toolName)
+        if (pending.deltas.length === 0) pending.deltas.push(JSON.stringify(part.input ?? {}))
+        pending.complete = true
+        yield* emitPendingToolCalls(false)
       } else if (part.type === 'finish') {
         if (!messageStarted) yield emitMessageStart()
+        yield* emitPendingToolCalls(true)
         const stopChunk = emitBlockStop()
         if (stopChunk) yield stopChunk
 
@@ -216,61 +226,17 @@ export async function* renderAnthropicMessageSSE(input: {
         yield { event: 'message_stop', data: { type: 'message_stop' } }
         return
       } else if (part.type === 'openai-error') {
-        if (!messageStarted) yield emitMessageStart()
-        const stopChunk = emitBlockStop()
-        if (stopChunk) yield stopChunk
-        yield {
-          event: 'error',
-          data: {
-            type: 'error',
-            error: { type: 'api_error', message: toErrorMessage(part.body) },
-          },
-        }
-        yield { event: 'message_stop', data: { type: 'message_stop' } }
+        yield* emitTerminalError(toErrorMessage(part.body))
         return
       } else if (part.type === 'error') {
-        if (!messageStarted) yield emitMessageStart()
-        const stopChunk = emitBlockStop()
-        if (stopChunk) yield stopChunk
-        yield {
-          event: 'error',
-          data: {
-            type: 'error',
-            error: {
-              type: 'api_error',
-              message: toErrorMessage(part.error),
-            },
-          },
-        }
-        yield { event: 'message_stop', data: { type: 'message_stop' } }
+        yield* emitTerminalError(toErrorMessage(part.error))
         return
       }
     }
 
-    if (!messageStarted) yield emitMessageStart()
-    const stopChunk = emitBlockStop()
-    if (stopChunk) yield stopChunk
-    yield {
-      event: 'message_delta',
-      data: {
-        type: 'message_delta',
-        delta: { stop_reason: 'end_turn', stop_sequence: null },
-      },
-    }
-    yield { event: 'message_stop', data: { type: 'message_stop' } }
+    yield* emitTerminalError('Upstream stream ended before a terminal event')
   } catch (error) {
-    if (!messageStarted) yield emitMessageStart()
-    const stopChunk = emitBlockStop()
-    if (stopChunk) yield stopChunk
-    const message = toErrorMessage(error)
-    yield {
-      event: 'error',
-      data: {
-        type: 'error',
-        error: { type: 'api_error', message },
-      },
-    }
-    yield { event: 'message_stop', data: { type: 'message_stop' } }
+    yield* emitTerminalError(toErrorMessage(error))
   }
 }
 

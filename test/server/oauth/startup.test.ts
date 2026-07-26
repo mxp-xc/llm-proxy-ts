@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import type { OAuthConfig } from '../../../src/index.js'
 import { TokenManager } from '../../../src/index.js'
-import { validateOAuthStatus } from '../../../src/server/oauth/startup.js'
+import { refreshAuthStatuses, validateOAuthStatus } from '../../../src/server/oauth/startup.js'
 import { makeSettings } from '../../helpers/settings.js'
 
 const authCodeConfig: OAuthConfig = {
@@ -147,5 +147,45 @@ describe('OAuth startup validation', () => {
     const results = await validateOAuthStatus(settings, tokenManager)
     expect(results).toHaveLength(1)
     expect(results[0]!.status).toBe('valid')
+  })
+
+  it('propagates cancellation instead of degrading an aborted refresh to needs_login', async () => {
+    const settings = makeSettings({
+      'cc-p': {
+        type: 'openai-compatible',
+        baseURL: 'https://api.example.com/v1',
+        apiKey: null,
+        headers: {},
+        plugins: [],
+        models: { chat: { upstreamModel: 'm', aliases: [], headers: {}, plugins: [] } },
+        oauth: clientCredentialsConfig,
+      },
+    })
+    let fetchSignal: AbortSignal | undefined
+    let markFetchStarted: (() => void) | undefined
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve
+    })
+    const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+      fetchSignal = init?.signal ?? undefined
+      markFetchStarted?.()
+      return new Promise<Response>((_resolve, reject) => {
+        fetchSignal?.addEventListener('abort', () => reject(fetchSignal?.reason), { once: true })
+      })
+    })
+    const tokenManager = TokenManager.fromFile(authFilePath, mockFetch)
+    await tokenManager.load()
+    const controller = new AbortController()
+    const abortError = new Error('server shutting down')
+
+    const refresh = refreshAuthStatuses(settings, tokenManager, undefined, controller.signal)
+    const refreshFailure = expect(refresh).rejects.toBe(abortError)
+    await fetchStarted
+    controller.abort(abortError)
+
+    await refreshFailure
+    expect(fetchSignal).not.toBe(controller.signal)
+    expect(fetchSignal?.aborted).toBe(true)
+    expect(fetchSignal?.reason).toBe(abortError)
   })
 })

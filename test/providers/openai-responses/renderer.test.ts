@@ -12,6 +12,7 @@ import type {
 import {
   renderOpenAIResponse,
   renderOpenAIResponseSSE,
+  renderOpenAIResponsesRawSSE,
 } from '../../../src/providers/openai-responses/renderer.js'
 import { collectSSEFrames } from '../../helpers/sse.js'
 
@@ -115,6 +116,14 @@ describe('renderOpenAIResponse', () => {
         toolCalls: [{ toolCallId: 'c1', toolName: 't', input: {} }],
       }).status,
     ).toBe('completed')
+    expect(
+      renderOpenAIResponse({
+        model: 'gpt-4o',
+        text: '',
+        finishReason: 'length',
+        toolCalls: [{ toolCallId: 'c1', toolName: 't', input: {} }],
+      }).status,
+    ).toBe('incomplete')
   })
 
   it('uses response id and timestamp when provided', () => {
@@ -427,6 +436,79 @@ describe('renderOpenAIResponseSSE', () => {
     expect(eventTypes).toContain('response.completed')
   })
 
+  it('assigns stable output indices to parallel function and custom tool starts', async () => {
+    async function* parallelToolStream() {
+      yield { type: 'tool-input-start', id: 'call_function', toolName: 'lookup' }
+      yield { type: 'tool-input-start', id: 'call_custom', toolName: 'apply_patch' }
+      yield { type: 'tool-input-delta', id: 'call_function', delta: '{"query":"docs"}' }
+      yield { type: 'tool-input-delta', id: 'call_custom', delta: '*** Begin Patch' }
+      yield {
+        type: 'tool-call',
+        toolCallId: 'call_custom',
+        toolName: 'apply_patch',
+        input: JSON.stringify('*** Begin Patch'),
+      }
+      yield {
+        type: 'tool-call',
+        toolCallId: 'call_function',
+        toolName: 'lookup',
+        input: '{"query":"docs"}',
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'tool-calls',
+        response: { id: 'resp_parallel_tools' },
+      }
+    }
+
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(
+      renderOpenAIResponseSSE({
+        model: 'gpt-5',
+        stream: parallelToolStream() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const added = events
+      .filter((event) => event.event === 'response.output_item.added')
+      .map((event) => event.data as ResponseOutputItemAddedEvent)
+    const done = events
+      .filter((event) => event.event === 'response.output_item.done')
+      .map((event) => event.data as ResponseOutputItemDoneEvent)
+    const addedIndices = new Map(
+      added.map((event) => [
+        'call_id' in event.item ? event.item.call_id : undefined,
+        event.output_index,
+      ]),
+    )
+
+    expect([...addedIndices.entries()]).toEqual([
+      ['call_function', 0],
+      ['call_custom', 1],
+    ])
+    expect(
+      done.map((event) => [
+        'call_id' in event.item ? event.item.call_id : undefined,
+        event.output_index,
+      ]),
+    ).toEqual([
+      ['call_custom', 1],
+      ['call_function', 0],
+    ])
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.event === 'response.function_call_arguments.delta' ||
+            event.event === 'response.custom_tool_call_input.delta',
+        )
+        .map((event) => (event.data as { output_index: number }).output_index),
+    ).toEqual([0, 1])
+    const completed = events.find((event) => event.event === 'response.completed')!
+      .data as ResponseCompletedEvent
+    expect(
+      completed.response.output.map((item) => ('call_id' in item ? item.call_id : undefined)),
+    ).toEqual(['call_function', 'call_custom'])
+  })
+
   // Bug #12 — new msgId after tool call
   async function* textThenToolCallStream() {
     yield { type: 'text-delta', text: 'Hello' }
@@ -455,6 +537,51 @@ describe('renderOpenAIResponseSSE', () => {
     // The two message items should have different ids
     const ids = msgItems.map((e) => e.item.id)
     expect(ids[0]).not.toBe(ids[1])
+  })
+
+  it('preserves streamed output item order and independent text messages in response.completed', async () => {
+    async function* interleavedOutputStream() {
+      yield { type: 'text-delta', text: 'before' }
+      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'fn', input: { value: 1 } }
+      yield { type: 'text-delta', text: 'after' }
+      yield { type: 'reasoning-start', id: 'reasoning_1' }
+      yield { type: 'reasoning-delta', id: 'reasoning_1', text: 'thought' }
+      yield { type: 'reasoning-end', id: 'reasoning_1' }
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        response: { id: 'resp_interleaved' },
+      }
+    }
+
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(
+      renderOpenAIResponseSSE({
+        model: 'gpt-5',
+        stream: interleavedOutputStream() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const doneItems = events
+      .filter((event) => event.event === 'response.output_item.done')
+      .map((event) => (event.data as ResponseOutputItemDoneEvent).item)
+    const completed = events.find((event) => event.event === 'response.completed')!
+      .data as ResponseCompletedEvent
+
+    expect(completed.response.output).toEqual(doneItems)
+    expect(completed.response.output.map((item) => item.type)).toEqual([
+      'message',
+      'function_call',
+      'message',
+      'reasoning',
+    ])
+    expect(completed.response.output[0]).toMatchObject({
+      type: 'message',
+      content: [{ type: 'output_text', text: 'before', annotations: [] }],
+    })
+    expect(completed.response.output[2]).toMatchObject({
+      type: 'message',
+      content: [{ type: 'output_text', text: 'after', annotations: [] }],
+    })
+    expect(completed.response.output_text).toBe('beforeafter')
   })
 
   // reasoning + encrypted_content 透传：@ai-sdk/openai 把 encrypted_content 写入 reasoning part 的 providerMetadata
@@ -493,6 +620,33 @@ describe('renderOpenAIResponseSSE', () => {
       (output) => output.type === 'reasoning',
     )
     expect(completedReasoning).toEqual(item)
+  })
+
+  it('starts reasoning from a delta and finishes it on response finish', async () => {
+    async function* parts() {
+      yield { type: 'reasoning-delta', id: 'rs-implicit', text: 'implicit reasoning' }
+      yield { type: 'finish', finishReason: 'stop', response: { id: 'resp_implicit_rs' } }
+    }
+
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(
+      renderOpenAIResponseSSE({
+        model: 'gpt-5',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const added = events.find((event) => event.event === 'response.output_item.added')!
+      .data as ResponseOutputItemAddedEvent
+    const done = events.find((event) => event.event === 'response.output_item.done')!
+      .data as ResponseOutputItemDoneEvent
+    const completed = events.find((event) => event.event === 'response.completed')!
+      .data as ResponseCompletedEvent
+
+    expect(added.item.type).toBe('reasoning')
+    expect(done.item).toMatchObject({
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'implicit reasoning' }],
+    })
+    expect(completed.response.output).toEqual([done.item])
   })
 
   // apply_patch → custom_tool_call 渲染（AI SDK 把上游 custom_tool_call 映射成 tool-call toolName='apply_patch'）
@@ -575,6 +729,65 @@ describe('renderOpenAIResponseSSE', () => {
     }
   })
 
+  it('assigns hosted tool starts stable indices before parallel results complete', async () => {
+    async function* parallelHostedToolStream() {
+      yield {
+        type: 'tool-input-start',
+        id: 'ws_1',
+        toolName: 'web_search',
+        providerExecuted: true,
+      }
+      yield {
+        type: 'tool-input-start',
+        id: 'ws_2',
+        toolName: 'web_search',
+        providerExecuted: true,
+      }
+      yield {
+        type: 'tool-result',
+        toolCallId: 'ws_2',
+        toolName: 'web_search',
+        output: { action: { type: 'search', query: 'second' } },
+      }
+      yield {
+        type: 'tool-result',
+        toolCallId: 'ws_1',
+        toolName: 'web_search',
+        output: { action: { type: 'search', query: 'first' } },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'stop',
+        response: { id: 'resp_parallel_hosted' },
+      }
+    }
+
+    const events = await collectSSEFrames<OpenAIResponseStreamEvent>(
+      renderOpenAIResponseSSE({
+        model: 'gpt-5',
+        stream: parallelHostedToolStream() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const added = events
+      .filter((event) => event.event === 'response.output_item.added')
+      .map((event) => event.data as ResponseOutputItemAddedEvent)
+    const done = events
+      .filter((event) => event.event === 'response.output_item.done')
+      .map((event) => event.data as ResponseOutputItemDoneEvent)
+
+    expect(added.map((event) => [event.item.id, event.output_index])).toEqual([
+      ['ws_1', 0],
+      ['ws_2', 1],
+    ])
+    expect(done.map((event) => [event.item.id, event.output_index])).toEqual([
+      ['ws_2', 1],
+      ['ws_1', 0],
+    ])
+    const completed = events.find((event) => event.event === 'response.completed')!
+      .data as ResponseCompletedEvent
+    expect(completed.response.output.map((item) => item.id)).toEqual(['ws_1', 'ws_2'])
+  })
+
   // AI SDK mapWebSearchOutput 把上游 snake_case action.type 转成 camelCase（open_page→openPage），
   // mapWebSearchAction 需转回 snake_case（Codex 期望）。
   it('converts web_search action.type from camelCase back to snake_case (openPage→open_page)', async () => {
@@ -641,15 +854,13 @@ describe('renderOpenAIResponseSSE', () => {
     expect(result.output.some((o) => o.type === 'web_search_call')).toBe(true)
   })
 
-  // Fix 2: hosted tool-call 后紧跟 text-delta 再 tool-result —— text message 和 web_search_call
-  // 必须在各自独立的 output_index，互不覆盖。AI SDK 实际背靠背发 tool-call/tool-result，
-  // 此测试构造交错序列以验证状态机在 outputIndex 被占用时不冲突。
+  // hosted tool start 后紧跟 text-delta 再 tool-result：三个 started item 必须独立占位，
+  // tool result 后到也要沿用 start 时的 output_index。
   it('hosted tool-call + text-delta + tool-result render at distinct output indices without overwriting', async () => {
     async function* interleavedStream() {
       yield { type: 'text-delta', text: 'before' }
       yield { type: 'tool-input-start', id: 'ws_2', toolName: 'web_search', providerExecuted: true }
       yield { type: 'tool-input-end', id: 'ws_2' }
-      // hosted tool-call 到达：只记录 id，不占 outputIndex，不关闭 in-progress text message
       yield {
         type: 'tool-call',
         toolCallId: 'ws_2',
@@ -657,9 +868,7 @@ describe('renderOpenAIResponseSSE', () => {
         input: '{}',
         providerExecuted: true,
       }
-      // text-delta 到达：继续写入同一个 in-progress text message（不被 web_search_call 覆盖）
       yield { type: 'text-delta', text: '-after' }
-      // hosted tool-result 到达：关闭 text message（index 0），再 added+done web_search_call（index 1）
       yield {
         type: 'tool-result',
         toolCallId: 'ws_2',
@@ -685,31 +894,31 @@ describe('renderOpenAIResponseSSE', () => {
       .filter((e) => e.event === 'response.output_item.done')
       .map((e) => e.data as ResponseOutputItemDoneEvent)
 
-    // message item 在 index 0，web_search_call 在 index 1
-    const msgAdded = addedItems.find((e) => e.item?.type === 'message')
+    const msgAdded = addedItems.filter((e) => e.item?.type === 'message')
     const wsAdded = addedItems.find((e) => e.item?.type === 'web_search_call')
-    expect(msgAdded).toBeDefined()
+    expect(msgAdded).toHaveLength(2)
     expect(wsAdded).toBeDefined()
-    expect(msgAdded!.output_index).toBe(0)
+    expect(msgAdded.map((event) => event.output_index)).toEqual([0, 2])
     expect(wsAdded!.output_index).toBe(1)
 
-    // text message 累积了 before-after（未被 web_search 覆盖）
-    const msgDone = doneItems.find((e) => e.item?.type === 'message')
-    expect(msgDone).toBeDefined()
-    if (msgDone!.item.type === 'message') {
-      expect(msgDone!.item.content[0]!.text).toBe('before-after')
-    }
-    // web_search_call done 带正确 action
+    const msgDone = doneItems.filter((e) => e.item?.type === 'message')
+    expect(
+      msgDone.map((event) =>
+        event.item.type === 'message' ? event.item.content[0]!.text : undefined,
+      ),
+    ).toEqual(['before', '-after'])
     const wsDone = doneItems.find((e) => e.item?.type === 'web_search_call')
     expect(wsDone).toBeDefined()
     expect(wsDone!.output_index).toBe(1)
 
-    // completed.output 包含 message + web_search_call，status completed
     const completed = events.find((e) => e.event === 'response.completed')!
       .data as ResponseCompletedEvent
     expect(completed.response.status).toBe('completed')
-    expect(completed.response.output.some((o) => o.type === 'message')).toBe(true)
-    expect(completed.response.output.some((o) => o.type === 'web_search_call')).toBe(true)
+    expect(completed.response.output.map((item) => item.type)).toEqual([
+      'message',
+      'web_search_call',
+      'message',
+    ])
   })
 
   // 非 apply_patch 的 custom tool（通过请求侧声明的 customToolNames 集合判别）也应渲染为 custom_tool_call。
@@ -1081,5 +1290,156 @@ describe('renderOpenAIResponseSSE', () => {
     expect(result.output.find((o) => o.type === 'tool_search_call')).toBeDefined()
     // 不应出现 function_call（被误拆回）
     expect(result.output.find((o) => o.type === 'function_call')).toBeUndefined()
+  })
+})
+
+describe('renderOpenAIResponsesRawSSE', () => {
+  it.each(['response.completed', 'response.incomplete', 'response.failed'] as const)(
+    'emits only the upstream %s terminal event while draining the stream',
+    async (terminalEvent) => {
+      async function* parts() {
+        yield {
+          type: 'raw',
+          rawValue: {
+            type: terminalEvent,
+            sequence_number: 4,
+            response: { id: 'resp_upstream' },
+          },
+        }
+        yield { type: 'error', error: new Error('error after terminal event') }
+      }
+
+      const events = await collectSSEFrames(
+        renderOpenAIResponsesRawSSE({
+          model: 'gpt-5',
+          stream: parts() as AsyncIterable<ProxyStreamPart>,
+        }),
+      )
+
+      expect(events.map((event) => event.event)).toEqual([terminalEvent])
+    },
+  )
+
+  it('reuses the upstream response id when synthesizing response.failed', async () => {
+    async function* parts() {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_upstream' },
+        },
+      }
+      yield { type: 'error', error: new Error('stream failed') }
+    }
+
+    const events = await collectSSEFrames(
+      renderOpenAIResponsesRawSSE({
+        model: 'gpt-5',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const failed = events.find((event) => event.event === 'response.failed')
+
+    expect(failed?.data).toMatchObject({
+      type: 'response.failed',
+      sequence_number: 1,
+      response: { id: 'resp_upstream', status: 'failed' },
+    })
+  })
+
+  it('synthesizes response.failed when normalized finish(other) has no raw terminal event', async () => {
+    async function* parts() {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_incomplete' },
+        },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {},
+      }
+    }
+
+    const events = await collectSSEFrames(
+      renderOpenAIResponsesRawSSE({
+        model: 'gpt-5',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(events.map((event) => event.event)).toEqual(['response.created', 'response.failed'])
+    expect(events.at(-1)?.data).toMatchObject({
+      type: 'response.failed',
+      sequence_number: 1,
+      response: {
+        id: 'resp_incomplete',
+        status: 'failed',
+        error: { message: expect.stringMatching(/incomplete stream/i) },
+      },
+    })
+  })
+
+  it('keeps raw response.completed terminal when followed by normalized finish(other)', async () => {
+    async function* parts() {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.completed',
+          sequence_number: 0,
+          response: { id: 'resp_completed', status: 'completed' },
+        },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {},
+      }
+    }
+
+    const events = await collectSSEFrames(
+      renderOpenAIResponsesRawSSE({
+        model: 'gpt-5',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(events.map((event) => event.event)).toEqual(['response.completed'])
+  })
+
+  it('drains a normalized error after raw response.failed without emitting another terminal', async () => {
+    let normalizedErrorConsumed = false
+    async function* parts() {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.failed',
+          sequence_number: 0,
+          response: { id: 'resp_failed', status: 'failed', error: { message: 'raw failure' } },
+        },
+      }
+      normalizedErrorConsumed = true
+      yield { type: 'error', error: new Error('normalized failure') }
+    }
+
+    const events = await collectSSEFrames(
+      renderOpenAIResponsesRawSSE({
+        model: 'gpt-5',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(normalizedErrorConsumed).toBe(true)
+    expect(events.map((event) => event.event)).toEqual(['response.failed'])
+    expect(events[0]?.data).toMatchObject({
+      type: 'response.failed',
+      response: { error: { message: 'raw failure' } },
+    })
   })
 })

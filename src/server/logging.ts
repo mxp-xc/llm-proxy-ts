@@ -39,6 +39,18 @@ const secretKeys = new Set([
 
 const errorSecretKeys = new Set(['responsebody', 'responseheaders', 'headers'])
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const secretAssignmentPattern = new RegExp(
+  `((?:["']?\\b(?:${[...secretKeys, ...errorSecretKeys]
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|')})\\b["']?)\\s*[:=]\\s*)(?:(?:Bearer|Basic)\\s+[^\\s,;]+|"[^"]*"|'[^']*'|[^\\s,;]+)`,
+  'gi',
+)
+
 const pinoRedactPaths = [...secretKeys, ...errorSecretKeys].flatMap((key) => [
   key,
   `*.${key}`,
@@ -106,6 +118,58 @@ function shouldRedactKey(key: string): boolean {
   return secretKeys.has(normalizedKey) || errorSecretKeys.has(normalizedKey)
 }
 
+function collectSensitiveStrings(
+  value: unknown,
+  seen: WeakSet<object>,
+  secrets: Set<string>,
+): void {
+  if (typeof value === 'string') {
+    if (value.length >= 4) {
+      secrets.add(value)
+      const authValue = /^(?:Bearer|Basic)\s+(.+)$/i.exec(value)?.[1]
+      if (authValue && authValue.length >= 4) secrets.add(authValue)
+    }
+    return
+  }
+  if (value === null || typeof value !== 'object' || seen.has(value)) return
+  seen.add(value)
+
+  if (value instanceof AggregateError) {
+    collectSensitiveStrings(value.errors, seen, secrets)
+  }
+  if (value instanceof Error && value.cause !== undefined) {
+    collectSensitiveStrings(value.cause, seen, secrets)
+  }
+  for (const child of Object.values(value)) {
+    collectSensitiveStrings(child, seen, secrets)
+  }
+}
+
+function collectSecrets(value: unknown, seen: WeakSet<object>, secrets: Set<string>): void {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return
+  seen.add(value)
+
+  if (value instanceof AggregateError) collectSecrets(value.errors, seen, secrets)
+  if (value instanceof Error && value.cause !== undefined) {
+    collectSecrets(value.cause, seen, secrets)
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (shouldRedactKey(key)) {
+      collectSensitiveStrings(child, new WeakSet(), secrets)
+    } else {
+      collectSecrets(child, seen, secrets)
+    }
+  }
+}
+
+function redactText(value: string, secrets: readonly string[]): string {
+  let result = value
+  for (const secret of secrets) {
+    result = result.split(secret).join(REDACTED)
+  }
+  return result.replace(secretAssignmentPattern, (_match, prefix: string) => `${prefix}${REDACTED}`)
+}
+
 function shiftedCNDate(date: Date): Date {
   return new Date(date.getTime() + CN_OFFSET_MS)
 }
@@ -132,9 +196,13 @@ export function getLogFileName(date: Date = new Date()): string {
   return `llm-proxy.${formatCNDate(date)}.log`
 }
 
-function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
+function redactValue(
+  value: unknown,
+  seen: WeakMap<object, unknown>,
+  secrets: readonly string[],
+): unknown {
   if (value === null || typeof value !== 'object') {
-    return value
+    return typeof value === 'string' ? redactText(value, secrets) : value
   }
 
   const existing = seen.get(value)
@@ -143,22 +211,32 @@ function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   }
 
   if (value instanceof Error) {
+    const isAggregateError = value instanceof AggregateError
     const result: Record<string, unknown> = {
       name: value.name,
-      message: value.message,
+      message: redactText(value.message, secrets),
     }
     seen.set(value, result)
     if (value.stack !== undefined) {
-      result.stack = value.stack
+      result.stack = redactText(value.stack, secrets)
     }
     if ('cause' in value && value.cause !== undefined) {
-      result.cause = redactValue(value.cause, seen)
+      result.cause = redactValue(value.cause, seen, secrets)
+    }
+    if (isAggregateError) {
+      result.errors = redactValue(value.errors, seen, secrets)
     }
     for (const [key, child] of Object.entries(value)) {
-      if (key === 'name' || key === 'message' || key === 'stack' || key === 'cause') {
+      if (
+        key === 'name' ||
+        key === 'message' ||
+        key === 'stack' ||
+        key === 'cause' ||
+        (isAggregateError && key === 'errors')
+      ) {
         continue
       }
-      setOwn(result, key, shouldRedactKey(key) ? REDACTED : redactValue(child, seen))
+      setOwn(result, key, shouldRedactKey(key) ? REDACTED : redactValue(child, seen, secrets))
     }
     return result
   }
@@ -167,7 +245,7 @@ function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
     const result: unknown[] = []
     seen.set(value, result)
     for (const item of value) {
-      result.push(redactValue(item, seen))
+      result.push(redactValue(item, seen, secrets))
     }
     return result
   }
@@ -179,13 +257,19 @@ function redactValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   const result: Record<string, unknown> = {}
   seen.set(value, result)
   for (const [key, child] of Object.entries(value)) {
-    setOwn(result, key, shouldRedactKey(key) ? REDACTED : redactValue(child, seen))
+    setOwn(result, key, shouldRedactKey(key) ? REDACTED : redactValue(child, seen, secrets))
   }
   return result
 }
 
 export function redact(value: unknown): unknown {
-  return redactValue(value, new WeakMap())
+  const secrets = new Set<string>()
+  collectSecrets(value, new WeakSet(), secrets)
+  return redactValue(
+    value,
+    new WeakMap(),
+    [...secrets].sort((left, right) => right.length - left.length),
+  )
 }
 
 const baseLogKeys = new Set(['level', 'time', 'hostname', 'name', 'msg'])

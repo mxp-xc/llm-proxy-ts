@@ -862,7 +862,7 @@ describe('messages endpoint', () => {
 // ── logging ─────────────────────────────────────────────────────
 
 describe('request logging', () => {
-  it('covers OAuth routes with request id and terminal logging', async () => {
+  it('mounts OAuth routes from tokenManager alone and covers them with request logging', async () => {
     const { logger, logs } = capturingPino()
     const settings = makeSettings({
       oauth: {
@@ -887,7 +887,6 @@ describe('request logging', () => {
       providerRegistry: stubRegistry,
       logger,
       tokenManager: {} as TokenManager,
-      nonce: 'nonce',
     })
 
     const response = await app.request('/oauth/login/oauth')
@@ -1234,6 +1233,85 @@ describe('request logging', () => {
       outcome: 'upstream_aborted',
     })
     expect(activeRequestRegistry.size()).toBe(0)
+  })
+
+  it('forwards incoming request cancellation to the upstream request controller', async () => {
+    const { logger, logs } = capturingPino()
+    const activeRequestRegistry = createActiveRequestRegistry()
+    let upstreamSignal: AbortSignal | undefined
+    let requestStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      requestStarted = resolve
+    })
+    const gateway = makeGateway({
+      async generate(input) {
+        upstreamSignal = input.abortSignal
+        requestStarted?.()
+        if (!upstreamSignal) throw new Error('expected abort signal')
+        const signal = upstreamSignal
+        return await new Promise<GenerateTextReturn>((_, reject) => {
+          const rejectOnAbort = () => reject(signal.reason)
+          if (signal.aborted) rejectOnAbort()
+          else signal.addEventListener('abort', rejectOnAbort, { once: true })
+        })
+      },
+    })
+    const app = createApp({
+      settings: { ...openrouterSettings, requestTimeoutMs: 25 },
+      gateway,
+      providerRegistry: stubRegistry,
+      activeRequestRegistry,
+      logger,
+    })
+    const incomingController = new AbortController()
+    const request = new Request('http://localhost/v1/chat/completions', {
+      ...chatRequestBody(),
+      signal: incomingController.signal,
+    })
+
+    const responsePromise = app.request(request)
+    await started
+    const disconnectReason = 'Client connection prematurely closed.'
+    incomingController.abort(disconnectReason)
+    const response = await responsePromise
+
+    expect(response.status).toBe(502)
+    expect(upstreamSignal).not.toBe(request.signal)
+    expect(upstreamSignal?.aborted).toBe(true)
+    expect(upstreamSignal?.reason).toBeInstanceOf(DOMException)
+    expect(upstreamSignal?.reason).toMatchObject({ name: 'AbortError' })
+    expect(activeRequestRegistry.size()).toBe(0)
+    expect(logs.find((entry) => entry.msg === 'request.completed')).toMatchObject({
+      outcome: 'client_cancelled',
+      terminalPart: 'abort',
+    })
+    expect(logs.map((entry) => entry.msg)).not.toContain('upstream request aborted')
+  })
+
+  it('releases request tracking when middleware setup throws a non-Error value', async () => {
+    const activeRequestRegistry = createActiveRequestRegistry()
+    const setupFailure = 'request logger failed'
+    const logger = {
+      info(_payload: unknown, message?: string) {
+        if (message === 'request.received') throw setupFailure
+      },
+      warn() {},
+      error() {},
+      fatal() {},
+      child() {
+        return logger
+      },
+    }
+    const app = createApp({
+      settings: openrouterSettings,
+      providerRegistry: stubRegistry,
+      activeRequestRegistry,
+      logger,
+    })
+
+    await expect(app.request('/v1/chat/completions', chatRequestBody())).rejects.toBe(setupFailure)
+    expect(activeRequestRegistry.size()).toBe(0)
+    await expect(activeRequestRegistry.drain()).resolves.toBeUndefined()
   })
 
   it('logs keySelection for generated responses', async () => {

@@ -56,7 +56,6 @@ export interface AppDependencies {
   gateway?: ModelGateway
   logger?: Logger
   tokenManager?: TokenManager
-  nonce?: string
   getAuthStatuses?: () => ProviderAuthStatus[]
   pluginRegistry?: PipelinePluginRegistry
   codexCatalogCache?: CodexCatalogCache

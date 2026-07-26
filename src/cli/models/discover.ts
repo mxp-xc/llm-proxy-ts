@@ -1,7 +1,28 @@
 import { createDirectFetch, createProxyFetch } from '../../providers/shared/provider-factory.js'
 import type { ModelLimit } from '../../providers/model-types.js'
-import type { OpenAIProviderConfig, Settings } from '../../config.js'
-import type { DiscoveredModelList } from '../../plugins/types.js'
+import { modelLimitSchema, type OpenAIProviderConfig, type Settings } from '../../config.js'
+import type { DiscoveredModel, DiscoveredModelList } from '../../plugins/types.js'
+import { z } from 'zod/v3'
+
+const discoveredModelsSchema = z.array(
+  z.object({
+    id: z.string().min(1),
+    description: z.string().optional(),
+    limit: modelLimitSchema.optional(),
+  }),
+)
+
+export function validateDiscoveredModels(models: unknown): DiscoveredModel[] {
+  const result = discoveredModelsSchema.safeParse(models)
+  if (!result.success) {
+    throw new Error(`Invalid discovered models: ${result.error.message}`, { cause: result.error })
+  }
+  return result.data.map((model) => ({
+    id: model.id,
+    ...(model.description !== undefined ? { description: model.description } : {}),
+    ...(model.limit !== undefined ? { limit: model.limit } : {}),
+  }))
+}
 
 /** 上游 /models 端点返回的单个模型对象（原始格式） */
 export interface UpstreamModelResponse {
@@ -164,9 +185,11 @@ export async function fetchUpstreamModels({
 /** 将 OpenAI 协议的模型列表转换为内部统一的 DiscoveredModel 格式 */
 export function openAIToDiscoveredModels(models: UpstreamModelResponse[]): DiscoveredModelList {
   return {
-    models: models.map((m) => {
-      const limit = extractLimit(m)
-      return limit ? { id: m.id, limit } : { id: m.id }
-    }),
+    models: validateDiscoveredModels(
+      models.map((m) => {
+        const limit = extractLimit(m)
+        return limit ? { id: m.id, limit } : { id: m.id }
+      }),
+    ),
   }
 }

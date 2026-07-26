@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile, rename } from 'node:fs/promises'
+import { chmod, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
 import type { OAuthToken, TokenStore } from './types.js'
@@ -61,8 +61,19 @@ export async function saveAuthFile(filePath: string, data: AuthFileData): Promis
   const tmpPath = join(dirname(filePath), `.auth.json.tmp-${process.pid}-${randomUUID()}`)
   const content = `${JSON.stringify(data, null, 2)}\n`
 
-  await writeFile(tmpPath, content, 'utf8')
-  await rename(tmpPath, filePath)
+  try {
+    await writeFile(tmpPath, content, { encoding: 'utf8', mode: 0o600 })
+    await rename(tmpPath, filePath)
+    if (process.platform !== 'win32') {
+      await chmod(filePath, 0o600)
+    }
+  } finally {
+    try {
+      await unlink(tmpPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
 }
 
 export async function updateAuthFile(
@@ -75,11 +86,13 @@ export async function updateAuthFile(
     const updated = await updater(current)
     await saveAuthFile(filePath, updated)
   })
-  const tracked = next.finally(() => {
-    if (authFileLocks.get(filePath) === tracked) {
-      authFileLocks.delete(filePath)
-    }
-  })
+  const tracked = next
+    .catch(() => undefined)
+    .finally(() => {
+      if (authFileLocks.get(filePath) === tracked) {
+        authFileLocks.delete(filePath)
+      }
+    })
   authFileLocks.set(filePath, tracked)
   await next
 }

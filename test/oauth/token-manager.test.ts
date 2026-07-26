@@ -56,6 +56,22 @@ function createCapturingLogger() {
   return { logger, info, error }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function tokenEndpointResponse(accessToken: string): Response {
+  return new Response(JSON.stringify(mockTokenResponse({ access_token: accessToken })), {
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 describe('token-manager', () => {
   describe('isTokenValid', () => {
     it('returns true for valid token', () => {
@@ -358,6 +374,27 @@ describe('token-manager', () => {
       expect(result.accessToken).toBe('new-access-token')
     })
 
+    it('preserves refresh token and scope when refresh response omits them', async () => {
+      const expiredToken = makeExpiredToken({ refreshToken: 'old-refresh', scope: 'old-scope' })
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve(mockTokenResponse({ refresh_token: undefined, scope: undefined })),
+      })
+      const persistence = createMemoryPersistence({ p: expiredToken })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const result = await manager.ensureValidToken('p', authCodeConfig)
+
+      expect(result.refreshToken).toBe('old-refresh')
+      expect(result.scope).toBe('old-scope')
+      expect((await persistence.load())['p']).toMatchObject({
+        refreshToken: 'old-refresh',
+        scope: 'old-scope',
+      })
+    })
+
     it('ensureValidToken fetches new token for client_credentials', async () => {
       const mockFetch = vi.fn().mockResolvedValue({
         ok: true,
@@ -371,6 +408,92 @@ describe('token-manager', () => {
       const result = await manager.ensureValidToken('p', clientCredentialsConfig)
       expect(result.accessToken).toBe('new-access-token')
       expect(result.refreshToken).toBeUndefined()
+    })
+
+    it('passes cancellation to the token endpoint and classifies an aborted refresh', async () => {
+      let fetchSignal: AbortSignal | undefined
+      let markFetchStarted: (() => void) | undefined
+      const fetchStarted = new Promise<void>((resolve) => {
+        markFetchStarted = resolve
+      })
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+        fetchSignal = init?.signal ?? undefined
+        markFetchStarted?.()
+        return new Promise<Response>((_resolve, reject) => {
+          fetchSignal?.addEventListener('abort', () => reject(fetchSignal?.reason), { once: true })
+        })
+      })
+      const persistence = createMemoryPersistence()
+      const { logger, info, error } = createCapturingLogger()
+      const manager = new TokenManager(persistence, mockFetch, logger)
+      await manager.load()
+      const controller = new AbortController()
+      const abortError = new Error('server shutting down')
+
+      const refresh = manager.ensureValidToken('p', clientCredentialsConfig, controller.signal)
+      const refreshFailure = expect(refresh).rejects.toBe(abortError)
+      await fetchStarted
+      controller.abort(abortError)
+
+      await refreshFailure
+      expect(fetchSignal).not.toBe(controller.signal)
+      expect(fetchSignal?.aborted).toBe(true)
+      expect(fetchSignal?.reason).toBe(abortError)
+      expect(info.map((entry) => entry.msg)).toEqual([
+        'oauth.refresh.started',
+        'oauth.refresh.aborted',
+      ])
+      expect(error).toHaveLength(0)
+    })
+
+    it('cancels one refresh waiter without aborting the shared refresh', async () => {
+      const tokenEndpoint = createDeferred<Response>()
+      let fetchSignal: AbortSignal | undefined
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+        fetchSignal = init?.signal ?? undefined
+        return tokenEndpoint.promise
+      })
+      const manager = new TokenManager(createMemoryPersistence(), mockFetch)
+      await manager.load()
+      const controller = new AbortController()
+
+      const cancelledWaiter = manager.ensureValidToken(
+        'p',
+        clientCredentialsConfig,
+        controller.signal,
+      )
+      const survivingWaiter = manager.ensureValidToken('p', clientCredentialsConfig)
+      const abortError = new Error('caller cancelled')
+      controller.abort(abortError)
+      tokenEndpoint.resolve(tokenEndpointResponse('shared-token'))
+
+      await expect(cancelledWaiter).rejects.toBe(abortError)
+      await expect(survivingWaiter).resolves.toMatchObject({ accessToken: 'shared-token' })
+      expect(fetchSignal?.aborted).toBe(false)
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('waits for an aborted refresh operation that ignores cancellation', async () => {
+      const tokenEndpoint = createDeferred<Response>()
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockReturnValue(tokenEndpoint.promise)
+      const manager = new TokenManager(createMemoryPersistence(), mockFetch)
+      await manager.load()
+      const controller = new AbortController()
+      const abortError = new Error('caller cancelled')
+
+      const refresh = manager.ensureValidToken('p', clientCredentialsConfig, controller.signal)
+      controller.abort(abortError)
+      await expect(refresh).rejects.toBe(abortError)
+      let drained = false
+      const drain = manager.waitForPendingRefreshes().then(() => {
+        drained = true
+      })
+      await Promise.resolve()
+
+      expect(drained).toBe(false)
+      tokenEndpoint.resolve(tokenEndpointResponse('late-token'))
+      await drain
+      expect(drained).toBe(true)
     })
 
     it('ensureValidToken throws OAuthError for auth_code without token', async () => {
@@ -456,6 +579,416 @@ describe('token-manager', () => {
         msg: 'oauth.refresh.succeeded',
       })
       expect(error).toHaveLength(0)
+    })
+
+    it('serializes store mutations across concurrent provider refreshes', async () => {
+      let stored = {
+        a: makeExpiredToken({ accessToken: 'old-a', refreshToken: 'refresh-a' }),
+        b: makeExpiredToken({ accessToken: 'old-b', refreshToken: 'refresh-b' }),
+      }
+      const saves: Array<typeof stored> = []
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: typeof stored) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          stored = structuredClone(next)
+          saves.push(structuredClone(next))
+        },
+      }
+      const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+        const refreshToken = new URLSearchParams(String(init?.body)).get('refresh_token')
+        return {
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              mockTokenResponse({
+                access_token: refreshToken === stored.a.refreshToken ? 'new-a' : 'new-b',
+              }),
+            ),
+        }
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      await Promise.all([
+        manager.ensureValidToken('a', authCodeConfig),
+        manager.ensureValidToken('b', authCodeConfig),
+      ])
+
+      expect(saves).toHaveLength(2)
+      expect(stored.a.accessToken).toBe('new-a')
+      expect(stored.b.accessToken).toBe('new-b')
+    })
+
+    it('serializes authorization exchange with a concurrent provider refresh', async () => {
+      let stored = { a: makeExpiredToken({ refreshToken: 'refresh-a' }) }
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: typeof stored) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type')
+        return {
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              mockTokenResponse({
+                access_token: grantType === 'refresh_token' ? 'refreshed-a' : 'exchanged-b',
+              }),
+            ),
+        }
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      await Promise.all([
+        manager.ensureValidToken('a', authCodeConfig),
+        manager.exchangeCode(
+          'b',
+          authCodeConfig,
+          'auth-code',
+          'http://localhost:8000/oauth/callback',
+        ),
+      ])
+
+      expect(stored.a.accessToken).toBe('refreshed-a')
+      expect((stored as Record<string, OAuthToken>)['b']!.accessToken).toBe('exchanged-b')
+    })
+
+    it('does not refresh an old token while a newer authorization exchange is pending', async () => {
+      const exchangeEndpoint = createDeferred<Response>()
+      const grantTypes: string[] = []
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type') ?? 'unknown'
+        grantTypes.push(grantType)
+        return grantType === 'authorization_code'
+          ? exchangeEndpoint.promise
+          : Promise.resolve(tokenEndpointResponse('stale-refresh'))
+      })
+      const persistence = createMemoryPersistence({
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'old-refresh' }),
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const exchange = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'auth-code',
+        'http://localhost:8000/oauth/callback',
+      )
+      const tokenRequest = manager.ensureValidToken('p', authCodeConfig)
+      await Promise.resolve()
+
+      expect(grantTypes).toEqual(['authorization_code'])
+      exchangeEndpoint.resolve(tokenEndpointResponse('exchanged'))
+      await expect(exchange).resolves.toMatchObject({ accessToken: 'exchanged' })
+      await expect(tokenRequest).resolves.toMatchObject({ accessToken: 'exchanged' })
+      expect(grantTypes).toEqual(['authorization_code'])
+      expect((await persistence.load())['p']?.accessToken).toBe('exchanged')
+    })
+
+    it('keeps waiting for an older exchange after a newer exchange fails', async () => {
+      const firstExchangeEndpoint = createDeferred<Response>()
+      const grantTypes: string[] = []
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const body = new URLSearchParams(String(init?.body))
+        const grantType = body.get('grant_type') ?? 'unknown'
+        grantTypes.push(grantType)
+        if (grantType === 'refresh_token') {
+          return Promise.resolve(tokenEndpointResponse('stale-refresh'))
+        }
+        if (body.get('code') === 'first-code') return firstExchangeEndpoint.promise
+        return Promise.resolve(new Response(null, { status: 400 }))
+      })
+      const persistence = createMemoryPersistence({
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'old-refresh' }),
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const firstExchange = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'first-code',
+        'http://localhost:8000/oauth/callback',
+      )
+      await expect(
+        manager.exchangeCode(
+          'p',
+          authCodeConfig,
+          'second-code',
+          'http://localhost:8000/oauth/callback',
+        ),
+      ).rejects.toThrow('Authorization code exchange failed: HTTP 400')
+
+      const tokenRequest = manager.ensureValidToken('p', authCodeConfig)
+      await Promise.resolve()
+
+      expect(grantTypes).toEqual(['authorization_code', 'authorization_code'])
+      firstExchangeEndpoint.resolve(tokenEndpointResponse('first-exchange'))
+      await expect(firstExchange).resolves.toMatchObject({ accessToken: 'first-exchange' })
+      await expect(tokenRequest).resolves.toMatchObject({ accessToken: 'first-exchange' })
+      expect(grantTypes).toEqual(['authorization_code', 'authorization_code'])
+      expect((await persistence.load())['p']?.accessToken).toBe('first-exchange')
+    })
+
+    it('stops blocking token reads when a cancelled exchange ignores its signal', async () => {
+      const cancelledExchangeEndpoint = createDeferred<Response>()
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const body = new URLSearchParams(String(init?.body))
+        return body.get('code') === 'cancelled-code'
+          ? cancelledExchangeEndpoint.promise
+          : Promise.resolve(tokenEndpointResponse('replacement-exchange'))
+      })
+      const persistence = createMemoryPersistence({
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'old-refresh' }),
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+      const controller = new AbortController()
+      const abortError = new DOMException('client disconnected', 'AbortError')
+
+      const cancelledExchange = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'cancelled-code',
+        'http://localhost:8000/oauth/callback',
+        controller.signal,
+      )
+      controller.abort(abortError)
+      await expect(cancelledExchange).rejects.toBe(abortError)
+      await expect(
+        manager.exchangeCode(
+          'p',
+          authCodeConfig,
+          'replacement-code',
+          'http://localhost:8000/oauth/callback',
+        ),
+      ).resolves.toMatchObject({ accessToken: 'replacement-exchange' })
+
+      await expect(manager.ensureValidToken('p', authCodeConfig)).resolves.toMatchObject({
+        accessToken: 'replacement-exchange',
+      })
+      cancelledExchangeEndpoint.resolve(tokenEndpointResponse('cancelled-exchange'))
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect((await persistence.load())['p']?.accessToken).toBe('replacement-exchange')
+    })
+
+    it('keeps a later exchange when the older refresh token endpoint completes last', async () => {
+      let stored: Record<string, OAuthToken> = {
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'refresh-p' }),
+      }
+      const refreshEndpoint = createDeferred<Response>()
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: Record<string, OAuthToken>) {
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type')
+        return grantType === 'refresh_token'
+          ? refreshEndpoint.promise
+          : Promise.resolve(tokenEndpointResponse('exchanged'))
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const refreshPromise = manager.ensureValidToken('p', authCodeConfig)
+      await expect(
+        manager.exchangeCode(
+          'p',
+          authCodeConfig,
+          'auth-code',
+          'http://localhost:8000/oauth/callback',
+        ),
+      ).resolves.toMatchObject({ accessToken: 'exchanged' })
+
+      refreshEndpoint.resolve(tokenEndpointResponse('refreshed'))
+      await refreshPromise
+
+      expect(stored['p']!.accessToken).toBe('exchanged')
+    })
+
+    it('keeps a later exchange when the older refresh persistence completes first', async () => {
+      let stored: Record<string, OAuthToken> = {
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'refresh-p' }),
+      }
+      const refreshSaveStarted = createDeferred<void>()
+      const finishRefreshSave = createDeferred<void>()
+      const exchangeRequested = createDeferred<void>()
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: Record<string, OAuthToken>) {
+          if (next['p']?.accessToken === 'refreshed') {
+            refreshSaveStarted.resolve()
+            await finishRefreshSave.promise
+          }
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type')
+        if (grantType === 'authorization_code') exchangeRequested.resolve()
+        return Promise.resolve(
+          tokenEndpointResponse(grantType === 'refresh_token' ? 'refreshed' : 'exchanged'),
+        )
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const refreshPromise = manager.ensureValidToken('p', authCodeConfig)
+      await refreshSaveStarted.promise
+      const exchangePromise = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'auth-code',
+        'http://localhost:8000/oauth/callback',
+      )
+      await exchangeRequested.promise
+
+      finishRefreshSave.resolve()
+      await Promise.all([refreshPromise, exchangePromise])
+
+      expect(stored['p']!.accessToken).toBe('exchanged')
+    })
+
+    it('allows an older refresh to persist when the later exchange persistence fails', async () => {
+      let stored: Record<string, OAuthToken> = {
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'refresh-p' }),
+      }
+      const refreshEndpoint = createDeferred<Response>()
+      const exchangeSaveStarted = createDeferred<void>()
+      const finishExchangeSave = createDeferred<void>()
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: Record<string, OAuthToken>) {
+          if (next['p']?.accessToken === 'exchanged') {
+            exchangeSaveStarted.resolve()
+            await finishExchangeSave.promise
+          }
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type')
+        return grantType === 'refresh_token'
+          ? refreshEndpoint.promise
+          : Promise.resolve(tokenEndpointResponse('exchanged'))
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const refreshPromise = manager.ensureValidToken('p', authCodeConfig)
+      const exchangePromise = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'auth-code',
+        'http://localhost:8000/oauth/callback',
+      )
+      await exchangeSaveStarted.promise
+      refreshEndpoint.resolve(tokenEndpointResponse('refreshed'))
+
+      const persistError = new Error('exchange save failed')
+      const exchangeFailure = expect(exchangePromise).rejects.toBe(persistError)
+      finishExchangeSave.reject(persistError)
+      await exchangeFailure
+
+      await expect(refreshPromise).resolves.toMatchObject({ accessToken: 'refreshed' })
+      expect(stored['p']!.accessToken).toBe('refreshed')
+    })
+
+    it('returns the persisted exchange token to an older refresh caller', async () => {
+      let stored: Record<string, OAuthToken> = {
+        p: makeExpiredToken({ accessToken: 'expired', refreshToken: 'refresh-p' }),
+      }
+      const refreshEndpoint = createDeferred<Response>()
+      const exchangeSaveStarted = createDeferred<void>()
+      const finishExchangeSave = createDeferred<void>()
+      const persistence = {
+        async load() {
+          return structuredClone(stored)
+        },
+        async save(next: Record<string, OAuthToken>) {
+          if (next['p']?.accessToken === 'exchanged') {
+            exchangeSaveStarted.resolve()
+            await finishExchangeSave.promise
+          }
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn<typeof globalThis.fetch>().mockImplementation((_url, init) => {
+        const grantType = new URLSearchParams(String(init?.body)).get('grant_type')
+        return grantType === 'refresh_token'
+          ? refreshEndpoint.promise
+          : Promise.resolve(tokenEndpointResponse('exchanged'))
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      const refreshPromise = manager.ensureValidToken('p', authCodeConfig)
+      const joinedRefreshPromise = manager.ensureValidToken('p', authCodeConfig)
+      const exchangePromise = manager.exchangeCode(
+        'p',
+        authCodeConfig,
+        'auth-code',
+        'http://localhost:8000/oauth/callback',
+      )
+      await exchangeSaveStarted.promise
+
+      refreshEndpoint.resolve(tokenEndpointResponse('refreshed'))
+      finishExchangeSave.resolve()
+      await expect(exchangePromise).resolves.toMatchObject({ accessToken: 'exchanged' })
+
+      await expect(Promise.all([refreshPromise, joinedRefreshPromise])).resolves.toMatchObject([
+        { accessToken: 'exchanged' },
+        { accessToken: 'exchanged' },
+      ])
+      expect(stored['p']!.accessToken).toBe('exchanged')
+    })
+
+    it('continues store mutations after a persistence failure', async () => {
+      let stored = {}
+      let saveCount = 0
+      const persistence = {
+        async load() {
+          return stored
+        },
+        async save(next: typeof stored) {
+          saveCount++
+          if (saveCount === 1) throw new Error('first save failed')
+          stored = structuredClone(next)
+        },
+      }
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockTokenResponse({ refresh_token: undefined })),
+      })
+      const manager = new TokenManager(persistence, mockFetch)
+      await manager.load()
+
+      await expect(manager.ensureValidToken('a', clientCredentialsConfig)).rejects.toThrow(
+        'first save failed',
+      )
+      await expect(manager.ensureValidToken('b', clientCredentialsConfig)).resolves.toMatchObject({
+        accessToken: 'new-access-token',
+      })
+      expect(stored).toHaveProperty('b')
+      expect(stored).not.toHaveProperty('a')
     })
 
     it('logs persistence failures with the refresh operation context', async () => {

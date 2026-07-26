@@ -120,6 +120,180 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     return { logger, error, warn }
   }
 
+  it.each([false, true])(
+    'restores native client tool-search history independently of filtered input recovery (%s)',
+    (restoreFilteredInputItems) => {
+      const rawToolSearchCall = {
+        type: 'tool_search_call',
+        id: 'tsc_1',
+        call_id: 'call_1',
+        execution: 'client',
+        status: 'completed',
+        arguments: { query: 'browser tools' },
+        opaque_call_field: 'preserve-call',
+      }
+      const rawToolSearchOutput = {
+        type: 'tool_search_output',
+        id: 'tso_1',
+        call_id: 'call_1',
+        execution: 'client',
+        status: 'completed',
+        tools: [
+          {
+            type: 'namespace',
+            name: 'browser',
+            tools: [{ type: 'function', name: 'open_page' }],
+          },
+        ],
+        opaque_output_field: 'preserve-output',
+      }
+
+      const merged = mergeOpenAIResponsesRequestBody(
+        {
+          model: 'gpt-5',
+          input: [
+            {
+              type: 'tool_search_call',
+              id: 'call_1',
+              call_id: null,
+              execution: 'server',
+              status: 'completed',
+              arguments: { query: 'browser tools' },
+            },
+            {
+              type: 'function_call_output',
+              call_id: 'call_1',
+              output: JSON.stringify(rawToolSearchOutput.tools),
+            },
+          ],
+        },
+        {
+          model: 'route/model',
+          input: [rawToolSearchCall, rawToolSearchOutput],
+        },
+        { restoreFilteredInputItems },
+      )
+
+      expect(merged.input).toEqual([rawToolSearchCall, rawToolSearchOutput])
+    },
+  )
+
+  it('distinguishes ordinary and tool-search outputs with the same repeated identity', () => {
+    const firstSDKFunctionOutput = {
+      type: 'function_call_output',
+      call_id: 'duplicate_call',
+      output: 'first sdk function output',
+    }
+    const secondSDKFunctionOutput = {
+      type: 'function_call_output',
+      call_id: 'duplicate_call',
+      output: 'second sdk function output',
+    }
+    const firstRawToolSearchOutput = {
+      type: 'tool_search_output',
+      id: 'tso_1',
+      call_id: 'duplicate_call',
+      tools: [{ type: 'function', name: 'first_tool' }],
+    }
+    const secondRawToolSearchOutput = {
+      type: 'tool_search_output',
+      id: 'tso_2',
+      call_id: 'duplicate_call',
+      tools: [{ type: 'function', name: 'second_tool' }],
+    }
+
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [
+          firstSDKFunctionOutput,
+          { type: 'function_call_output', call_id: 'duplicate_call', output: 'mapped first' },
+          { type: 'function_call_output', call_id: 'duplicate_call', output: 'mapped second' },
+          secondSDKFunctionOutput,
+        ],
+      },
+      {
+        model: 'route/model',
+        input: [
+          {
+            type: 'function_call_output',
+            call_id: 'duplicate_call',
+            output: 'first raw function output',
+          },
+          firstRawToolSearchOutput,
+          secondRawToolSearchOutput,
+          {
+            type: 'function_call_output',
+            call_id: 'duplicate_call',
+            output: 'second raw function output',
+          },
+        ],
+      },
+    )
+
+    expect(merged.input).toEqual([
+      firstSDKFunctionOutput,
+      firstRawToolSearchOutput,
+      secondRawToolSearchOutput,
+      secondSDKFunctionOutput,
+    ])
+  })
+
+  it('keeps SDK item references instead of restoring full tool-search outputs', () => {
+    const itemReference = { type: 'item_reference', id: 'call_1' }
+    const merged = mergeOpenAIResponsesRequestBody(
+      { model: 'gpt-5', input: [itemReference] },
+      {
+        model: 'route/model',
+        input: [
+          {
+            type: 'tool_search_output',
+            id: 'tso_1',
+            call_id: 'call_1',
+            tools: [{ type: 'function', name: 'open_page' }],
+          },
+        ],
+      },
+    )
+
+    expect(merged.input).toEqual([itemReference])
+  })
+
+  it('restores opaque fields on SDK-native tool-search outputs and leaves unmatched items intact', () => {
+    const rawToolSearchOutput = {
+      type: 'tool_search_output',
+      id: 'tso_1',
+      call_id: 'call_1',
+      execution: 'client',
+      tools: [{ type: 'function', name: 'open_page' }],
+      opaque_output_field: 'preserve-output',
+    }
+    const unmatchedSDKOutput = {
+      type: 'tool_search_output',
+      call_id: 'unmatched_call',
+      execution: 'client',
+      tools: [],
+    }
+    const merged = mergeOpenAIResponsesRequestBody(
+      {
+        model: 'gpt-5',
+        input: [
+          {
+            type: 'tool_search_output',
+            call_id: 'call_1',
+            execution: 'client',
+            status: 'completed',
+            tools: rawToolSearchOutput.tools,
+          },
+          unmatchedSDKOutput,
+        ],
+      },
+      { model: 'route/model', input: [rawToolSearchOutput] },
+    )
+
+    expect(merged.input).toEqual([rawToolSearchOutput, unmatchedSDKOutput])
+  })
+
   it('does not re-add raw instructions when the SDK input already contains them', () => {
     const merged = mergeOpenAIResponsesRequestBody(
       {
@@ -356,6 +530,11 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       call_id: 'tool_search_1',
       output: 'mapped tool search output',
     }
+    const rawToolSearchOutput = {
+      type: 'tool_search_output',
+      id: 'tool_search_1',
+      tools: [],
+    }
     const merged = mergeOpenAIResponsesRequestBody(
       {
         model: 'gpt-5',
@@ -380,7 +559,7 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
             content: [inputFile],
             opaque_message_field: 'preserve-system-file',
           },
-          { type: 'tool_search_output', id: 'tool_search_1', tools: [] },
+          rawToolSearchOutput,
           agentMessage,
           functionCall,
           {
@@ -415,7 +594,7 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
         content: [inputFile],
         opaque_message_field: 'preserve-system-file',
       },
-      mappedToolSearchOutput,
+      rawToolSearchOutput,
       agentMessage,
       functionCall,
       {
@@ -557,7 +736,12 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       { restoreFilteredInputItems: true },
     )
 
-    expect(merged.input).toEqual([leadingSystem, firstSDKCall, middleDeveloper, secondSDKCall])
+    expect(merged.input).toEqual([
+      leadingSystem,
+      { type: 'tool_search_call', call_id: 'tool_search_1', arguments: {} },
+      middleDeveloper,
+      { type: 'tool_search_call', id: 'tool_search_2', arguments: {} },
+    ])
   })
 
   it('keeps a file-only system message before a tool search output whose ID is rewritten', () => {
@@ -588,7 +772,11 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
       { restoreFilteredInputItems: true },
     )
 
-    expect(merged.input).toEqual([leadingSystem, sdkToolSearchOutput, userMessage])
+    expect(merged.input).toEqual([
+      leadingSystem,
+      { type: 'tool_search_output', id: 'tool_search_1', tools: [] },
+      userMessage,
+    ])
   })
 
   it('matches duplicate stored item references in raw input order', () => {
@@ -1384,6 +1572,146 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
     expect(res.status).toBe(200)
     expect(JSON.stringify(warnings)).not.toContain('Non-OpenAI reasoning parts')
   })
+
+  it.each([false, true])(
+    'preserves native client tool-search history in the final upstream body (stream=%s)',
+    async (stream) => {
+      const settings = makeOpenaiSettings()
+      let forwardedBody: Record<string, unknown> | undefined
+      vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+        forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        if (!stream) return Response.json(makeRawResponseBody())
+
+        const events = [
+          {
+            type: 'response.created',
+            sequence_number: 0,
+            response: {
+              id: 'resp_stream',
+              object: 'response',
+              status: 'in_progress',
+              output: [],
+            },
+          },
+          {
+            type: 'response.completed',
+            sequence_number: 1,
+            response: makeRawResponseBody(),
+          },
+        ]
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(''),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      })
+      const providerRegistry = await createProviderRegistry(settings)
+      const app = createApp({ settings, providerRegistry })
+      const additionalTools = {
+        type: 'additional_tools',
+        role: 'developer',
+        tools: [
+          {
+            type: 'tool_search',
+            execution: 'client',
+            description: 'Discover browser tools',
+            parameters: {
+              type: 'object',
+              properties: { query: { type: 'string' } },
+            },
+          },
+          {
+            type: 'function',
+            name: 'inspect',
+            parameters: { type: 'object', properties: {} },
+          },
+        ],
+      }
+      const functionOutput = {
+        type: 'function_call_output',
+        call_id: 'call_function',
+        output: 'ordinary function output',
+      }
+      const toolSearchCall = {
+        type: 'tool_search_call',
+        id: 'tsc_1',
+        call_id: 'call_tool_search',
+        execution: 'client',
+        status: 'completed',
+        arguments: { query: 'browser' },
+        opaque_call_field: 'preserve-call',
+      }
+      const toolSearchOutput = {
+        type: 'tool_search_output',
+        id: 'tso_1',
+        call_id: 'call_tool_search',
+        execution: 'client',
+        status: 'completed',
+        tools: [
+          {
+            type: 'namespace',
+            name: 'browser',
+            description: 'Browser automation',
+            tools: [
+              {
+                type: 'function',
+                name: 'open_page',
+                parameters: { type: 'object', properties: {} },
+              },
+            ],
+          },
+        ],
+        opaque_output_field: 'preserve-output',
+      }
+      const rawInput = [
+        additionalTools,
+        { type: 'message', role: 'user', content: 'continue' },
+        {
+          type: 'function_call',
+          id: 'fc_1',
+          call_id: 'call_function',
+          name: 'inspect',
+          arguments: '{}',
+        },
+        functionOutput,
+        toolSearchCall,
+        toolSearchOutput,
+      ]
+
+      const res = await app.request('/codex/v1/responses', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'openai/chat', input: rawInput, stream }),
+      })
+
+      expect(res.status).toBe(200)
+      await res.text()
+      expect(forwardedBody?.stream).toBe(stream)
+      expect(forwardedBody).not.toHaveProperty('tools')
+      expect((forwardedBody?.input as unknown[])[0]).toEqual(additionalTools)
+      expect(
+        (forwardedBody?.input as Array<Record<string, unknown>>).find(
+          (item) => item.type === 'function_call_output' && item.call_id === 'call_function',
+        ),
+      ).toEqual(functionOutput)
+      expect(
+        (forwardedBody?.input as Array<Record<string, unknown>>).find(
+          (item) => item.type === 'tool_search_call' && item.call_id === 'call_tool_search',
+        ),
+      ).toEqual(toolSearchCall)
+      expect(
+        (forwardedBody?.input as Array<Record<string, unknown>>).find(
+          (item) => item.type === 'tool_search_output' && item.call_id === 'call_tool_search',
+        ),
+      ).toEqual(toolSearchOutput)
+      expect(
+        (forwardedBody?.input as Array<Record<string, unknown>>).some(
+          (item) => item.type === 'function_call_output' && item.call_id === 'call_tool_search',
+        ),
+      ).toBe(false)
+    },
+  )
 
   it('preserves positional additional_tools in the final non-streaming SDK request body', async () => {
     const settings = makeOpenaiSettings()

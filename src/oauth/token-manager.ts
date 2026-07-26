@@ -64,6 +64,7 @@ export async function refreshAccessToken(
   config: OAuthConfig,
   refreshToken: string,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -77,10 +78,12 @@ export async function refreshAccessToken(
   }
 
   try {
+    signal?.throwIfAborted()
     const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
+      ...(signal ? { signal } : {}),
     })
 
     if (!response.ok) {
@@ -92,6 +95,7 @@ export async function refreshAccessToken(
       'refresh_failed',
     )
   } catch (error) {
+    if (signal?.aborted) signal.throwIfAborted()
     if (error instanceof OAuthError) throw error
     throw new OAuthError('refresh_failed', `Token refresh failed: ${String(error)}`, {
       cause: error,
@@ -105,6 +109,7 @@ export async function refreshAccessToken(
 export async function fetchClientCredentialsToken(
   config: OAuthConfig,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
@@ -117,10 +122,12 @@ export async function fetchClientCredentialsToken(
   }
 
   try {
+    signal?.throwIfAborted()
     const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
+      ...(signal ? { signal } : {}),
     })
 
     if (!response.ok) {
@@ -139,6 +146,7 @@ export async function fetchClientCredentialsToken(
       'refresh_failed',
     )
   } catch (error) {
+    if (signal?.aborted) signal.throwIfAborted()
     if (error instanceof OAuthError) throw error
     throw new OAuthError(
       'refresh_failed',
@@ -156,6 +164,7 @@ export async function exchangeAuthorizationCode(
   code: string,
   redirectUri: string,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  signal?: AbortSignal,
 ): Promise<OAuthToken> {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -166,10 +175,12 @@ export async function exchangeAuthorizationCode(
   })
 
   try {
+    signal?.throwIfAborted()
     const response = await fetchFn(config.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
+      ...(signal ? { signal } : {}),
     })
 
     if (!response.ok) {
@@ -188,6 +199,7 @@ export async function exchangeAuthorizationCode(
       'exchange_failed',
     )
   } catch (error) {
+    if (signal?.aborted) signal.throwIfAborted()
     if (error instanceof OAuthError) throw error
     throw new OAuthError(
       'exchange_failed',
@@ -253,6 +265,11 @@ function parseTokenResponse(
 export class TokenManager {
   private store: TokenStore = {}
   private refreshLocks = new Map<string, RefreshOperation>()
+  private exchangeLocks = new Map<string, Set<Promise<OAuthToken>>>()
+  private pendingRefreshOperations = new Set<Promise<OAuthToken>>()
+  private storeMutationQueue: Promise<void> = Promise.resolve()
+  private nextProviderGeneration = new Map<string, number>()
+  private persistedProviderGeneration = new Map<string, number>()
 
   constructor(
     private persistence: TokenPersistence,
@@ -305,7 +322,17 @@ export class TokenManager {
    * - client_credentials 则重新获取
    * - 否则抛出 OAuthError('auth_required')
    */
-  async ensureValidToken(providerName: string, config: OAuthConfig): Promise<OAuthToken> {
+  async ensureValidToken(
+    providerName: string,
+    config: OAuthConfig,
+    signal?: AbortSignal,
+  ): Promise<OAuthToken> {
+    signal?.throwIfAborted()
+    const pendingExchanges = this.exchangeLocks.get(providerName)
+    if (pendingExchanges?.size) {
+      await waitForOperation(Promise.allSettled([...pendingExchanges]), signal)
+      return this.ensureValidToken(providerName, config, signal)
+    }
     const token = this.store[providerName]
 
     // 有效 token 直接返回
@@ -317,7 +344,7 @@ export class TokenManager {
     const existing = this.refreshLocks.get(providerName)
     if (existing) {
       existing.joinedRequests++
-      return existing.promise
+      return this.waitForRefresh(providerName, existing, signal)
     }
 
     const flow = resolveRefreshFlow(config, token)
@@ -328,15 +355,30 @@ export class TokenManager {
       )
     }
 
-    const operation = { joinedRequests: 0 } as RefreshOperation
-    operation.promise = this.doRefresh(providerName, config, token, flow, operation)
-    this.refreshLocks.set(providerName, operation)
-
-    try {
-      return await operation.promise
-    } finally {
-      this.refreshLocks.delete(providerName)
+    const operation: RefreshOperation = {
+      controller: new AbortController(),
+      joinedRequests: 0,
+      activeWaiters: 0,
+      settled: false,
+      promise: Promise.resolve(undefined as unknown as OAuthToken),
     }
+    const generation = this.beginProviderOperation(providerName)
+    operation.promise = this.doRefresh(
+      providerName,
+      config,
+      token,
+      flow,
+      operation,
+      generation,
+      operation.controller.signal,
+    )
+    this.refreshLocks.set(providerName, operation)
+    this.pendingRefreshOperations.add(operation.promise)
+    void operation.promise.then(
+      () => this.finishRefreshOperation(providerName, operation),
+      () => this.finishRefreshOperation(providerName, operation),
+    )
+    return this.waitForRefresh(providerName, operation, signal)
   }
 
   /**
@@ -347,11 +389,92 @@ export class TokenManager {
     config: OAuthConfig,
     code: string,
     redirectUri: string,
+    signal?: AbortSignal,
   ): Promise<OAuthToken> {
-    const token = await exchangeAuthorizationCode(config, code, redirectUri, this.fetchFn)
-    this.store = { ...this.store, [providerName]: token }
-    await this.persistence.save(this.store)
-    return token
+    signal?.throwIfAborted()
+    const generation = this.beginProviderOperation(providerName)
+    const operation = waitForOperation(
+      this.doExchangeCode(providerName, config, code, redirectUri, generation, signal),
+      signal,
+    )
+    let operations = this.exchangeLocks.get(providerName)
+    if (!operations) {
+      operations = new Set()
+      this.exchangeLocks.set(providerName, operations)
+    }
+    operations.add(operation)
+    void operation.then(
+      () => this.finishExchangeOperation(providerName, operation),
+      () => this.finishExchangeOperation(providerName, operation),
+    )
+    return operation
+  }
+
+  async waitForPendingRefreshes(): Promise<void> {
+    while (this.pendingRefreshOperations.size > 0) {
+      await Promise.allSettled(this.pendingRefreshOperations)
+    }
+  }
+
+  private async waitForRefresh(
+    providerName: string,
+    operation: RefreshOperation,
+    signal?: AbortSignal,
+  ): Promise<OAuthToken> {
+    signal?.throwIfAborted()
+    operation.activeWaiters++
+    let onAbort: (() => void) | undefined
+    const abortPromise = signal
+      ? new Promise<never>((_, reject) => {
+          onAbort = () => reject(signal.reason)
+          signal.addEventListener('abort', onAbort, { once: true })
+          if (signal.aborted) onAbort()
+        })
+      : undefined
+
+    try {
+      return await (abortPromise
+        ? Promise.race([operation.promise, abortPromise])
+        : operation.promise)
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort)
+      operation.activeWaiters--
+      if (operation.activeWaiters === 0 && !operation.settled) {
+        if (this.refreshLocks.get(providerName) === operation) {
+          this.refreshLocks.delete(providerName)
+        }
+        if (!operation.controller.signal.aborted) {
+          operation.controller.abort(signal?.reason)
+        }
+      }
+    }
+  }
+
+  private finishRefreshOperation(providerName: string, operation: RefreshOperation): void {
+    operation.settled = true
+    this.pendingRefreshOperations.delete(operation.promise)
+    if (this.refreshLocks.get(providerName) === operation) {
+      this.refreshLocks.delete(providerName)
+    }
+  }
+
+  private finishExchangeOperation(providerName: string, operation: Promise<OAuthToken>): void {
+    const operations = this.exchangeLocks.get(providerName)
+    operations?.delete(operation)
+    if (operations?.size === 0) this.exchangeLocks.delete(providerName)
+  }
+
+  private async doExchangeCode(
+    providerName: string,
+    config: OAuthConfig,
+    code: string,
+    redirectUri: string,
+    generation: number,
+    signal?: AbortSignal,
+  ): Promise<OAuthToken> {
+    const token = await exchangeAuthorizationCode(config, code, redirectUri, this.fetchFn, signal)
+    signal?.throwIfAborted()
+    return this.persistToken(providerName, token, generation)
   }
 
   private async doRefresh(
@@ -360,21 +483,32 @@ export class TokenManager {
     currentToken: OAuthToken | undefined,
     flow: OAuthRefreshFlow,
     operation: RefreshOperation,
+    generation: number,
+    signal?: AbortSignal,
   ): Promise<OAuthToken> {
     const startedAt = Date.now()
     let stage: OAuthRefreshStage = 'token_endpoint'
     this.logger.info({ provider: providerName, flow }, 'oauth.refresh.started')
 
     try {
-      const token =
+      let token =
         flow === 'client_credentials'
-          ? await fetchClientCredentialsToken(config, this.fetchFn)
-          : await refreshAccessToken(config, currentToken!.refreshToken!, this.fetchFn)
+          ? await fetchClientCredentialsToken(config, this.fetchFn, signal)
+          : await refreshAccessToken(config, currentToken!.refreshToken!, this.fetchFn, signal)
 
+      if (flow === 'refresh_token') {
+        const refreshToken = token.refreshToken ?? currentToken!.refreshToken
+        const scope = token.scope ?? currentToken!.scope
+        token = {
+          ...token,
+          ...(refreshToken ? { refreshToken } : {}),
+          ...(scope ? { scope } : {}),
+        }
+      }
+
+      signal?.throwIfAborted()
       stage = 'persist'
-      const nextStore = { ...this.store, [providerName]: token }
-      await this.persistence.save(nextStore)
-      this.store = nextStore
+      token = await this.persistToken(providerName, token, generation)
       this.logger.info(
         {
           provider: providerName,
@@ -386,19 +520,52 @@ export class TokenManager {
       )
       return token
     } catch (err) {
-      this.logger.error(
-        {
-          err,
-          provider: providerName,
-          flow,
-          joinedRequests: operation.joinedRequests,
-          durationMs: Date.now() - startedAt,
-          stage,
-        },
-        'oauth.refresh.failed',
-      )
+      const payload = {
+        err,
+        provider: providerName,
+        flow,
+        joinedRequests: operation.joinedRequests,
+        durationMs: Date.now() - startedAt,
+        stage,
+      }
+      if (signal?.aborted) {
+        this.logger.info(payload, 'oauth.refresh.aborted')
+      } else {
+        this.logger.error(payload, 'oauth.refresh.failed')
+      }
       throw err
     }
+  }
+
+  private beginProviderOperation(providerName: string): number {
+    const generation = (this.nextProviderGeneration.get(providerName) ?? 0) + 1
+    this.nextProviderGeneration.set(providerName, generation)
+    return generation
+  }
+
+  private async persistToken(
+    providerName: string,
+    token: OAuthToken,
+    generation: number,
+  ): Promise<OAuthToken> {
+    const mutation = this.storeMutationQueue
+      .catch(() => undefined)
+      .then(async () => {
+        if (generation < (this.persistedProviderGeneration.get(providerName) ?? 0)) {
+          return this.store[providerName]!
+        }
+
+        const nextStore = { ...this.store, [providerName]: token }
+        await this.persistence.save(nextStore)
+        this.store = nextStore
+        this.persistedProviderGeneration.set(providerName, generation)
+        return token
+      })
+    this.storeMutationQueue = mutation.then(
+      () => undefined,
+      () => undefined,
+    )
+    return mutation
   }
 }
 
@@ -407,7 +574,31 @@ type OAuthRefreshStage = 'token_endpoint' | 'persist'
 
 interface RefreshOperation {
   promise: Promise<OAuthToken>
+  controller: AbortController
   joinedRequests: number
+  activeWaiters: number
+  settled: boolean
+}
+
+function waitForOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted()
+  if (!signal) return operation
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (callback: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      callback()
+    }
+    const onAbort = (): void => finish(() => reject(signal.reason))
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      (value) => finish(() => resolve(value)),
+      (error: unknown) => finish(() => reject(error)),
+    )
+    if (signal.aborted) onAbort()
+  })
 }
 
 function resolveRefreshFlow(

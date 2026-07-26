@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Settings } from '../../src/index.js'
-import { PluginHookError, type ResolvedPlugin, type AuthPlugin } from '../../src/plugins/types.js'
+import {
+  PluginHookError,
+  type ResolvedPlugin,
+  type AuthPlugin,
+  type ProxyPlugin,
+} from '../../src/plugins/types.js'
 import { PluginRegistry, type AuthFetchRegistry } from '../../src/plugins/registry.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
 import type { Logger } from '../../src/types.js'
@@ -644,6 +649,474 @@ describe('plugin lifecycle', () => {
       })
       expect((errorLogs[0]?.payload as { err: Error }).err.message).toBe('after boom')
     } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('excludes a failed plugin instance from every later hook across scopes', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-unavailable-'))
+    const calls: string[] = []
+    const globals = globalThis as unknown as { __pluginUnavailableCalls?: string[] }
+    globals.__pluginUnavailableCalls = calls
+    try {
+      const proxyPluginPath = join(tempDir, 'failing-proxy.mjs')
+      const authPluginPath = join(tempDir, 'failing-auth.mjs')
+      await writeFile(
+        proxyPluginPath,
+        `export default {
+          name: 'failing-proxy',
+          async init() {
+            globalThis.__pluginUnavailableCalls.push('proxy:init')
+            throw new Error('proxy init boom')
+          },
+          async beforeServerStart() {
+            globalThis.__pluginUnavailableCalls.push('proxy:before')
+          },
+          async afterServerStart() {
+            globalThis.__pluginUnavailableCalls.push('proxy:after')
+          },
+          async inspectStreamChunk() {
+            globalThis.__pluginUnavailableCalls.push('proxy:pipeline')
+          },
+          async dispose() {
+            globalThis.__pluginUnavailableCalls.push('proxy:dispose')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        authPluginPath,
+        `export default {
+          name: 'failing-auth',
+          async init() {
+            globalThis.__pluginUnavailableCalls.push('auth:init')
+            throw new Error('auth init boom')
+          },
+          async createFetch() {
+            globalThis.__pluginUnavailableCalls.push('auth:createFetch')
+            return (baseFetch) => baseFetch ?? globalThis.fetch
+          },
+          async discoverModels() {
+            globalThis.__pluginUnavailableCalls.push('auth:discoverModels')
+            return { models: [] }
+          },
+          async dispose() {
+            globalThis.__pluginUnavailableCalls.push('auth:dispose')
+          }
+        }`,
+        'utf8',
+      )
+
+      const settings = makeSettings(
+        {
+          p1: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            apiKey: 'test',
+            headers: {},
+            plugins: [{ module: proxyPluginPath, config: {} }],
+            models: {
+              m1: {
+                upstreamModel: 'm1',
+                aliases: [],
+                headers: {},
+                plugins: [{ module: proxyPluginPath, config: {} }],
+              },
+            },
+          },
+        },
+        {
+          plugins: [
+            { module: proxyPluginPath, config: {}, providers: ['p1'] },
+            { module: authPluginPath, config: {}, providers: ['p1'] },
+          ],
+        },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+      const errors: Array<{ payload: unknown; message?: string }> = []
+      const logger: Logger = {
+        info() {},
+        warn() {},
+        error(payload, message) {
+          errors.push({ payload, ...(message === undefined ? {} : { message }) })
+        },
+        fatal() {},
+        child() {
+          return logger
+        },
+      }
+
+      await registry.initAll(logger)
+      await registry.beforeServerStartAll(logger)
+      await registry.afterServerStartAll(logger)
+
+      expect(registry.getPipelinePlugins('p1', 'm1')).toEqual([])
+      await expect(registry.createAuthFetch('p1', logger)).resolves.toBeUndefined()
+      await expect(registry.discoverModels('p1', logger)).resolves.toBeUndefined()
+      await registry.disposeAll(logger)
+
+      expect(calls).toEqual(['proxy:init', 'auth:init', 'auth:dispose', 'proxy:dispose'])
+      expect(errors).toHaveLength(2)
+      for (const entry of errors) {
+        expect(entry.message).toBe('plugin init failed')
+        expect(entry.payload).toMatchObject({ err: expect.any(Error), plugin: expect.any(String) })
+        expect((entry.payload as { err: Error }).err.stack).toBeTruthy()
+      }
+    } finally {
+      delete globals.__pluginUnavailableCalls
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a plugin without init available and disposes it once', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-no-init-'))
+    const calls: string[] = []
+    const globals = globalThis as unknown as { __pluginNoInitCalls?: string[] }
+    globals.__pluginNoInitCalls = calls
+    try {
+      const pluginPath = join(tempDir, 'no-init.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'no-init',
+          async beforeServerStart() {
+            globalThis.__pluginNoInitCalls.push('before')
+          },
+          async afterServerStart() {
+            globalThis.__pluginNoInitCalls.push('after')
+          },
+          async inspectStreamChunk() {
+            globalThis.__pluginNoInitCalls.push('pipeline')
+          },
+          async createFetch() {
+            globalThis.__pluginNoInitCalls.push('createFetch')
+            return (baseFetch) => baseFetch ?? globalThis.fetch
+          },
+          async discoverModels() {
+            globalThis.__pluginNoInitCalls.push('discoverModels')
+            return { models: [{ id: 'm1' }] }
+          },
+          async dispose() {
+            globalThis.__pluginNoInitCalls.push('dispose')
+          }
+        }`,
+        'utf8',
+      )
+      const settings = makeSettings(
+        {
+          p1: {
+            type: 'openai-compatible',
+            baseURL: 'https://api.example.com/v1',
+            apiKey: 'test',
+            headers: {},
+            plugins: [],
+            models: { m1: { upstreamModel: 'm1', aliases: [], headers: {}, plugins: [] } },
+          },
+        },
+        { plugins: [{ module: pluginPath, config: {}, providers: ['p1'] }] },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+
+      await registry.initAll(noopLogger)
+      await registry.beforeServerStartAll(noopLogger)
+      await registry.afterServerStartAll(noopLogger)
+      const pipeline = registry.getPipelinePlugins('p1', 'm1')
+      expect(pipeline).toHaveLength(1)
+      await (pipeline[0]!.plugin as ProxyPlugin).inspectStreamChunk?.({
+        requestId: 'request-1',
+        settings,
+        provider: { id: 'p1', provider: settings.providers.p1! },
+        config: pipeline[0]!.config,
+        chunk: {},
+      })
+      await registry.createAuthFetch('p1', noopLogger)
+      await expect(registry.discoverModels('p1', noopLogger)).resolves.toEqual({
+        models: [{ id: 'm1' }],
+      })
+      await registry.disposeAll(noopLogger)
+      await registry.disposeAll(noopLogger)
+
+      expect(() => registry.initAll(noopLogger)).toThrow('plugin registry is disposed')
+      await expect(registry.beforeServerStartAll(noopLogger)).rejects.toThrow(
+        'plugin registry is disposed',
+      )
+      await expect(registry.afterServerStartAll(noopLogger)).rejects.toThrow(
+        'plugin registry is disposed',
+      )
+      await expect(registry.createAuthFetch('p1', noopLogger)).rejects.toThrow(
+        'plugin registry is disposed',
+      )
+      await expect(registry.discoverModels('p1', noopLogger)).rejects.toThrow(
+        'plugin registry is disposed',
+      )
+      expect(() => registry.getPipelinePlugins('p1', 'm1')).toThrow('plugin registry is disposed')
+
+      expect(calls).toEqual([
+        'before',
+        'after',
+        'pipeline',
+        'createFetch',
+        'discoverModels',
+        'dispose',
+      ])
+    } finally {
+      delete globals.__pluginNoInitCalls
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('disposes plugin instances once in reverse order and aggregates failures', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-dispose-'))
+    const calls: string[] = []
+    const globals = globalThis as unknown as { __pluginDisposeCalls?: string[] }
+    globals.__pluginDisposeCalls = calls
+    try {
+      const pluginPaths: string[] = []
+      for (const name of ['first', 'second', 'third']) {
+        const pluginPath = join(tempDir, `${name}.mjs`)
+        pluginPaths.push(pluginPath)
+        await writeFile(
+          pluginPath,
+          `export default {
+            name: '${name}',
+            async init() {
+              globalThis.__pluginDisposeCalls.push('init:${name}')
+            },
+            async dispose() {
+              globalThis.__pluginDisposeCalls.push('dispose:${name}')
+              ${name !== 'third' ? `throw new Error('dispose ${name} boom')` : ''}
+            }
+          }`,
+          'utf8',
+        )
+      }
+      const settings = makeSettings(
+        {},
+        {
+          plugins: pluginPaths.map((module) => ({ module, config: {}, providers: [] })),
+        },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+      const errors: Array<{ payload: unknown; message?: string }> = []
+      const logger: Logger = {
+        info() {},
+        warn() {},
+        error(payload, message) {
+          errors.push({ payload, ...(message === undefined ? {} : { message }) })
+        },
+        fatal() {},
+        child() {
+          return logger
+        },
+      }
+
+      await registry.initAll(logger)
+      let disposeError: unknown
+      try {
+        await registry.disposeAll(logger)
+      } catch (err) {
+        disposeError = err
+      }
+      await expect(registry.disposeAll(logger)).rejects.toBe(disposeError)
+      expect(() => registry.initAll(logger)).toThrow('plugin registry is disposed')
+
+      expect(calls).toEqual([
+        'init:first',
+        'init:second',
+        'init:third',
+        'dispose:third',
+        'dispose:second',
+        'dispose:first',
+      ])
+      expect(disposeError).toBeInstanceOf(AggregateError)
+      expect((disposeError as AggregateError).errors).toEqual([
+        expect.objectContaining({ message: 'dispose second boom' }),
+        expect.objectContaining({ message: 'dispose first boom' }),
+      ])
+      expect(errors).toHaveLength(2)
+      expect(
+        errors.map(({ message, payload }) => ({
+          message,
+          plugin: (payload as { plugin: string }).plugin,
+          error: (payload as { err: Error }).err.message,
+        })),
+      ).toEqual([
+        { message: 'plugin dispose failed', plugin: 'second', error: 'dispose second boom' },
+        { message: 'plugin dispose failed', plugin: 'first', error: 'dispose first boom' },
+      ])
+      for (const entry of errors) {
+        expect((entry.payload as { err: Error }).err.stack).toBeTruthy()
+      }
+    } finally {
+      delete globals.__pluginDisposeCalls
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('deduplicates concurrent init and blocks hooks while dispose waits for init', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-init-dispose-race-'))
+    const calls: string[] = []
+    let markInitStarted!: () => void
+    const initStarted = new Promise<void>((resolve) => {
+      markInitStarted = resolve
+    })
+    const globals = globalThis as unknown as {
+      __pluginRaceCalls?: string[]
+      __pluginRaceInitStarted?: () => void
+      __finishPluginRaceInit?: () => void
+    }
+    globals.__pluginRaceCalls = calls
+    globals.__pluginRaceInitStarted = markInitStarted
+    try {
+      const pluginPath = join(tempDir, 'race.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'race',
+          async init() {
+            globalThis.__pluginRaceCalls.push('init:start')
+            globalThis.__pluginRaceInitStarted()
+            await new Promise((resolve) => {
+              globalThis.__finishPluginRaceInit = resolve
+            })
+            globalThis.__pluginRaceCalls.push('init:end')
+          },
+          async beforeServerStart() {
+            globalThis.__pluginRaceCalls.push('before')
+          },
+          async dispose() {
+            globalThis.__pluginRaceCalls.push('dispose')
+          }
+        }`,
+        'utf8',
+      )
+      const settings = makeSettings(
+        {},
+        { plugins: [{ module: pluginPath, config: {}, providers: [] }] },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+
+      const firstInit = registry.initAll(noopLogger)
+      const secondInit = registry.initAll(noopLogger)
+      expect(secondInit).toBe(firstInit)
+      await initStarted
+
+      const dispose = registry.disposeAll(noopLogger)
+      expect(() => registry.initAll(noopLogger)).toThrow('plugin registry is disposing')
+      await expect(registry.beforeServerStartAll(noopLogger)).rejects.toThrow(
+        'plugin registry is disposing',
+      )
+      expect(calls).toEqual(['init:start'])
+
+      globals.__finishPluginRaceInit?.()
+      await Promise.all([firstInit, dispose])
+
+      expect(calls).toEqual(['init:start', 'init:end', 'dispose'])
+    } finally {
+      globals.__finishPluginRaceInit?.()
+      delete globals.__pluginRaceCalls
+      delete globals.__pluginRaceInitStarted
+      delete globals.__finishPluginRaceInit
+      await rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  it('passes the abort signal to dispose, stops the reverse chain, and observes late rejection', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'llm-proxy-plugin-dispose-abort-'))
+    const calls: string[] = []
+    let markDisposeStarted!: () => void
+    const disposeStarted = new Promise<void>((resolve) => {
+      markDisposeStarted = resolve
+    })
+    const globals = globalThis as unknown as {
+      __pluginAbortCalls?: string[]
+      __pluginAbortSignal?: AbortSignal
+      __pluginAbortDisposeStarted?: () => void
+      __rejectPluginAbortDispose?: (reason: unknown) => void
+    }
+    globals.__pluginAbortCalls = calls
+    globals.__pluginAbortDisposeStarted = markDisposeStarted
+    try {
+      const firstPluginPath = join(tempDir, 'first.mjs')
+      const hangingPluginPath = join(tempDir, 'hanging.mjs')
+      await writeFile(
+        firstPluginPath,
+        `export default {
+          name: 'first',
+          async dispose() {
+            globalThis.__pluginAbortCalls.push('dispose:first')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        hangingPluginPath,
+        `export default {
+          name: 'hanging',
+          async dispose(signal) {
+            globalThis.__pluginAbortCalls.push('dispose:hanging')
+            globalThis.__pluginAbortSignal = signal
+            globalThis.__pluginAbortDisposeStarted()
+            await new Promise((_resolve, reject) => {
+              globalThis.__rejectPluginAbortDispose = reject
+            })
+          }
+        }`,
+        'utf8',
+      )
+      const settings = makeSettings(
+        {},
+        {
+          plugins: [
+            { module: firstPluginPath, config: {}, providers: [] },
+            { module: hangingPluginPath, config: {}, providers: [] },
+          ],
+        },
+      )
+      const registry = await PluginRegistry.fromSettings(settings, tempDir)
+      await registry.initAll(noopLogger)
+      const errors: Array<{ payload: unknown; message?: string }> = []
+      const logger: Logger = {
+        info() {},
+        warn() {},
+        error(payload, message) {
+          errors.push({ payload, ...(message === undefined ? {} : { message }) })
+        },
+        fatal() {},
+        child() {
+          return logger
+        },
+      }
+      const abortController = new AbortController()
+
+      const dispose = registry.disposeAll(logger, abortController.signal)
+      await disposeStarted
+      const abortReason = new Error('dispose deadline reached')
+      abortController.abort(abortReason)
+
+      await expect(dispose).rejects.toMatchObject({
+        errors: expect.arrayContaining([abortReason]),
+      })
+      expect(globals.__pluginAbortSignal).toBe(abortController.signal)
+      expect(calls).toEqual(['dispose:hanging'])
+
+      const lateError = new Error('late dispose failure')
+      globals.__rejectPluginAbortDispose?.(lateError)
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(errors).toContainEqual(
+        expect.objectContaining({
+          payload: { err: lateError, plugin: 'hanging' },
+          message: 'plugin dispose failed',
+        }),
+      )
+      expect(() => registry.getPipelinePlugins('missing')).toThrow('plugin registry is disposed')
+    } finally {
+      globals.__rejectPluginAbortDispose?.(new Error('test cleanup'))
+      delete globals.__pluginAbortCalls
+      delete globals.__pluginAbortSignal
+      delete globals.__pluginAbortDisposeStarted
+      delete globals.__rejectPluginAbortDispose
       await rm(tempDir, { recursive: true, force: true })
     }
   })

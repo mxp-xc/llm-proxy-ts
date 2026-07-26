@@ -19,6 +19,7 @@ import { makeSettings } from '../helpers/settings.js'
 import { createProviderRegistryStub, stubRegistry } from '../helpers/registry.js'
 import type pino from 'pino'
 import { noopLogger } from '../../src/types.js'
+import { IteratorCleanupTimeoutError, RequestTimeoutError } from '../../src/request-timeout.js'
 
 const tmpLogRoot = mkdtempSync(join(tmpdir(), 'hp-branches-'))
 afterAll(() => {
@@ -166,6 +167,54 @@ function makeStreamInspectRegistry(
   return {
     getPipelinePlugins() {
       return [resolved]
+    },
+  }
+}
+
+function makeControllableStream<T>() {
+  const values: T[] = []
+  let pending:
+    | {
+        resolve: (result: IteratorResult<T>) => void
+        reject: (error: unknown) => void
+      }
+    | undefined
+  let failure: unknown
+
+  const stream: AsyncIterable<T> = {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (failure !== undefined) return Promise.reject(failure)
+          const value = values.shift()
+          if (value !== undefined) return Promise.resolve({ done: false, value })
+          return new Promise<IteratorResult<T>>((resolve, reject) => {
+            pending = { resolve, reject }
+          })
+        },
+        return() {
+          pending?.resolve({ done: true, value: undefined })
+          pending = undefined
+          return Promise.resolve({ done: true, value: undefined })
+        },
+      }
+    },
+  }
+
+  return {
+    stream,
+    push(value: T) {
+      if (pending) {
+        pending.resolve({ done: false, value })
+        pending = undefined
+      } else {
+        values.push(value)
+      }
+    },
+    fail(error: unknown) {
+      failure = error
+      pending?.reject(error)
+      pending = undefined
     },
   }
 }
@@ -615,6 +664,452 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(body).toContain('"content":"hello"')
   })
 
+  it('keeps normalized finish(other) successful outside raw passthrough rendering', async () => {
+    async function* finishedStream(): AsyncIterable<ProxyStreamPart> {
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {
+          inputTokens: 0,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokens: 0,
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+          totalTokens: 0,
+        },
+      }
+    }
+    const gateway = makeGateway({ stream: () => finishedStream() })
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(gateway, { logger })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+    await response.text()
+
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'success',
+      terminalPart: 'finish',
+      finishReason: 'other',
+    })
+  })
+
+  it('times out a stream that stalls after its first chunk', async () => {
+    const controlled = makeControllableStream<ProxyStreamPart>()
+    controlled.push({ type: 'text-delta', id: 'txt-1', text: 'partial' })
+    let abortSignal: AbortSignal | undefined
+    const gateway = makeGateway({
+      stream(input) {
+        abortSignal = input.abortSignal
+        return controlled.stream
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, {
+      logger,
+      settingsOverrides: { requestTimeoutMs: 10 },
+    })
+
+    const response = await app.request('/v1/chat/completions', chatRequest({ stream: true }))
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).rejects.toMatchObject({ name: 'RequestTimeoutError' })
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'timeout',
+      terminalPart: 'error',
+    })
+    const records = readErrors(tmpLogDir)
+    expect(records).toHaveLength(1)
+    expect(records[0]?.error).toMatchObject({ name: 'RequestTimeoutError', timeoutMs: 10 })
+    expect(abortSignal?.reason).toBeInstanceOf(RequestTimeoutError)
+  })
+
+  it('returns 504 when the stream response header probe stalls after the first chunk', async () => {
+    const controlled = makeControllableStream<ProxyStreamPart>()
+    controlled.push({ type: 'raw', rawValue: { type: 'response.created' } })
+    let abortSignal: AbortSignal | undefined
+    const gateway = makeGateway({
+      stream(input) {
+        abortSignal = input.abortSignal
+        return controlled.stream
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, {
+      logger,
+      settingsOverrides: { requestTimeoutMs: 10 },
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(504)
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'timeout',
+      terminalPart: 'error',
+    })
+    const records = readErrors(tmpLogDir)
+    expect(records).toHaveLength(1)
+    expect(records[0]?.error).toMatchObject({ name: 'RequestTimeoutError', timeoutMs: 10 })
+    expect(abortSignal?.reason).toBeInstanceOf(RequestTimeoutError)
+  })
+
+  it('emits response.failed when a raw Responses stream times out after headers are sent', async () => {
+    const controlled = makeControllableStream<ProxyStreamPart>()
+    for (let index = 0; index < 8; index += 1) {
+      controlled.push({
+        type: 'raw',
+        rawValue: { type: 'response.output_text.delta', sequence_number: index, delta: `${index}` },
+      })
+    }
+    let abortSignal: AbortSignal | undefined
+    const gateway = makeGateway({
+      stream(input) {
+        abortSignal = input.abortSignal
+        return controlled.stream
+      },
+    })
+    const { logger, info } = makeTestLogger()
+    const { app, tmpLogDir } = makeApp(gateway, {
+      logger,
+      settingsOverrides: { requestTimeoutMs: 50 },
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('event: response.failed')
+    expect(body).toContain('Request timed out after 50ms')
+    expect(body).toContain('"type":"response.failed","sequence_number":8')
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'timeout',
+      terminalPart: 'error',
+    })
+    const records = readErrors(tmpLogDir)
+    expect(records).toHaveLength(1)
+    expect(records[0]?.error).toMatchObject({ name: 'RequestTimeoutError', timeoutMs: 50 })
+    expect(abortSignal?.reason).toBeInstanceOf(RequestTimeoutError)
+  })
+
+  it('records incomplete_stream/eof when normalized finish(other) has no raw terminal event', async () => {
+    async function* incompleteRawStream(): AsyncIterable<ProxyStreamPart> {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_incomplete' },
+        },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {
+          inputTokens: 0,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokens: 0,
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+          totalTokens: 0,
+        },
+      }
+    }
+    const gateway = makeGateway({ stream: () => incompleteRawStream() })
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(gateway, {
+      logger,
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('event: response.failed')
+    expect(body).toMatch(/incomplete stream/i)
+    expect(body).toContain('"type":"response.failed","sequence_number":1')
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'incomplete_stream',
+      terminalPart: 'eof',
+    })
+    expect((completed[0]?.[0] as { outcome?: unknown }).outcome).not.toBe('success')
+  })
+
+  it('records success/finish when raw response.completed precedes normalized finish(other)', async () => {
+    async function* completedRawStream(): AsyncIterable<ProxyStreamPart> {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_completed' },
+        },
+      }
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.completed',
+          sequence_number: 1,
+          response: { id: 'resp_completed', status: 'completed' },
+        },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {
+          inputTokens: 0,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokens: 0,
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+          totalTokens: 0,
+        },
+      }
+    }
+    const gateway = makeGateway({ stream: () => completedRawStream() })
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(gateway, {
+      logger,
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('event: response.completed')
+    expect(body).not.toContain('event: response.failed')
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'success',
+      terminalPart: 'finish',
+      finishReason: 'other',
+    })
+  })
+
+  it('records upstream_error/error when raw response.failed precedes normalized finish(other)', async () => {
+    async function* failedRawStream(): AsyncIterable<ProxyStreamPart> {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.failed',
+          sequence_number: 0,
+          response: {
+            id: 'resp_failed',
+            status: 'failed',
+            error: { message: 'raw failure' },
+          },
+        },
+      }
+      yield {
+        type: 'finish',
+        finishReason: 'other',
+        rawFinishReason: undefined,
+        totalUsage: {
+          inputTokens: 0,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokens: 0,
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+          totalTokens: 0,
+        },
+      }
+    }
+    const gateway = makeGateway({ stream: () => failedRawStream() })
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(gateway, {
+      logger,
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body.match(/event: response\.failed/g) ?? []).toHaveLength(1)
+    expect(body).not.toContain('event: response.completed')
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'upstream_error',
+      terminalPart: 'error',
+      finishReason: 'other',
+    })
+  })
+
+  it('drains the normalized error after raw response.failed for request telemetry', async () => {
+    async function* failedRawStream(): AsyncIterable<ProxyStreamPart> {
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.created',
+          sequence_number: 0,
+          response: { id: 'resp_failed' },
+        },
+      }
+      for (let index = 1; index < 8; index += 1) {
+        yield {
+          type: 'raw',
+          rawValue: {
+            type: 'response.output_text.delta',
+            sequence_number: index,
+            delta: `${index}`,
+          },
+        }
+      }
+      yield {
+        type: 'raw',
+        rawValue: {
+          type: 'response.failed',
+          sequence_number: 8,
+          response: {
+            id: 'resp_failed',
+            status: 'failed',
+            error: { message: 'raw failure' },
+          },
+        },
+      }
+      yield { type: 'error', error: new Error('normalized failure') }
+    }
+    const gateway = makeGateway({ stream: () => failedRawStream() })
+    const { logger, info } = makeTestLogger()
+    const { app } = makeApp(gateway, {
+      logger,
+      providers: {
+        openai: {
+          type: 'openai',
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'secret',
+          headers: {},
+          plugins: [],
+          models: {
+            chat: { upstreamModel: 'gpt-5', aliases: [], headers: {}, plugins: [] },
+          },
+        },
+      },
+    })
+
+    const response = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'openai/chat', input: 'hi', stream: true }),
+    })
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body.match(/event: response\.failed/g) ?? []).toHaveLength(1)
+    expect(body).toContain('raw failure')
+    expect(body).not.toContain('normalized failure')
+    const completed = info.mock.calls.filter(([, message]) => message === 'request.completed')
+    expect(completed).toHaveLength(1)
+    expect(completed[0]?.[0]).toMatchObject({
+      outcome: 'upstream_error',
+      terminalPart: 'error',
+    })
+  })
+
   it('returns 502 and logs a stream-phase error with empty response array when acquireStream throws', async () => {
     const gateway = makeGateway({
       stream() {
@@ -1019,6 +1514,77 @@ describe('handleProtocolRequest branch matrix — stream path', () => {
     expect(streamReturned).toBe(true)
     // rate-limit 短路不是错误，不应落盘错误日志
     expect(readErrors(tmpLogDir)).toHaveLength(0)
+  })
+
+  it('logs a late rejection after plugin short-circuit cleanup exceeds its budget', async () => {
+    vi.useFakeTimers()
+    try {
+      let abortSignal: AbortSignal | undefined
+      let markReturnStarted: (() => void) | undefined
+      let rejectCleanup: ((error: unknown) => void) | undefined
+      const returnStarted = new Promise<void>((resolve) => {
+        markReturnStarted = resolve
+      })
+      const cleanupError = new Error('late upstream cleanup failure')
+      const gateway = makeGateway({
+        stream(input) {
+          abortSignal = input.abortSignal
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                next: () =>
+                  Promise.resolve<IteratorResult<ProxyStreamPart>>({
+                    done: false,
+                    value: { type: 'text-delta', id: 'txt-1', text: 'first' },
+                  }),
+                return: () => {
+                  markReturnStarted?.()
+                  return new Promise<IteratorResult<ProxyStreamPart>>((_resolve, reject) => {
+                    rejectCleanup = reject
+                  })
+                },
+              }
+            },
+          }
+        },
+      })
+      const pluginRegistry = makeStreamInspectRegistry(async () => ({
+        status: 429,
+        body: { error: { message: 'slow down', code: 'rate_limit' } },
+      }))
+      const { logger, error } = makeTestLogger()
+      const { app } = makeApp(gateway, {
+        logger,
+        pluginRegistry,
+        settingsOverrides: { requestTimeoutMs: 10_000 },
+      })
+
+      const responsePromise = app.request('/v1/chat/completions', chatRequest({ stream: true }))
+      await returnStarted
+      expect(abortSignal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      const response = await responsePromise
+      expect(response.status).toBe(429)
+      expect(abortSignal?.reason).toBeInstanceOf(IteratorCleanupTimeoutError)
+      expect(error).toHaveBeenCalledTimes(1)
+      const [timeoutFields, timeoutMessage] = error.mock.calls[0]!
+      expect(timeoutMessage).toBe('late upstream stream cleanup failed')
+      expect((timeoutFields as { err: unknown }).err).toBeInstanceOf(IteratorCleanupTimeoutError)
+      expect((timeoutFields as { phase: unknown }).phase).toBe('cleanup')
+
+      rejectCleanup?.(cleanupError)
+      await Promise.resolve()
+
+      expect(error).toHaveBeenCalledTimes(2)
+      const [fields, message] = error.mock.calls[1]!
+      expect(message).toBe('late upstream stream cleanup failed')
+      expect((fields as { err: unknown }).err).toBe(cleanupError)
+      expect((fields as { phase: unknown }).phase).toBe('cleanup')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('collects streamOnly output and logs buffered chunks when collection fails', async () => {

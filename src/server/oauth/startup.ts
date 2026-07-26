@@ -29,6 +29,7 @@ async function resolveProviderAuthStatus(
   provider: ProviderConfig,
   tokenManager: TokenManager,
   logger: Logger,
+  signal?: AbortSignal,
 ): Promise<ProviderAuthStatus> {
   const oauth: OAuthConfig = provider.oauth!
   const status = tokenManager.getStatus(name, oauth)
@@ -40,10 +41,11 @@ async function resolveProviderAuthStatus(
 
   if (status === 'needs_refresh') {
     try {
-      await tokenManager.ensureValidToken(name, oauth)
+      await tokenManager.ensureValidToken(name, oauth, signal)
       logger.info({ provider: name }, 'oauth token refreshed')
       return { provider: name, status: 'valid' }
     } catch (err) {
+      if (signal?.aborted) throw err
       const loginUrl = buildOAuthLoginUrl(settings, name)
       logger.warn({ provider: name, loginUrl, err }, 'oauth token refresh failed — login required')
       return { provider: name, status: 'needs_login', loginUrl }
@@ -81,7 +83,8 @@ export async function validateOAuthStatus(
  *
  * 与 `validateOAuthStatus` 语义一致，但：
  * - 所有 OAuth provider 并行处理（`Promise.allSettled`）
- * - 永不抛出：单个 provider 异常时降级为 `needs_login` 并记录完整 `{ err }`
+ * - 单个 provider 异常时降级为 `needs_login` 并记录完整 `{ err }`
+ * - shutdown abort 会向上传播，不会被误判成 `needs_login`
  *
  * 启动时后台调用，结果回填到 `authStatuses` 闭包供 `/health` 懒读取。
  * 正确性不依赖本函数：请求路径的 `createOAuthFetch` 会独立调用
@@ -91,16 +94,20 @@ export async function refreshAuthStatuses(
   settings: Settings,
   tokenManager: TokenManager,
   logger: Logger = noopLogger,
+  signal?: AbortSignal,
 ): Promise<ProviderAuthStatus[]> {
+  signal?.throwIfAborted()
   const oauthProviders = Object.entries(settings.providers)
     .filter(([, p]) => p.oauth)
     .map(([name, provider]) => ({ name, provider }))
 
   const settled = await Promise.allSettled(
     oauthProviders.map(({ name, provider }) =>
-      resolveProviderAuthStatus(settings, name, provider, tokenManager, logger),
+      resolveProviderAuthStatus(settings, name, provider, tokenManager, logger, signal),
     ),
   )
+
+  signal?.throwIfAborted()
 
   return settled.map((r, i) => {
     if (r.status === 'fulfilled') return r.value
@@ -115,13 +122,4 @@ export async function refreshAuthStatuses(
       loginUrl: buildOAuthLoginUrl(settings, name),
     }
   })
-}
-
-/**
- * 生成启动时使用的 CSRF nonce。
- */
-export function generateNonce(): string {
-  const bytes = new Uint8Array(32)
-  globalThis.crypto.getRandomValues(bytes)
-  return Buffer.from(bytes).toString('base64url')
 }

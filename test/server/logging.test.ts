@@ -107,6 +107,28 @@ describe('logging redaction', () => {
     })
   })
 
+  it('removes structured secret values from Error messages and stacks', () => {
+    const error = Object.assign(
+      new Error(
+        'request failed with Authorization: Bearer message-token and apiKey=message-api-key',
+      ),
+      {
+        Authorization: 'Bearer message-token',
+        apiKey: 'message-api-key',
+      },
+    )
+
+    const redacted = redact(error) as Record<string, unknown>
+
+    expect(redacted.message).toBe(
+      'request failed with Authorization: [REDACTED] and apiKey=[REDACTED]',
+    )
+    expect(redacted.stack).not.toContain('message-token')
+    expect(redacted.stack).not.toContain('message-api-key')
+    expect(redacted.Authorization).toBe('[REDACTED]')
+    expect(redacted.apiKey).toBe('[REDACTED]')
+  })
+
   it('redacts upstream response fields attached to Error objects', () => {
     const error = Object.assign(
       new Error('upstream failed', {
@@ -149,6 +171,58 @@ describe('logging redaction', () => {
       'request-header-secret',
       'top-level-body-secret',
       'nested-header-secret',
+    ]) {
+      expect(serialized).not.toContain(secret)
+    }
+  })
+
+  it('preserves and redacts AggregateError errors and nested causes', () => {
+    const nestedCause = Object.assign(new Error('socket closed'), {
+      token: 'nested-cause-secret',
+    })
+    const memberError = Object.assign(new Error('request failed', { cause: nestedCause }), {
+      Authorization: 'Bearer member-authorization-secret',
+      apiKey: 'member-api-key-secret',
+    })
+    const aggregate = Object.assign(
+      new AggregateError([memberError, { token: 'entry-token-secret' }], 'requests failed', {
+        cause: memberError,
+      }),
+      { token: 'aggregate-token-secret' },
+    )
+
+    expect(Object.prototype.propertyIsEnumerable.call(aggregate, 'errors')).toBe(false)
+
+    const expectedMember = {
+      name: 'Error',
+      message: 'request failed',
+      stack: memberError.stack,
+      cause: {
+        name: 'Error',
+        message: 'socket closed',
+        stack: nestedCause.stack,
+        token: '[REDACTED]',
+      },
+      Authorization: '[REDACTED]',
+      apiKey: '[REDACTED]',
+    }
+    const redacted = redact(aggregate)
+    expect(redacted).toEqual({
+      name: 'AggregateError',
+      message: 'requests failed',
+      stack: aggregate.stack,
+      cause: expectedMember,
+      errors: [expectedMember, { token: '[REDACTED]' }],
+      token: '[REDACTED]',
+    })
+
+    const serialized = JSON.stringify(redacted)
+    for (const secret of [
+      'nested-cause-secret',
+      'member-authorization-secret',
+      'member-api-key-secret',
+      'entry-token-secret',
+      'aggregate-token-secret',
     ]) {
       expect(serialized).not.toContain(secret)
     }

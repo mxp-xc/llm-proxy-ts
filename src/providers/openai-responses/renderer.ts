@@ -8,7 +8,6 @@ import type { ProxyStreamPart } from '../shared/aisdk-types.js'
 import type {
   ResponseOutputText,
   ResponseOutputMessage,
-  ResponseFunctionToolCall,
   ResponseCustomToolCall,
   ResponseWebSearchCall,
   ResponseWebSearchAction,
@@ -36,13 +35,7 @@ export type {
 
 // ─── Status Mapping ───────────────────────────────────────────
 
-function mapResponseStatus(
-  finishReason?: FinishReason,
-  // toolCalls 不再参与判定：有 function/custom tool call 是正常完成（模型回合结束，
-  // 等客户端执行工具），status=completed。之前误把 tool_call 当 incomplete，违反
-  // Responses API 语义，导致 codex 收到 incomplete 后不执行工具（issue2）。
-  _toolCalls?: unknown[],
-): 'completed' | 'incomplete' {
+function mapResponseStatus(finishReason?: FinishReason): 'completed' | 'incomplete' {
   if (finishReason === 'length' || finishReason === 'content-filter') {
     return 'incomplete'
   }
@@ -176,25 +169,20 @@ export async function* renderOpenAIResponseSSE(
 
   let sequenceNumber = 0
   let fullText = ''
-  let outputIndex = 0
+  let currentText = ''
+  let nextOutputIndex = 0
+  let currentOutputIndex: number | undefined
   let responseStarted = false
-  let outputItemStarted = false
-  let contentPartStarted = false
+  let textItemStarted = false
   let reasoningItemStarted = false
   let fullReasoning = ''
   let reasoningItemId = ''
   let reasoningEncryptedContent: string | undefined
-  const streamedToolCalls: Array<
-    ResponseFunctionToolCall | ResponseCustomToolCall | ResponseToolSearchCall
-  > = []
-  // hosted web_search_call items: tracked separately so they appear in the final
-  // output array but do NOT trigger 'incomplete' status (Fix 1). Hosted tools are
-  // executed inline by the upstream and do not pause the Codex agent loop.
-  const streamedHostedCalls: ResponseWebSearchCall[] = []
-  const streamedReasoningItems: ResponseReasoningItem[] = []
+  const completedOutput: Array<ResponseOutputItem | undefined> = []
 
   const toolCallFcIds = new Map<string, string>()
   const toolCallToolNames = new Map<string, string>()
+  const toolCallOutputIndices = new Map<string, number>()
   const toolCallsWithArgumentDeltas = new Set<string>()
   const toolCallStartEmitted = new Set<string>()
   const hostedToolCallIds = new Set<string>()
@@ -206,6 +194,12 @@ export async function* renderOpenAIResponseSSE(
 
   function nextSeq(): number {
     return ++sequenceNumber
+  }
+
+  function reserveOutputIndex(): number {
+    const outputIndex = nextOutputIndex
+    nextOutputIndex++
+    return outputIndex
   }
 
   function failedResponse(error: unknown): OpenAIResponse {
@@ -239,12 +233,10 @@ export async function* renderOpenAIResponseSSE(
     }
   }
 
-  /** Close the in-progress text message item: emit output_text.done +
-   *  content_part.done + output_item.done, reset outputItemStarted/
-   *  contentPartStarted, and advance outputIndex. No-op when no text
-   *  content part is open. Replaces ~4 duplicated close-text blocks. */
+  /** Close the in-progress text message item and retain it at its reserved output index. */
   function* closeCurrentTextMessage(): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
-    if (!contentPartStarted) return
+    if (!textItemStarted) return
+    const outputIndex = currentOutputIndex!
     yield {
       event: 'response.output_text.done',
       data: {
@@ -253,7 +245,7 @@ export async function* renderOpenAIResponseSSE(
         item_id: currentMsgId,
         output_index: outputIndex,
         content_index: 0,
-        text: fullText,
+        text: currentText,
       },
     }
     yield {
@@ -264,7 +256,65 @@ export async function* renderOpenAIResponseSSE(
         item_id: currentMsgId,
         output_index: outputIndex,
         content_index: 0,
-        part: { type: 'output_text', text: fullText, annotations: [] },
+        part: { type: 'output_text', text: currentText, annotations: [] },
+      },
+    }
+    const message: ResponseOutputMessage = {
+      id: currentMsgId,
+      type: 'message',
+      status: 'completed',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: currentText, annotations: [] }],
+    }
+    yield {
+      event: 'response.output_item.done',
+      data: {
+        type: 'response.output_item.done',
+        sequence_number: nextSeq(),
+        output_index: outputIndex,
+        item: message,
+      },
+    }
+    completedOutput[outputIndex] = message
+    textItemStarted = false
+    currentText = ''
+    currentOutputIndex = undefined
+  }
+
+  function* startReasoningItem(): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
+    if (reasoningItemStarted) return
+    yield* closeCurrentTextMessage()
+    reasoningItemStarted = true
+    currentOutputIndex = reserveOutputIndex()
+    reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+    yield {
+      event: 'response.output_item.added',
+      data: {
+        type: 'response.output_item.added',
+        sequence_number: nextSeq(),
+        output_index: currentOutputIndex,
+        item: { id: reasoningItemId, type: 'reasoning', summary: [] },
+      },
+    }
+  }
+
+  function* finishReasoningItem(): Generator<SSEOutput<OpenAIResponseStreamEvent>> {
+    if (!reasoningItemStarted) return
+    const outputIndex = currentOutputIndex!
+    const reasoningItem: ResponseReasoningItem = {
+      id: reasoningItemId,
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: fullReasoning }],
+      ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
+    }
+    yield {
+      event: 'response.reasoning_summary_text.done',
+      data: {
+        type: 'response.reasoning_summary_text.done',
+        sequence_number: nextSeq(),
+        item_id: reasoningItemId,
+        output_index: outputIndex,
+        text: fullReasoning,
       },
     }
     yield {
@@ -273,18 +323,14 @@ export async function* renderOpenAIResponseSSE(
         type: 'response.output_item.done',
         sequence_number: nextSeq(),
         output_index: outputIndex,
-        item: {
-          id: currentMsgId,
-          type: 'message',
-          status: 'completed',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: fullText, annotations: [] }],
-        },
+        item: reasoningItem,
       },
     }
-    outputIndex++
-    outputItemStarted = false
-    contentPartStarted = false
+    completedOutput[outputIndex] = reasoningItem
+    reasoningItemStarted = false
+    fullReasoning = ''
+    reasoningEncryptedContent = undefined
+    currentOutputIndex = undefined
   }
 
   try {
@@ -320,15 +366,16 @@ export async function* renderOpenAIResponseSSE(
       if (part.type === 'text-delta') {
         const delta = part.text
 
-        if (!outputItemStarted) {
-          outputItemStarted = true
+        if (!textItemStarted) {
+          textItemStarted = true
+          currentOutputIndex = reserveOutputIndex()
           const msgId = newMsgId()
           yield {
             event: 'response.output_item.added',
             data: {
               type: 'response.output_item.added',
               sequence_number: nextSeq(),
-              output_index: outputIndex,
+              output_index: currentOutputIndex,
               item: {
                 id: msgId,
                 type: 'message',
@@ -344,22 +391,22 @@ export async function* renderOpenAIResponseSSE(
               type: 'response.content_part.added',
               sequence_number: nextSeq(),
               item_id: msgId,
-              output_index: outputIndex,
+              output_index: currentOutputIndex,
               content_index: 0,
               part: { type: 'output_text', text: '', annotations: [] },
             },
           }
-          contentPartStarted = true
         }
 
         fullText += delta
+        currentText += delta
         yield {
           event: 'response.output_text.delta',
           data: {
             type: 'response.output_text.delta',
             sequence_number: nextSeq(),
             item_id: currentMsgId,
-            output_index: outputIndex,
+            output_index: currentOutputIndex!,
             content_index: 0,
             delta,
           },
@@ -369,19 +416,7 @@ export async function* renderOpenAIResponseSSE(
       if (part.type === 'reasoning-start') {
         const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
         if (typeof enc === 'string') reasoningEncryptedContent = enc
-        if (!reasoningItemStarted) {
-          reasoningItemStarted = true
-          reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield {
-            event: 'response.output_item.added',
-            data: {
-              type: 'response.output_item.added',
-              sequence_number: nextSeq(),
-              output_index: outputIndex,
-              item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-            },
-          }
-        }
+        yield* startReasoningItem()
       }
 
       if (part.type === 'reasoning-delta') {
@@ -389,19 +424,7 @@ export async function* renderOpenAIResponseSSE(
         const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
         if (typeof enc === 'string') reasoningEncryptedContent = enc
 
-        if (!reasoningItemStarted) {
-          reasoningItemStarted = true
-          reasoningItemId = `rs_${randomUUID().replace(/-/g, '').slice(0, 24)}`
-          yield {
-            event: 'response.output_item.added',
-            data: {
-              type: 'response.output_item.added',
-              sequence_number: nextSeq(),
-              output_index: outputIndex,
-              item: { id: reasoningItemId, type: 'reasoning', summary: [] },
-            },
-          }
-        }
+        yield* startReasoningItem()
 
         fullReasoning += delta
         yield {
@@ -410,7 +433,7 @@ export async function* renderOpenAIResponseSSE(
             type: 'response.reasoning_summary_text.delta',
             sequence_number: nextSeq(),
             item_id: reasoningItemId,
-            output_index: outputIndex,
+            output_index: currentOutputIndex!,
             delta,
           },
         }
@@ -420,51 +443,39 @@ export async function* renderOpenAIResponseSSE(
         if (reasoningItemStarted) {
           const enc = part.providerMetadata?.openai?.reasoningEncryptedContent
           if (typeof enc === 'string') reasoningEncryptedContent = enc
-          const reasoningItem: ResponseReasoningItem = {
-            id: reasoningItemId,
-            type: 'reasoning',
-            summary: [{ type: 'summary_text', text: fullReasoning }],
-            ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
-          }
-          yield {
-            event: 'response.reasoning_summary_text.done',
-            data: {
-              type: 'response.reasoning_summary_text.done',
-              sequence_number: nextSeq(),
-              item_id: reasoningItemId,
-              output_index: outputIndex,
-              text: fullReasoning,
-            },
-          }
-          yield {
-            event: 'response.output_item.done',
-            data: {
-              type: 'response.output_item.done',
-              sequence_number: nextSeq(),
-              output_index: outputIndex,
-              item: reasoningItem,
-            },
-          }
-          streamedReasoningItems.push(reasoningItem)
-          outputIndex++
-          reasoningItemStarted = false
-          fullReasoning = ''
-          reasoningEncryptedContent = undefined
         }
+        yield* finishReasoningItem()
       }
 
       if (part.type === 'tool-input-start') {
         const toolCallId = part.id
         const toolName = part.toolName
+        yield* closeCurrentTextMessage()
+
+        const outputIndex = reserveOutputIndex()
+        toolCallOutputIndices.set(toolCallId, outputIndex)
         if (isHostedToolCall(part)) {
           hostedToolCallIds.add(toolCallId)
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: toolCallId,
+                type: 'web_search_call',
+                status: 'in_progress',
+                action: null,
+              },
+            },
+          }
+          toolCallStartEmitted.add(toolCallId)
           continue
         }
         const fcId = `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
         toolCallFcIds.set(toolCallId, fcId)
         toolCallToolNames.set(toolCallId, toolName)
-
-        yield* closeCurrentTextMessage()
 
         const isCustom = isCustomToolName(toolName, customToolNames)
         const isTsShimmed = isToolSearchShimmed(toolName, toolSearchShimmed)
@@ -525,6 +536,8 @@ export async function* renderOpenAIResponseSSE(
         toolCallsWithArgumentDeltas.add(toolCallId)
         const fcId =
           toolCallFcIds.get(toolCallId) ?? `fc_${randomUUID().replace(/-/g, '').slice(0, 24)}`
+        const outputIndex = toolCallOutputIndices.get(toolCallId)
+        if (outputIndex === undefined) continue
 
         if (isCustomToolName(toolName, customToolNames)) {
           yield {
@@ -557,9 +570,7 @@ export async function* renderOpenAIResponseSSE(
 
         if (isHostedToolCall(part)) {
           // web_search 等 hosted tool：AI SDK 把上游 web_search_call 拆成 tool-call + tool-result 对。
-          // Fix 2: tool-call 只记录 id，不占用 outputIndex；added+done 都在 tool-result 分支同步发出，
-          // 避免在 tool-call 与 tool-result 之间 outputIndex 被 in-flight web_search_call 占据
-          // （若其间到达 text-delta 会在同一 outputIndex 开新 message item 覆盖）。
+          // tool-input-start 已经预留 index；缺少 start 时由 tool-result 补发 added。
           hostedToolCallIds.add(toolCallId)
           continue
         }
@@ -576,6 +587,12 @@ export async function* renderOpenAIResponseSSE(
         )
 
         yield* closeCurrentTextMessage()
+
+        let outputIndex = toolCallOutputIndices.get(toolCallId)
+        if (outputIndex === undefined) {
+          outputIndex = reserveOutputIndex()
+          toolCallOutputIndices.set(toolCallId, outputIndex)
+        }
 
         const rawArgs = part.input ?? {}
         // tool_search 的 arguments 是对象（codex 期望），在下方 isTsShimmed 分支用
@@ -651,56 +668,43 @@ export async function* renderOpenAIResponseSSE(
         }
 
         if (isCustom) {
-          yield {
-            event: 'response.output_item.done',
-            data: {
-              type: 'response.output_item.done',
-              sequence_number: nextSeq(),
-              output_index: outputIndex,
-              item: {
-                id: fcId,
-                type: 'custom_tool_call',
-                status: 'completed',
-                call_id: toolCallId,
-                name: toolName,
-                input: args,
-              },
-            },
-          }
-          streamedToolCalls.push({
+          const doneCustomToolCall: ResponseCustomToolCall = {
             id: fcId,
             type: 'custom_tool_call',
             status: 'completed',
             call_id: toolCallId,
             name: toolName,
             input: args,
-          })
-        } else if (isTsShimmed) {
-          const tsArgs = decodeToolSearchInput(rawArgs)
+          }
           yield {
             event: 'response.output_item.done',
             data: {
               type: 'response.output_item.done',
               sequence_number: nextSeq(),
               output_index: outputIndex,
-              item: {
-                id: fcId,
-                type: 'tool_search_call',
-                status: 'completed',
-                call_id: toolCallId,
-                execution: 'client',
-                arguments: tsArgs,
-              },
+              item: doneCustomToolCall,
             },
           }
-          streamedToolCalls.push({
+          completedOutput[outputIndex] = doneCustomToolCall
+        } else if (isTsShimmed) {
+          const doneToolSearchCall: ResponseToolSearchCall = {
             id: fcId,
             type: 'tool_search_call',
             status: 'completed',
             call_id: toolCallId,
             execution: 'client',
-            arguments: tsArgs,
-          })
+            arguments: decodeToolSearchInput(rawArgs),
+          }
+          yield {
+            event: 'response.output_item.done',
+            data: {
+              type: 'response.output_item.done',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: doneToolSearchCall,
+            },
+          }
+          completedOutput[outputIndex] = doneToolSearchCall
         } else {
           yield {
             event: 'response.function_call_arguments.done',
@@ -729,30 +733,35 @@ export async function* renderOpenAIResponseSSE(
               item: doneFunctionCall,
             },
           }
-          streamedToolCalls.push(doneFunctionCall)
+          completedOutput[outputIndex] = doneFunctionCall
         }
-        outputIndex++
+        toolCallOutputIndices.delete(toolCallId)
       }
 
       if (part.type === 'tool-result' && hostedToolCallIds.has(part.toolCallId)) {
-        // hosted tool 结果到达：tool-call 分支已记录 id（未占 outputIndex）。
-        // 这里同步发出 added(action:null) + done(带 action)，item id 用 toolCallId 即上游 ws_ id。
-        // 先关闭可能 in-progress 的 text message，避免 outputIndex 冲突。
+        // hosted tool 结果使用 tool-input-start 时预留的稳定 index。
         yield* closeCurrentTextMessage()
+        let outputIndex = toolCallOutputIndices.get(part.toolCallId)
+        if (outputIndex === undefined) {
+          outputIndex = reserveOutputIndex()
+          toolCallOutputIndices.set(part.toolCallId, outputIndex)
+        }
         const action = mapWebSearchAction(part.output)
-        yield {
-          event: 'response.output_item.added',
-          data: {
-            type: 'response.output_item.added',
-            sequence_number: nextSeq(),
-            output_index: outputIndex,
-            item: {
-              id: part.toolCallId,
-              type: 'web_search_call',
-              status: 'in_progress',
-              action: null,
+        if (!toolCallStartEmitted.has(part.toolCallId)) {
+          yield {
+            event: 'response.output_item.added',
+            data: {
+              type: 'response.output_item.added',
+              sequence_number: nextSeq(),
+              output_index: outputIndex,
+              item: {
+                id: part.toolCallId,
+                type: 'web_search_call',
+                status: 'in_progress',
+                action: null,
+              },
             },
-          },
+          }
         }
         const wsCall: ResponseWebSearchCall = {
           id: part.toolCallId,
@@ -769,64 +778,19 @@ export async function* renderOpenAIResponseSSE(
             item: wsCall,
           },
         }
-        streamedHostedCalls.push(wsCall)
-        outputIndex++
+        completedOutput[outputIndex] = wsCall
         hostedToolCallIds.delete(part.toolCallId)
+        toolCallOutputIndices.delete(part.toolCallId)
       }
 
       if (part.type === 'finish') {
-        if (reasoningItemStarted) {
-          const reasoningItem: ResponseReasoningItem = {
-            id: reasoningItemId,
-            type: 'reasoning',
-            summary: [{ type: 'summary_text', text: fullReasoning }],
-            ...(reasoningEncryptedContent ? { encrypted_content: reasoningEncryptedContent } : {}),
-          }
-          yield {
-            event: 'response.reasoning_summary_text.done',
-            data: {
-              type: 'response.reasoning_summary_text.done',
-              sequence_number: nextSeq(),
-              item_id: reasoningItemId,
-              output_index: outputIndex,
-              text: fullReasoning,
-            },
-          }
-          yield {
-            event: 'response.output_item.done',
-            data: {
-              type: 'response.output_item.done',
-              sequence_number: nextSeq(),
-              output_index: outputIndex,
-              item: reasoningItem,
-            },
-          }
-          streamedReasoningItems.push(reasoningItem)
-          outputIndex++
-          reasoningItemStarted = false
-          fullReasoning = ''
-          reasoningEncryptedContent = undefined
-        }
+        yield* finishReasoningItem()
         yield* closeCurrentTextMessage()
 
         const finishReason = part.finishReason
-        // Fix 1: hosted web_search_call 不参与 incomplete 判定（streamedToolCalls 已不含 hosted）
-        const status = mapResponseStatus(finishReason, streamedToolCalls)
+        const status = mapResponseStatus(finishReason)
         const usage = extractUsageFromFinishPart(part)
         const finishResponse = part.response
-
-        const textOutput: ResponseOutputMessage[] =
-          fullText !== ''
-            ? [
-                {
-                  id: currentMsgId,
-                  type: 'message',
-                  status: 'completed',
-                  role: 'assistant',
-                  content: [{ type: 'output_text', text: fullText, annotations: [] }],
-                },
-              ]
-            : []
 
         const completedResponse: OpenAIResponse = {
           id: finishResponse?.id ?? responseId,
@@ -834,12 +798,7 @@ export async function* renderOpenAIResponseSSE(
           created_at: Math.floor(Date.now() / 1000),
           model: input.model,
           status,
-          output: [
-            ...streamedReasoningItems,
-            ...textOutput,
-            ...streamedToolCalls,
-            ...streamedHostedCalls,
-          ],
+          output: completedOutput.filter((item): item is ResponseOutputItem => item !== undefined),
           output_text: fullText,
           instructions: null,
           temperature: null,
@@ -965,16 +924,12 @@ export function renderOpenAIResponse(
     }
   }
 
-  // Fix 1: hosted web_search_call (providerExecuted) 不参与 incomplete 判定——
-  // 上游内联执行，不暂停 Codex agent loop；仅 function/custom tool call 触发 incomplete。
-  const nonHostedToolCalls = input.toolCalls?.filter((c) => c.providerExecuted !== true)
-
   const response: OpenAIResponse = {
     id: input.response?.id ?? `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
     object: 'response',
     created_at: Math.floor((input.response?.timestamp?.getTime() ?? Date.now()) / 1000),
     model: input.model,
-    status: mapResponseStatus(input.finishReason, nonHostedToolCalls),
+    status: mapResponseStatus(input.finishReason),
     output,
     output_text: input.text ?? '',
     instructions: null,
@@ -1055,80 +1010,125 @@ function rawEventName(rawValue: unknown): string | undefined {
   return isRecord(rawValue) && typeof rawValue.type === 'string' ? rawValue.type : undefined
 }
 
-export async function* renderOpenAIResponsesRawSSE(input: {
+function rawFailedFrame(
+  model: string,
+  error: unknown,
+  sequenceNumber: number,
+  responseId?: string,
+): OpenAIResponseStreamEvent {
+  return (
+    tryExtractOpenAIResponsesFailedFrame(error) ?? {
+      type: 'response.failed',
+      sequence_number: sequenceNumber,
+      response: {
+        id: responseId ?? `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+        object: 'response',
+        created_at: Math.floor(Date.now() / 1000),
+        model,
+        status: 'failed',
+        output: [],
+        output_text: '',
+        error: { message: toErrorMessage(error) },
+        instructions: null,
+        temperature: null,
+        top_p: null,
+        tool_choice: null,
+        tools: [],
+        parallel_tool_calls: true,
+        truncation: 'disabled',
+      },
+    }
+  )
+}
+
+async function* renderOpenAIResponsesRawSSEStream(input: {
   model: string
   stream: AsyncIterable<ProxyStreamPart>
 }): AsyncIterable<SSEOutput<OpenAIResponseStreamEvent>> {
-  for await (const part of input.stream) {
-    if (part.type === 'raw') {
-      const event = rawEventName(part.rawValue)
-      const frame: SSEOutput<OpenAIResponseStreamEvent> =
-        event !== undefined
-          ? { event, data: part.rawValue as OpenAIResponseStreamEvent }
-          : { data: part.rawValue as OpenAIResponseStreamEvent }
-      yield frame
-      continue
-    }
+  let nextSequenceNumber = 0
+  let responseId: string | undefined
+  let terminalSeen = false
+  try {
+    for await (const part of input.stream) {
+      if (terminalSeen) continue
 
-    if (part.type === 'error') {
-      const failedFrame = tryExtractOpenAIResponsesFailedFrame(part.error)
-      if (failedFrame) {
-        yield { event: 'response.failed', data: failedFrame }
+      if (part.type === 'raw') {
+        const event = rawEventName(part.rawValue)
+        if (isRecord(part.rawValue)) {
+          if (
+            typeof part.rawValue.sequence_number === 'number' &&
+            Number.isFinite(part.rawValue.sequence_number)
+          ) {
+            nextSequenceNumber = Math.max(nextSequenceNumber, part.rawValue.sequence_number + 1)
+          }
+          if (isRecord(part.rawValue.response) && typeof part.rawValue.response.id === 'string') {
+            responseId = part.rawValue.response.id
+          }
+        }
+        const frame: SSEOutput<OpenAIResponseStreamEvent> =
+          event !== undefined
+            ? { event, data: part.rawValue as OpenAIResponseStreamEvent }
+            : { data: part.rawValue as OpenAIResponseStreamEvent }
+        yield frame
+        if (
+          event === 'response.completed' ||
+          event === 'response.incomplete' ||
+          event === 'response.failed'
+        ) {
+          terminalSeen = true
+        }
+        continue
+      }
+
+      if (part.type === 'error') {
+        yield {
+          event: 'response.failed',
+          data: rawFailedFrame(input.model, part.error, nextSequenceNumber, responseId),
+        }
         return
       }
-      yield {
-        event: 'response.failed',
-        data: {
-          type: 'response.failed',
-          sequence_number: 0,
-          response: {
-            id: `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-            object: 'response',
-            created_at: Math.floor(Date.now() / 1000),
-            model: input.model,
-            status: 'failed',
-            output: [],
-            output_text: '',
-            error: { message: toErrorMessage(part.error) },
-            instructions: null,
-            temperature: null,
-            top_p: null,
-            tool_choice: null,
-            tools: [],
-            parallel_tool_calls: true,
-            truncation: 'disabled',
-          },
-        },
-      }
-      return
-    }
 
-    if (part.type === 'openai-error') {
+      if (part.type === 'openai-error') {
+        yield {
+          event: 'response.failed',
+          data: rawFailedFrame(input.model, part.body, nextSequenceNumber, responseId),
+        }
+        return
+      }
+    }
+    if (!terminalSeen) {
       yield {
         event: 'response.failed',
-        data: {
-          type: 'response.failed',
-          sequence_number: 0,
-          response: {
-            id: `resp_${randomUUID().replace(/-/g, '').slice(0, 24)}`,
-            object: 'response',
-            created_at: Math.floor(Date.now() / 1000),
-            model: input.model,
-            status: 'failed',
-            output: [],
-            output_text: '',
-            error: { message: toErrorMessage(part.body) },
-            instructions: null,
-            temperature: null,
-            top_p: null,
-            tool_choice: null,
-            tools: [],
-            parallel_tool_calls: true,
-            truncation: 'disabled',
-          },
-        },
+        data: rawFailedFrame(
+          input.model,
+          new Error('Incomplete stream: upstream ended before a terminal response event'),
+          nextSequenceNumber,
+          responseId,
+        ),
       }
-      return
+    }
+  } catch (error) {
+    if (terminalSeen) return
+    yield {
+      event: 'response.failed',
+      data: rawFailedFrame(input.model, error, nextSequenceNumber, responseId),
     }
   }
 }
+
+type RawStreamTerminalObservation =
+  { terminalPart: 'finish' } | { terminalPart: 'error'; error: Error }
+
+export const renderOpenAIResponsesRawSSE = Object.assign(renderOpenAIResponsesRawSSEStream, {
+  observeTerminalPart(part: ProxyStreamPart): RawStreamTerminalObservation | undefined {
+    if (part.type !== 'raw') return undefined
+    const event = rawEventName(part.rawValue)
+    if (event === 'response.completed' || event === 'response.incomplete') {
+      return { terminalPart: 'finish' }
+    }
+    if (event === 'response.failed') {
+      return { terminalPart: 'error', error: new Error('Upstream response failed') }
+    }
+    return undefined
+  },
+})

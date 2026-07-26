@@ -5,27 +5,21 @@ import type {
   VisionToolResultImageSource,
   VisionToolResultReplacement,
 } from '../shared/strategy.js'
+import {
+  hasNonBlankTextBlock,
+  isNonArrayRecord,
+  requireVisionToolResultReplacement,
+  toVisionToolResultChangeMetadata,
+} from '../shared/vision-input.js'
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function hasNonEmptyText(content: unknown[]): boolean {
-  return content.some(
-    (block) =>
-      isObject(block) &&
-      (block.type === 'input_text' || block.type === 'output_text' || block.type === 'text') &&
-      typeof block.text === 'string' &&
-      block.text.trim().length > 0,
-  )
-}
+const OPENAI_RESPONSES_TEXT_BLOCK_TYPES = ['input_text', 'output_text', 'text'] as const
 
 function getImageSource(block: Record<string, unknown>): VisionToolResultImageSource {
   const imageUrl = block.image_url
   const url =
     typeof imageUrl === 'string'
       ? imageUrl
-      : isObject(imageUrl) && typeof imageUrl.url === 'string'
+      : isNonArrayRecord(imageUrl) && typeof imageUrl.url === 'string'
         ? imageUrl.url
         : typeof block.url === 'string'
           ? block.url
@@ -41,23 +35,12 @@ function getImageSource(block: Record<string, unknown>): VisionToolResultImageSo
   return { type: 'unavailable', reason: 'unsupported_source' }
 }
 
-function requireReplacement(
-  replacements: ReadonlyMap<string, VisionToolResultReplacement>,
-  path: string,
-): VisionToolResultReplacement {
-  const replacement = replacements.get(path)
-  if (replacement === undefined) {
-    throw new Error(`Missing tool-result vision replacement for ${path}`)
-  }
-  return replacement
-}
-
 export function planUnsupportedOpenAIResponsesVisionInput(rawBody: unknown): VisionInputPlan {
   let imageCount = 0
   const toolResultImages: VisionInputPlan['toolResultImages'] = []
   let rejection: VisionInputPlan['rejection']
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.input)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.input)) {
     return {
       body: rawBody,
       imageCount,
@@ -67,7 +50,7 @@ export function planUnsupportedOpenAIResponsesVisionInput(rawBody: unknown): Vis
 
   for (let inputIndex = 0; inputIndex < rawBody.input.length; inputIndex++) {
     const item = rawBody.input[inputIndex]
-    if (!isObject(item)) continue
+    if (!isNonArrayRecord(item)) continue
 
     const isAgentMessage = item.type === 'agent_message'
     const isEasyInputMessage =
@@ -79,7 +62,7 @@ export function planUnsupportedOpenAIResponsesVisionInput(rawBody: unknown): Vis
       let removedImage = false
 
       for (const block of item.content) {
-        if (isObject(block) && block.type === 'input_image') {
+        if (isNonArrayRecord(block) && block.type === 'input_image') {
           removedImage = true
           imageCount++
         } else {
@@ -90,7 +73,7 @@ export function planUnsupportedOpenAIResponsesVisionInput(rawBody: unknown): Vis
       if (
         removedImage &&
         (role === 'user' || isAgentMessage) &&
-        !hasNonEmptyText(remainingContent)
+        !hasNonBlankTextBlock(remainingContent, OPENAI_RESPONSES_TEXT_BLOCK_TYPES)
       ) {
         rejection = 'unsupported_vision_input'
       }
@@ -105,7 +88,7 @@ export function planUnsupportedOpenAIResponsesVisionInput(rawBody: unknown): Vis
     }
     for (let outputIndex = 0; outputIndex < item.output.length; outputIndex++) {
       const block: unknown = item.output[outputIndex]
-      if (isObject(block) && block.type === 'input_image') {
+      if (isNonArrayRecord(block) && block.type === 'input_image') {
         imageCount++
         toolResultImages.push({
           path: `/input/${inputIndex}/output/${outputIndex}`,
@@ -133,7 +116,7 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
   let removedImageCount = 0
   let fallbackNoticeCount = 0
 
-  if (!isObject(rawBody) || !Array.isArray(rawBody.input)) {
+  if (!isNonArrayRecord(rawBody) || !Array.isArray(rawBody.input)) {
     return {
       body: rawBody,
       changes,
@@ -149,7 +132,7 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
 
   for (let inputIndex = 0; inputIndex < input.length; inputIndex++) {
     const item = input[inputIndex]
-    if (!isObject(item)) continue
+    if (!isNonArrayRecord(item)) continue
 
     const isAgentMessage = item.type === 'agent_message'
     const isEasyInputMessage =
@@ -161,7 +144,7 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
       let removedImage = false
       for (let contentIndex = 0; contentIndex < item.content.length; contentIndex++) {
         const block: unknown = item.content[contentIndex]
-        if (!isObject(block) || block.type !== 'input_image') {
+        if (!isNonArrayRecord(block) || block.type !== 'input_image') {
           filteredContent.push(block)
           continue
         }
@@ -189,7 +172,7 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
     }
 
     const imageIndexes = item.output.flatMap((block, index) =>
-      isObject(block) && block.type === 'input_image' ? [index] : [],
+      isNonArrayRecord(block) && block.type === 'input_image' ? [index] : [],
     )
     if (imageIndexes.length === 0) continue
 
@@ -198,13 +181,13 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
     const imageOnlyNotices: string[] = []
     for (let outputIndex = 0; outputIndex < item.output.length; outputIndex++) {
       const block: unknown = item.output[outputIndex]
-      if (!isObject(block) || block.type !== 'input_image') {
+      if (!isNonArrayRecord(block) || block.type !== 'input_image') {
         nextOutput.push(block)
         continue
       }
 
       const path = `/input/${inputIndex}/output/${outputIndex}`
-      const replacement = requireReplacement(replacements, path)
+      const replacement = requireVisionToolResultReplacement(replacements, path)
       fallbackNoticeCount++
       if (imageOnlyToolResult) imageOnlyNotices.push(replacement.text)
       else nextOutput.push({ type: 'input_text', text: `\n\n${replacement.text}\n\n` })
@@ -213,10 +196,7 @@ export function applyUnsupportedOpenAIResponsesVisionInput(
         path,
         blockType: 'input_image',
         containerType: item.type,
-        artifactStatus: replacement.artifactStatus,
-        ...(replacement.artifactStatus === 'unavailable'
-          ? { unavailableReason: replacement.unavailableReason }
-          : {}),
+        ...toVisionToolResultChangeMetadata(replacement),
       })
     }
 

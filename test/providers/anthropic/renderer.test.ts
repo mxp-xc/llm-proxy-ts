@@ -147,7 +147,7 @@ describe('Anthropic Messages renderer', () => {
     expect(messageDelta.usage).toBeUndefined()
   })
 
-  it('omits usage in fallback message_delta when stream ends without finish part', async () => {
+  it('ends with error when stream ends without a terminal part', async () => {
     async function* parts() {
       yield { type: 'text-delta', text: 'hi' }
       // no finish part — stream just ends
@@ -158,10 +158,85 @@ describe('Anthropic Messages renderer', () => {
       stream: parts() as AsyncIterable<ProxyStreamPart>,
     })
     const events = await collectSSEFrames<AnthropicSSEData>(stream)
-    const messageDelta = events.find((e) => e.event === 'message_delta')!
-      .data as AnthropicSSEMessageDelta
-    expect(messageDelta.delta.stop_reason).toBe('end_turn')
-    expect(messageDelta.usage).toBeUndefined()
+    expect(events.map((event) => event.event)).toEqual([
+      'message_start',
+      'content_block_start',
+      'content_block_delta',
+      'content_block_stop',
+      'error',
+      'message_stop',
+    ])
+    expect(events.find((event) => event.event === 'message_delta')).toBeUndefined()
+    expect(events.find((event) => event.event === 'error')!.data).toMatchObject({
+      type: 'error',
+      error: { type: 'api_error', message: 'Upstream stream ended before a terminal event' },
+    })
+  })
+
+  it.each([
+    {
+      name: 'provider error part',
+      part: { type: 'error', error: new Error('provider failed') },
+      message: 'provider failed',
+    },
+    {
+      name: 'OpenAI error part',
+      part: { type: 'openai-error', body: { message: 'provider failed' }, status: 502 },
+      message: '{"message":"provider failed"}',
+    },
+  ])('ends with error for a $name', async ({ part, message }) => {
+    async function* parts() {
+      yield { type: 'tool-input-start', id: 'toolu_pending', toolName: 'pending' }
+      yield { type: 'tool-input-delta', id: 'toolu_pending', delta: '{"value":true}' }
+      yield part
+    }
+
+    const events = await collectSSEFrames<AnthropicSSEData>(
+      renderAnthropicMessageSSE({
+        model: 'm',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(events.map((event) => event.event)).toEqual([
+      'message_start',
+      'content_block_start',
+      'content_block_delta',
+      'content_block_stop',
+      'error',
+      'message_stop',
+    ])
+    expect(events.at(-2)?.data).toMatchObject({
+      type: 'error',
+      error: { type: 'api_error', message },
+    })
+  })
+
+  it('ends with error when the upstream stream throws', async () => {
+    async function* parts() {
+      yield { type: 'text-delta', text: 'hi' }
+      throw new Error('upstream failed')
+    }
+
+    const events = await collectSSEFrames<AnthropicSSEData>(
+      renderAnthropicMessageSSE({
+        model: 'm',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+
+    expect(events.map((event) => event.event)).toEqual([
+      'message_start',
+      'content_block_start',
+      'content_block_delta',
+      'content_block_stop',
+      'error',
+      'message_stop',
+    ])
+    expect(events.at(-2)?.data).toMatchObject({
+      type: 'error',
+      error: { type: 'api_error', message: 'upstream failed' },
+    })
   })
 
   it('renders streaming tool use SSE events', async () => {
@@ -252,6 +327,61 @@ describe('Anthropic Messages renderer', () => {
       delta: { type: 'input_json_delta'; partial_json: string }
     }
     expect(jsonDelta.delta.partial_json).toBe('{"city":"NYC"}')
+  })
+
+  it('serializes interleaved tool inputs into valid content block lifecycles', async () => {
+    async function* parts() {
+      yield { type: 'tool-input-start', id: 'toolu_1', toolName: 'first' }
+      yield { type: 'tool-input-delta', id: 'toolu_1', delta: '{"a":' }
+      yield { type: 'tool-input-start', id: 'toolu_2', toolName: 'second' }
+      yield { type: 'tool-input-delta', id: 'toolu_2', delta: '{"b":2}' }
+      yield { type: 'tool-input-delta', id: 'toolu_1', delta: '1}' }
+      yield { type: 'tool-call', toolCallId: 'toolu_2', toolName: 'second', input: { b: 2 } }
+      yield { type: 'tool-call', toolCallId: 'toolu_1', toolName: 'first', input: { a: 1 } }
+      yield { type: 'finish', finishReason: 'tool-calls' }
+    }
+
+    const events = await collectSSEFrames<AnthropicSSEData>(
+      renderAnthropicMessageSSE({
+        model: 'm',
+        stream: parts() as AsyncIterable<ProxyStreamPart>,
+      }),
+    )
+    const openBlocks = new Map<number, string>()
+    const toolInputById = new Map<string, string>()
+    const toolStartIds: string[] = []
+
+    for (const event of events) {
+      if (event.event === 'content_block_start') {
+        const data = event.data as AnthropicSSEContentBlockStart
+        expect(openBlocks.size).toBe(0)
+        expect(data.content_block.type).toBe('tool_use')
+        if (data.content_block.type === 'tool_use') {
+          toolStartIds.push(data.content_block.id)
+          openBlocks.set(data.index, data.content_block.id)
+          toolInputById.set(data.content_block.id, '')
+        }
+      } else if (event.event === 'content_block_delta') {
+        const data = event.data as AnthropicSSEContentBlockDelta & {
+          delta: { type: 'input_json_delta'; partial_json: string }
+        }
+        const toolCallId = openBlocks.get(data.index)
+        expect(toolCallId).toBeDefined()
+        toolInputById.set(toolCallId!, toolInputById.get(toolCallId!)! + data.delta.partial_json)
+      } else if (event.event === 'content_block_stop') {
+        const index = (event.data as { index: number }).index
+        expect(openBlocks.delete(index)).toBe(true)
+      }
+    }
+
+    expect(openBlocks.size).toBe(0)
+    expect(toolStartIds).toEqual(['toolu_1', 'toolu_2'])
+    expect(toolInputById).toEqual(
+      new Map([
+        ['toolu_1', '{"a":1}'],
+        ['toolu_2', '{"b":2}'],
+      ]),
+    )
   })
 
   it('uses named SSE events format', async () => {

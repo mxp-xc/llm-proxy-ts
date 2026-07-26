@@ -71,6 +71,46 @@ describe('planModelSyncChanges', () => {
     expect(plan.newModels.friendly).toEqual(settings.providers.test!.models.friendly)
   })
 
+  it('preserves every existing config that shares a selected upstream model', () => {
+    const plan = planModelSyncChanges({
+      existingModels: {
+        first: {
+          upstreamModel: 'provider/shared',
+          aliases: [{ name: 'first-alias', flat: false }],
+          headers: { 'X-Route': 'first' },
+          plugins: [{ name: 'vendor_sse_error', config: {} }],
+        },
+        second: {
+          upstreamModel: 'provider/shared',
+          aliases: [{ name: 'second-alias', flat: false }],
+          headers: { 'X-Route': 'second' },
+          plugins: [{ name: 'vendor_sse_error', config: { mode: 'strict' } }],
+        },
+        removed: { upstreamModel: 'provider/removed', aliases: [], headers: {}, plugins: [] },
+      },
+      discoveredModels: [{ id: 'provider/shared' }],
+      selectedIds: ['provider/shared'],
+    })
+
+    expect(plan.newModels).toEqual({
+      first: {
+        upstreamModel: 'provider/shared',
+        aliases: [{ name: 'first-alias', flat: false }],
+        headers: { 'X-Route': 'first' },
+        plugins: [{ name: 'vendor_sse_error', config: {} }],
+      },
+      second: {
+        upstreamModel: 'provider/shared',
+        aliases: [{ name: 'second-alias', flat: false }],
+        headers: { 'X-Route': 'second' },
+        plugins: [{ name: 'vendor_sse_error', config: { mode: 'strict' } }],
+      },
+    })
+    expect(plan.kept).toBe(2)
+    expect(plan.removed).toBe(1)
+    expect(plan.added).toBe(0)
+  })
+
   it('adds discovered limits to new model entries', () => {
     const plan = planModelSyncChanges({
       existingModels: {},

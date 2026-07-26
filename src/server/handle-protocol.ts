@@ -25,7 +25,7 @@ import type { ModelGateway, RequestOutcome, RequestTelemetryContext } from './ty
 import type { ProviderRegistry } from '../providers/registry.js'
 import type { Logger } from '../types.js'
 import { RequestTimeoutError, withRequestTimeout } from '../request-timeout.js'
-import { inspectFirstStreamChunk, type StreamInspectContext } from './stream-inspect.js'
+import type { StreamInspectContext } from './stream-inspect.js'
 import { readableStreamFromAsyncIterable } from './stream-utils.js'
 import type { ProxyStreamPart } from '../providers/shared/aisdk-types.js'
 import {
@@ -43,6 +43,7 @@ import {
   type VisionArtifactPersistenceError,
   type VisionArtifactStore,
 } from './vision-artifact-store.js'
+import { acquireUpstreamStream, prepareStreamResponseHeaders } from './upstream-stream.js'
 
 export interface ProtocolContext {
   routingTable: RoutingTable
@@ -59,20 +60,6 @@ export interface ProtocolRequestScope {
   telemetry: RequestTelemetryContext
   abortController: AbortController
   readJson(): Promise<unknown>
-}
-
-interface AcquireStreamOptions {
-  gateway: ModelGateway
-  model: LanguageModel
-  callInput: AISDKInput
-  requestModel: string
-  options?: Parameters<ModelGateway['stream']>[0]['options']
-  plugins: ResolvedPlugin[]
-  timeoutMs: number
-  abortController: AbortController
-  formatErrors: ProtocolErrorFormatter
-  inspectCtx: StreamInspectContext
-  telemetry: RequestTelemetryContext
 }
 
 interface ProtocolRequestMetadata {
@@ -97,46 +84,8 @@ interface ExecutionRoute {
   plugins: ResolvedPlugin[]
 }
 
-type AcquireStreamResult =
-  | { stream: AsyncIterable<ProxyStreamPart>; upstreamStartedAt: number }
-  | { rateLimitResponse: { body: unknown; status: number } }
-
 function jsonResponse(body: unknown, status?: number): Response {
   return Response.json(body, status === undefined ? undefined : { status })
-}
-
-async function acquireStream(opts: AcquireStreamOptions): Promise<AcquireStreamResult> {
-  const upstreamStartedAt = performance.now()
-  const streamInput: Parameters<ModelGateway['stream']>[0] = {
-    model: opts.model,
-    callInput: opts.callInput,
-    requestModel: opts.requestModel,
-    abortSignal: opts.abortController.signal,
-    onError: (error) => {
-      opts.telemetry.pendingStreamError = error
-    },
-  }
-  if (opts.options !== undefined) streamInput.options = opts.options
-  const stream = opts.gateway.stream(streamInput)
-  const inspectCtx: StreamInspectContext = {
-    ...opts.inspectCtx,
-    ...(opts.telemetry.executionMode === 'stream'
-      ? { firstChunkStartedAt: upstreamStartedAt, telemetry: opts.telemetry }
-      : {}),
-  }
-  const inspection = await withRequestTimeout(
-    inspectFirstStreamChunk(opts.plugins, stream, inspectCtx),
-    opts.timeoutMs,
-    opts.abortController,
-  )
-  if (inspection.error) {
-    const { body, status } = opts.formatErrors.rateLimit(
-      inspection.error.body,
-      inspection.error.status,
-    )
-    return { rateLimitResponse: { body, status } }
-  }
-  return { stream: inspection.stream, upstreamStartedAt }
 }
 
 function bufferStreamForErrorLogging<T>(
@@ -171,59 +120,6 @@ function bufferStreamForErrorLogging<T>(
 const TRUNCATED_STREAM_PREVIEW = {
   _truncated: true,
   reason: 'stream error preview exceeded maxBodyLength',
-}
-const STREAM_RESPONSE_HEADER_PROBE_CHUNKS = 8
-
-function replayStreamParts(
-  buffered: ProxyStreamPart[],
-  iterator: AsyncIterator<ProxyStreamPart>,
-): AsyncIterable<ProxyStreamPart> {
-  return (async function* () {
-    try {
-      for (const part of buffered) {
-        yield part
-      }
-      while (true) {
-        const next = await iterator.next()
-        if (next.done) return
-        yield next.value
-      }
-    } finally {
-      await iterator.return?.()
-    }
-  })()
-}
-
-function hasAnyHeader(headers: Headers): boolean {
-  return headers.keys().next().done !== true
-}
-
-async function prepareStreamResponseHeaders(
-  stream: AsyncIterable<ProxyStreamPart>,
-  getHeaders: (() => HeadersInit | undefined) | undefined,
-): Promise<{ stream: AsyncIterable<ProxyStreamPart>; headers: Headers }> {
-  const initialHeaders = new Headers(getHeaders?.())
-  if (hasAnyHeader(initialHeaders) || getHeaders === undefined) {
-    if (!initialHeaders.has('content-type')) initialHeaders.set('content-type', 'text/event-stream')
-    return { stream, headers: initialHeaders }
-  }
-
-  const iterator = stream[Symbol.asyncIterator]()
-  const buffered: ProxyStreamPart[] = []
-  for (let i = 0; i < STREAM_RESPONSE_HEADER_PROBE_CHUNKS; i += 1) {
-    const next = await iterator.next()
-    if (next.done) break
-    buffered.push(next.value)
-
-    const probedHeaders = new Headers(getHeaders())
-    if (hasAnyHeader(probedHeaders)) {
-      if (!probedHeaders.has('content-type')) probedHeaders.set('content-type', 'text/event-stream')
-      return { stream: replayStreamParts(buffered, iterator), headers: probedHeaders }
-    }
-  }
-
-  initialHeaders.set('content-type', 'text/event-stream')
-  return { stream: replayStreamParts(buffered, iterator), headers: initialHeaders }
 }
 
 function appendTruncatedStreamPreview(buffer: unknown[], maxBodyLength: number): void {
@@ -363,6 +259,7 @@ function logUpstreamFailureOnce(
   phase: ErrorPhase,
   stream: boolean,
 ): void {
+  if (telemetry.outcome === 'client_cancelled' && failure.outcome === 'upstream_aborted') return
   if (telemetry.failureLogged) return
   telemetry.failureLogged = true
   const fields = {
@@ -386,6 +283,12 @@ function applyUpstreamFailure(
   telemetry: RequestTelemetryContext,
   failure: ClassifiedUpstreamFailure,
 ): void {
+  if (telemetry.outcome === 'client_cancelled' && failure.outcome === 'upstream_aborted') {
+    telemetry.terminalPart = 'abort'
+    telemetry.terminalError = failure.error.name
+    telemetry.explicitFailure = true
+    return
+  }
   if (telemetry.explicitFailure && telemetry.outcome !== 'client_cancelled') return
   telemetry.terminalPart = failure.outcome === 'upstream_aborted' ? 'abort' : 'error'
   telemetry.terminalError = failure.error.name
@@ -452,11 +355,27 @@ function setUpstreamRequestIdFromHeaders(
   )
 }
 
+type RenderStreamTerminalObservation =
+  { terminalPart: 'finish' } | { terminalPart: 'error'; error: unknown }
+
+type RenderStreamTerminalObserver = (
+  part: ProxyStreamPart,
+) => RenderStreamTerminalObservation | undefined
+
+function getRenderStreamTerminalObserver(
+  renderer: unknown,
+): RenderStreamTerminalObserver | undefined {
+  if (typeof renderer !== 'function') return undefined
+  const observer = (renderer as { observeTerminalPart?: unknown }).observeTerminalPart
+  return typeof observer === 'function' ? (observer as RenderStreamTerminalObserver) : undefined
+}
+
 function observeTerminalParts(
   stream: AsyncIterable<ProxyStreamPart>,
   telemetry: RequestTelemetryContext,
   logger: Logger,
   onFailure?: (error: unknown, outcome: UpstreamFailureOutcome) => void,
+  observeRenderedTerminalPart?: RenderStreamTerminalObserver,
 ): AsyncIterable<ProxyStreamPart> {
   return (async function* () {
     const iterator = stream[Symbol.asyncIterator]()
@@ -513,14 +432,24 @@ function observeTerminalParts(
           return
         }
         const part = next.value
+        const renderedTerminal = observeRenderedTerminalPart?.(part)
+        if (renderedTerminal?.terminalPart === 'finish') {
+          if (!telemetry.explicitFailure) telemetry.terminalPart = 'finish'
+          setOutcome(telemetry, 'success')
+          delete telemetry.pendingStreamError
+        } else if (renderedTerminal?.terminalPart === 'error') {
+          recordFailure(renderedTerminal.error)
+        }
         switch (part.type) {
           case 'finish':
-            if (!telemetry.explicitFailure) telemetry.terminalPart = 'finish'
             telemetry.finishReason = part.finishReason
             applyUsage(telemetry, extractUsageFromFinishPart(part))
             setUpstreamRequestId(telemetry, part.response?.id)
-            setOutcome(telemetry, 'success')
-            delete telemetry.pendingStreamError
+            if (observeRenderedTerminalPart === undefined) {
+              if (!telemetry.explicitFailure) telemetry.terminalPart = 'finish'
+              setOutcome(telemetry, 'success')
+              delete telemetry.pendingStreamError
+            }
             break
           case 'error':
             recordFailure(part.error)
@@ -743,7 +672,7 @@ interface ExecuteUpstreamOptions<TRequest, TSSEData, TResult, TEnrichment extend
   loginUrl: string
   requestMetadata: ProtocolRequestMetadata
   abortController: AbortController
-  inspectCtx: StreamInspectContext
+  inspectCtx: Omit<StreamInspectContext, 'abortSignal' | 'firstChunkStartedAt' | 'telemetry'>
   telemetry: RequestTelemetryContext
   executionOverride?: ExecutionOverrideConfig<TSSEData, TResult, TEnrichment>
 }
@@ -770,31 +699,57 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   } = opts
   const { formatErrors } = strategy
 
-  const acquireRoutedStream = () =>
-    acquireStream({
-      gateway: runtime.gateway,
-      model,
-      callInput,
-      requestModel,
-      plugins: route.plugins,
-      timeoutMs: runtime.requestTimeoutMs,
-      abortController,
-      formatErrors,
-      inspectCtx,
-      telemetry,
-      ...(executionOverride?.streamOptions !== undefined
-        ? { options: executionOverride.streamOptions }
-        : {}),
-    })
+  const acquireRoutedStream = async () => {
+    const acquired = await acquireUpstreamStream(
+      runtime.gateway,
+      {
+        model,
+        callInput,
+        requestModel,
+        onError: (error) => {
+          telemetry.pendingStreamError = error
+        },
+        ...(executionOverride?.streamOptions !== undefined
+          ? { options: executionOverride.streamOptions }
+          : {}),
+      },
+      {
+        timeoutMs: runtime.requestTimeoutMs,
+        abortController,
+        onDetachedError: (err, phase) => {
+          logger.error(
+            { err, phase },
+            phase === 'cleanup'
+              ? 'late upstream stream cleanup failed'
+              : 'late upstream stream pull failed',
+          )
+        },
+        plugins: route.plugins,
+        inspectContext: {
+          ...inspectCtx,
+          ...(telemetry.executionMode === 'stream' ? { telemetry } : {}),
+        },
+      },
+    )
+    if ('inspectionResponse' in acquired) {
+      const { body, status } = formatErrors.rateLimit(
+        acquired.inspectionResponse.body,
+        acquired.inspectionResponse.status,
+      )
+      return { rateLimitResponse: { body, status } }
+    }
+    return acquired
+  }
 
   const withEnrichment = <TBase extends object>(base: TBase): TBase & TEnrichment =>
     Object.assign(base, enrichment ?? {}) as TBase & TEnrichment
   const renderStreamSSE = executionOverride?.renderStreamSSE ?? strategy.renderStreamSSE
+  const observeRenderedTerminalPart = getRenderStreamTerminalObserver(renderStreamSSE)
   const renderResult = executionOverride?.renderResult ?? strategy.renderResult
 
   // 5-6. Stream or generate + render
   if (strategy.isStream(request)) {
-    let acquired: AcquireStreamResult
+    let acquired: Awaited<ReturnType<typeof acquireRoutedStream>>
     try {
       acquired = await acquireRoutedStream()
     } catch (error) {
@@ -824,17 +779,23 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
     }
 
     let buffer: unknown[] = []
-    const observedStream = observeTerminalParts(acquired.stream, telemetry, logger, (error) => {
-      writeProtocolErrorLog(
-        runtime.errorLogger,
-        requestMetadata,
-        telemetry,
-        error,
-        'stream',
-        request,
-        buffer,
-      )
-    })
+    const observedStream = observeTerminalParts(
+      acquired.stream,
+      telemetry,
+      logger,
+      (error) => {
+        writeProtocolErrorLog(
+          runtime.errorLogger,
+          requestMetadata,
+          telemetry,
+          error,
+          'stream',
+          request,
+          buffer,
+        )
+      },
+      observeRenderedTerminalPart,
+    )
     const buffered = bufferStreamForErrorLogging(
       observedStream,
       runtime.errorLogging.enabled,
@@ -919,7 +880,7 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
   if (route.streamOnly) {
     let buffer: unknown[] = []
     const upstreamStartedAt = performance.now()
-    let acquired: AcquireStreamResult
+    let acquired: Awaited<ReturnType<typeof acquireRoutedStream>>
     try {
       acquired = await acquireRoutedStream()
     } catch (error) {
@@ -953,26 +914,28 @@ async function executeUpstream<TRequest, TSSEData, TResult, TEnrichment extends 
     let collected: Awaited<ReturnType<typeof collectStreamResult>>
     try {
       const buffered = bufferStreamForErrorLogging(
-        observeTerminalParts(acquired.stream, telemetry, logger, (error) => {
-          writeProtocolErrorLog(
-            runtime.errorLogger,
-            requestMetadata,
-            telemetry,
-            error,
-            'stream-only',
-            request,
-            buffer,
-          )
-        }),
+        observeTerminalParts(
+          acquired.stream,
+          telemetry,
+          logger,
+          (error) => {
+            writeProtocolErrorLog(
+              runtime.errorLogger,
+              requestMetadata,
+              telemetry,
+              error,
+              'stream-only',
+              request,
+              buffer,
+            )
+          },
+          observeRenderedTerminalPart,
+        ),
         runtime.errorLogging.enabled,
         runtime.errorLogging.maxBodyLength,
       )
       buffer = buffered.buffer
-      collected = await withRequestTimeout(
-        collectStreamResult(buffered.stream),
-        runtime.requestTimeoutMs,
-        abortController,
-      )
+      collected = await collectStreamResult(buffered.stream)
       telemetry.upstreamDurationMs = Math.round(performance.now() - acquired.upstreamStartedAt)
     } catch (error) {
       telemetry.upstreamDurationMs ??= Math.round(performance.now() - upstreamStartedAt)
@@ -1321,11 +1284,13 @@ export async function handleProtocolRequest<
     }
     throw error
   }
-  const inspectCtx: StreamInspectContext = {
+  const inspectCtx: Omit<
+    StreamInspectContext,
+    'abortSignal' | 'firstChunkStartedAt' | 'telemetry'
+  > = {
     requestId: requestScope.requestId,
     settings: ctx.settings,
     provider: { id: route.providerName, provider: route.provider },
-    abortSignal: abortController.signal,
     onCleanupError: (error) => {
       requestScope.logger.error(
         {

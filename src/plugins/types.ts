@@ -90,8 +90,10 @@ export interface Plugin {
   init?(ctx: PluginInitContext): Promise<void>
   /** 服务监听端口前调用。可执行阻塞操作如 OAuth 登录。抛错则阻止启动。 */
   beforeServerStart?(): Promise<void>
-  /** 服务监听端口后调用。非阻塞，可执行后台任务。 */
+  /** 服务实际监听端口后调用。关闭流程会在 shutdown deadline 内等待该 hook。 */
   afterServerStart?(): Promise<void>
+  /** 服务关闭或启动失败时释放插件资源；必须能安全处理部分初始化状态。 */
+  dispose?(signal?: AbortSignal): Promise<void>
 }
 
 /** 管道能力：检查上游流 chunk 并可短路为插件响应。 */

@@ -3,6 +3,7 @@ import type { ModelRouteInput, ProviderConfig, Settings } from '../../config.js'
 import { isRecord } from '../../providers/protocol-types.js'
 import type { TokenManager } from '../../oauth/index.js'
 import type { DiscoveredModel, DiscoveredModelList } from '../../plugins/types.js'
+import { resolveProviderMetadata } from '../../providers/metadata.js'
 import type { Logger } from '../../types.js'
 import { fetchUpstreamModels, openAIToDiscoveredModels } from './discover.js'
 
@@ -19,7 +20,14 @@ export type DiscoverSkipReason =
 
 export type DiscoverResult =
   | { ok: ProviderModelsResult }
-  | { skipped: { providerName: string; reason: DiscoverSkipReason; message: string } }
+  | {
+      skipped: {
+        providerName: string
+        reason: DiscoverSkipReason
+        message: string
+        cause?: unknown
+      }
+    }
 
 export interface ModelDiscoveryRegistry {
   discoverModels(
@@ -79,6 +87,7 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
           providerName,
           reason: 'plugin_failed',
           message: `Auth plugin discoverModels failed — ${msg}`,
+          cause: err,
         },
       }
     }
@@ -121,40 +130,25 @@ export async function discoverProviderModels(input: DiscoverInput): Promise<Disc
             providerName,
             reason: 'oauth_refresh_failed',
             message: `OAuth token refresh failed — ${msg}`,
+            cause: err,
           },
         }
       }
     }
 
-    // 按 provider.type 解析 baseURL、鉴权方案与端点（默认值与 registry.ts 一致）
-    const baseURL =
-      provider.type === 'openai'
-        ? (provider.baseURL ?? 'https://api.openai.com/v1')
-        : provider.type === 'anthropic'
-          ? (provider.baseURL ?? 'https://api.anthropic.com/v1')
-          : provider.baseURL
-    const authMode: 'bearer' | 'anthropic' = provider.type === 'anthropic' ? 'anthropic' : 'bearer'
-    const anthropicVersion =
-      provider.type === 'anthropic' ? provider.options?.anthropicVersion : undefined
-    const modelsEndpoint =
-      provider.type === 'openai-compatible' ? provider.options?.modelsEndpoint : undefined
-    const openAIOptions = provider.type === 'openai' ? provider.options : undefined
+    const discovery = resolveProviderMetadata(provider).discovery
 
     const openaiModels = await fetchUpstream({
-      baseURL,
+      ...discovery,
       apiKey: resolvedApiKey,
       proxySettings: settings.proxy,
-      modelsEndpoint,
       headers: provider.headers,
       oauthToken,
-      authMode,
-      anthropicVersion,
-      ...(openAIOptions !== undefined ? { openAIOptions } : {}),
     })
     const models = openAIToDiscoveredModels(openaiModels).models
     return { ok: { providerName, models, existingModels: provider.models, source: 'http' } }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return { skipped: { providerName, reason: 'fetch_failed', message: msg } }
+    return { skipped: { providerName, reason: 'fetch_failed', message: msg, cause: err } }
   }
 }

@@ -100,6 +100,13 @@ export interface PipelinePluginRegistry {
   getPipelinePlugins(providerId: string, modelKey: string): ResolvedPlugin[]
 }
 
+type PluginRegistryState = 'active' | 'disposing' | 'disposed'
+
+type PluginDisposeSettlement =
+  | { status: 'disposed' }
+  | { status: 'failed'; error: unknown }
+  | { status: 'aborted'; error: Error }
+
 async function loadResolvedPlugin(
   entry: PluginEntry | ScopedPluginEntry,
   settingsDir: string,
@@ -121,6 +128,10 @@ async function loadResolvedPlugin(
 
 export class PluginRegistry {
   private readonly allResolvedCache: ResolvedPlugin[]
+  private readonly unavailablePlugins = new WeakSet<Plugin>()
+  private state: PluginRegistryState = 'active'
+  private initPromise: Promise<void> | undefined
+  private disposePromise: Promise<void> | undefined
 
   private constructor(
     private readonly globalPlugins: ResolvedPlugin[],
@@ -232,12 +243,37 @@ export class PluginRegistry {
   // ─── Lifecycle ────────────────────────────────────────────────
 
   /** 初始化所有插件。每个插件调用一次 init()（并行，单个失败不阻塞其它）。 */
-  async initAll(logger?: Logger, authFilePath?: string): Promise<void> {
+  initAll(logger?: Logger, authFilePath?: string): Promise<void> {
+    this.#assertAcceptingHooks('initialize plugins')
+    if (this.initPromise) return this.initPromise
+
+    let resolveInit!: () => void
+    let rejectInit!: (error: unknown) => void
+    this.initPromise = new Promise<void>((resolve, reject) => {
+      resolveInit = resolve
+      rejectInit = reject
+    })
+    void this.#initializeAll(logger, authFilePath).then(
+      () => {
+        resolveInit()
+      },
+      (error: unknown) => {
+        rejectInit(error)
+      },
+    )
+    return this.initPromise
+  }
+
+  async #initializeAll(logger?: Logger, authFilePath?: string): Promise<void> {
     const log = logger ?? noopLogger
 
-    const initables = filterInitable(this.allResolved())
+    const initables = this.allResolvedCache.filter(
+      (rp): rp is ResolvedPlugin & { plugin: { init: NonNullable<Plugin['init']> } } =>
+        typeof rp.plugin.init === 'function',
+    )
     const results = await Promise.allSettled(
       initables.map(async (rp) => {
+        this.#assertAcceptingHooks('initialize plugins')
         const store = this.#resolveStore(authFilePath, rp)
         const ctx: PluginInitContext = {
           providers: new Map(Object.entries(this.settings.providers)),
@@ -253,16 +289,21 @@ export class PluginRegistry {
       if (r.status === 'fulfilled') {
         log.info({ plugin: r.value }, 'plugin initialized')
       } else {
-        log.error({ err: r.reason, plugin: initables[index]!.plugin.name }, 'plugin init failed')
+        const plugin = initables[index]!.plugin
+        this.unavailablePlugins.add(plugin)
+        log.error({ err: r.reason, plugin: plugin.name }, 'plugin init failed')
       }
     }
   }
 
   /** 服务监听前调用所有插件的 beforeServerStart()。 */
   async beforeServerStartAll(logger?: Logger): Promise<void> {
+    this.#assertAcceptingHooks('run beforeServerStart hooks')
     const log = logger ?? noopLogger
-    for (const rp of this.allResolved()) {
-      if (rp.plugin.beforeServerStart) {
+    for (const rp of this.allResolvedCache) {
+      this.#assertAcceptingHooks('run beforeServerStart hooks')
+      if (!this.#isAvailable(rp)) continue
+      if (typeof rp.plugin.beforeServerStart === 'function') {
         try {
           await rp.plugin.beforeServerStart()
         } catch (err) {
@@ -275,10 +316,18 @@ export class PluginRegistry {
 
   /** 服务监听后调用所有插件的 afterServerStart()（并行，单个失败不阻塞其它）。 */
   async afterServerStartAll(logger?: Logger): Promise<void> {
+    this.#assertAcceptingHooks('run afterServerStart hooks')
     const log = logger ?? noopLogger
-    const callables = filterAfterStart(this.allResolved())
+    const callables = this.allResolvedCache.filter(
+      (
+        rp,
+      ): rp is ResolvedPlugin & {
+        plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> }
+      } => this.#isAvailable(rp) && typeof rp.plugin.afterServerStart === 'function',
+    )
     const results = await Promise.allSettled(
       callables.map(async (rp) => {
+        this.#assertAcceptingHooks('run afterServerStart hooks')
         await rp.plugin.afterServerStart()
         return rp.plugin.name
       }),
@@ -293,6 +342,67 @@ export class PluginRegistry {
     }
   }
 
+  /** 逆加载顺序释放插件。每个实例调用一次 dispose()，单个失败不阻塞其它。 */
+  disposeAll(logger?: Logger, signal?: AbortSignal): Promise<void> {
+    if (this.disposePromise) return this.disposePromise
+
+    this.state = 'disposing'
+    let resolveDispose!: () => void
+    let rejectDispose!: (error: unknown) => void
+    this.disposePromise = new Promise<void>((resolve, reject) => {
+      resolveDispose = resolve
+      rejectDispose = reject
+    })
+    void this.#disposeAll(logger ?? noopLogger, signal).then(
+      () => {
+        this.state = 'disposed'
+        resolveDispose()
+      },
+      (error: unknown) => {
+        this.state = 'disposed'
+        rejectDispose(error)
+      },
+    )
+    return this.disposePromise
+  }
+
+  async #disposeAll(log: Logger, signal?: AbortSignal): Promise<void> {
+    const errors: unknown[] = []
+
+    if (this.initPromise) {
+      try {
+        await this.initPromise
+      } catch (err) {
+        log.error({ err }, 'plugin initialization failed before dispose')
+      }
+    }
+
+    for (let index = this.allResolvedCache.length - 1; index >= 0; index -= 1) {
+      const plugin = this.allResolvedCache[index]!.plugin
+      if (signal?.aborted) {
+        const error = abortError(signal)
+        errors.push(error)
+        log.error({ err: error }, 'plugin disposal aborted')
+        break
+      }
+      const dispose = plugin.dispose
+      if (!dispose) continue
+
+      const result = await settlePluginDispose(plugin, dispose, log, signal)
+      if (result.status === 'failed') {
+        errors.push(result.error)
+      } else if (result.status === 'aborted') {
+        errors.push(result.error)
+        log.error({ err: result.error, plugin: plugin.name }, 'plugin disposal aborted')
+        break
+      }
+    }
+
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to dispose one or more plugins')
+    }
+  }
+
   // ─── Per-provider auth ────────────────────────────────────────
 
   /** 为指定 provider 创建认证 fetch wrapper。 */
@@ -301,6 +411,7 @@ export class PluginRegistry {
     logger?: Logger,
     authFilePath?: string,
   ): Promise<((baseFetch?: typeof fetch) => typeof fetch) | undefined> {
+    this.#assertAcceptingHooks('create an authentication fetch')
     const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath)
     if (!resolved) return undefined
     try {
@@ -316,6 +427,7 @@ export class PluginRegistry {
     logger?: Logger,
     authFilePath?: string,
   ): Promise<DiscoveredModelList | undefined> {
+    this.#assertAcceptingHooks('discover models')
     const resolved = this.#resolveAuthPluginContext(providerId, logger, authFilePath, {
       requireDiscoverModels: true,
     })
@@ -334,15 +446,20 @@ export class PluginRegistry {
    * 合并策略：global → provider → model，Map.set 覆盖保证 model 级同名插件优先。
    */
   getPipelinePlugins(providerId: string, modelKey?: string): ResolvedPlugin[] {
+    this.#assertAcceptingHooks('resolve pipeline plugins')
     // 全局级只包含 ProxyPlugin
     const globalLevel = this.globalPlugins.filter(
       (rp) =>
+        this.#isAvailable(rp) &&
         isProxyPlugin(rp.plugin) &&
         (rp.providers.length === 0 || rp.providers.includes(providerId)),
     )
-    const providerLevel = this.providerPlugins.get(providerId) ?? []
-    const modelLevel =
+    const providerLevel = (this.providerPlugins.get(providerId) ?? []).filter((rp) =>
+      this.#isAvailable(rp),
+    )
+    const modelLevel = (
       (modelKey ? this.modelPlugins.get(providerId)?.get(modelKey) : undefined) ?? []
+    ).filter((rp) => this.#isAvailable(rp))
 
     // Merge: global → provider → model, Map.set overwrites so model wins for same-name
     const mergeMap = new Map<string, ResolvedPlugin>()
@@ -373,6 +490,7 @@ export class PluginRegistry {
     const log = logger ?? noopLogger
 
     for (const rp of this.globalPlugins) {
+      if (!this.#isAvailable(rp)) continue
       if (!isAuthPlugin(rp.plugin)) continue
       if (!rp.providers.includes(providerId)) continue
       if (options.requireDiscoverModels && !rp.plugin.discoverModels) continue
@@ -399,8 +517,14 @@ export class PluginRegistry {
     return undefined
   }
 
-  private allResolved(): ResolvedPlugin[] {
-    return this.allResolvedCache
+  #isAvailable(rp: ResolvedPlugin): boolean {
+    return !this.unavailablePlugins.has(rp.plugin)
+  }
+
+  #assertAcceptingHooks(operation: string): void {
+    if (this.state !== 'active') {
+      throw new Error(`Cannot ${operation}: plugin registry is ${this.state}`)
+    }
   }
 
   private computeAllResolved(): ResolvedPlugin[] {
@@ -435,6 +559,56 @@ export class PluginRegistry {
   }
 }
 
+function settlePluginDispose(
+  plugin: Plugin,
+  dispose: NonNullable<Plugin['dispose']>,
+  log: Logger,
+  signal?: AbortSignal,
+): Promise<PluginDisposeSettlement> {
+  if (signal?.aborted) {
+    return Promise.resolve({ status: 'aborted', error: abortError(signal) })
+  }
+
+  let disposePromise: Promise<void>
+  try {
+    disposePromise = Promise.resolve(dispose.call(plugin, signal))
+  } catch (error) {
+    log.error({ err: error, plugin: plugin.name }, 'plugin dispose failed')
+    return Promise.resolve({ status: 'failed', error })
+  }
+
+  const observed = disposePromise.then<PluginDisposeSettlement, PluginDisposeSettlement>(
+    () => ({ status: 'disposed' }),
+    (error: unknown) => {
+      log.error({ err: error, plugin: plugin.name }, 'plugin dispose failed')
+      return { status: 'failed', error }
+    },
+  )
+  if (!signal) return observed
+
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (result: PluginDisposeSettlement): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      resolve(result)
+    }
+    const onAbort = (): void => finish({ status: 'aborted', error: abortError(signal) })
+
+    signal.addEventListener('abort', onAbort, { once: true })
+    void observed.then(finish)
+    if (signal.aborted) onAbort()
+  })
+}
+
+function abortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason
+  const error = new Error('Plugin disposal aborted', { cause: signal.reason })
+  error.name = 'AbortError'
+  return error
+}
+
 function throwPluginHookError(
   plugin: string,
   provider: string,
@@ -449,31 +623,6 @@ function throwPluginHookError(
 
 function isAuthPlugin(plugin: Plugin): plugin is AuthPlugin {
   return typeof (plugin as AuthPlugin).createFetch === 'function'
-}
-
-/** 筛选带 `init` 的插件，将元素类型收窄为带 `NonNullable<init>` 的 ResolvedPlugin。 */
-function filterInitable(
-  rps: ResolvedPlugin[],
-): Array<ResolvedPlugin & { plugin: { init: NonNullable<Plugin['init']> } }> {
-  return rps.filter(
-    (rp): rp is ResolvedPlugin & { plugin: { init: NonNullable<Plugin['init']> } } =>
-      rp.plugin.init !== undefined,
-  )
-}
-
-/** 筛选带 `afterServerStart` 的插件，将元素类型收窄为带 `NonNullable<afterServerStart>` 的 ResolvedPlugin。 */
-function filterAfterStart(
-  rps: ResolvedPlugin[],
-): Array<
-  ResolvedPlugin & { plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> } }
-> {
-  return rps.filter(
-    (
-      rp,
-    ): rp is ResolvedPlugin & {
-      plugin: { afterServerStart: NonNullable<Plugin['afterServerStart']> }
-    } => rp.plugin.afterServerStart !== undefined,
-  )
 }
 
 function isProxyPlugin(plugin: Plugin): plugin is ProxyPlugin {

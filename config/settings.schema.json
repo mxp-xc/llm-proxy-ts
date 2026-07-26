@@ -31,7 +31,7 @@
     "requestTimeoutMs": {
       "type": "number",
       "exclusiveMinimum": 0,
-      "default": 30000
+      "default": 300000
     },
     "proxy": {
       "anyOf": [

@@ -133,8 +133,10 @@ describe('discoverProviderModels', () => {
   it('returns skipped plugin_failed when discoverModels throws', async () => {
     const provider = openaiCompatibleProvider()
     const settings = makeSettings({ myprov: provider })
+    const pluginCause = new Error('plugin dependency failed')
+    const pluginError = new Error('plugin boom', { cause: pluginCause })
     const pluginRegistry = pluginRegistryMock(async () => {
-      throw new Error('plugin boom')
+      throw pluginError
     })
 
     const result = await discoverProviderModels({
@@ -151,12 +153,33 @@ describe('discoverProviderModels', () => {
         providerName: 'myprov',
         reason: 'plugin_failed',
         message: 'Auth plugin discoverModels failed — plugin boom',
+        cause: pluginError,
       },
     })
+    if ('skipped' in result) {
+      expect(result.skipped.cause).toBe(pluginError)
+      expect((result.skipped.cause as Error).cause).toBe(pluginCause)
+      expect((result.skipped.cause as Error).stack).toBe(pluginError.stack)
+    }
   })
 
-  it('returns ok via HTTP fallback for anthropic provider with anthropic authMode', async () => {
-    const provider = anthropicProvider({ baseURL: 'https://api.anthropic.com/v1' })
+  it.each([
+    {
+      providerType: 'openai-compatible',
+      provider: openaiCompatibleProvider(),
+      expected: { baseURL: 'https://api.example.com/v1', authMode: 'bearer' },
+    },
+    {
+      providerType: 'anthropic',
+      provider: anthropicProvider({ baseURL: undefined }),
+      expected: { baseURL: 'https://api.anthropic.com/v1', authMode: 'anthropic' },
+    },
+    {
+      providerType: 'openai',
+      provider: openaiProvider({ baseURL: undefined }),
+      expected: { baseURL: 'https://api.openai.com/v1', authMode: 'bearer' },
+    },
+  ])('uses the default $providerType discovery parameters', async ({ provider, expected }) => {
     const settings = makeSettings({ myprov: provider })
     const fetchUpstream = fetchUpstreamMock()
 
@@ -170,49 +193,31 @@ describe('discoverProviderModels', () => {
     })
 
     expect(result).toHaveProperty('ok')
-    if ('ok' in result) {
-      expect(result.ok.source).toBe('http')
-    }
     expect(fetchUpstream).toHaveBeenCalledWith(
       expect.objectContaining({
-        baseURL: 'https://api.anthropic.com/v1',
-        authMode: 'anthropic',
+        ...expected,
         apiKey: 'test-key',
       }),
     )
   })
 
-  it('returns ok via HTTP fallback for openai provider with bearer authMode', async () => {
-    const provider = openaiProvider({ baseURL: 'https://api.example.com/v1' })
-    const settings = makeSettings({ myprov: provider })
-    const fetchUpstream = fetchUpstreamMock()
-
-    const result = await discoverProviderModels({
-      providerName: 'myprov',
-      provider,
-      settings,
-      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
-      authFilePath,
-      fetchUpstream,
-    })
-
-    expect(result).toHaveProperty('ok')
-    if ('ok' in result) {
-      expect(result.ok.source).toBe('http')
-    }
-    expect(fetchUpstream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseURL: 'https://api.example.com/v1',
-        authMode: 'bearer',
-        apiKey: 'test-key',
-        modelsEndpoint: undefined,
-      }),
-    )
-  })
-
-  it('defaults openai provider baseURL to https://api.openai.com/v1 when absent', async () => {
-    const provider = openaiProvider()
-    delete provider.baseURL
+  it.each([
+    {
+      option: 'modelsEndpoint',
+      provider: openaiCompatibleProvider({ options: { modelsEndpoint: '/custom/models' } }),
+      expected: { modelsEndpoint: '/custom/models' },
+    },
+    {
+      option: 'anthropicVersion',
+      provider: anthropicProvider({ options: { anthropicVersion: '2024-10-22' } }),
+      expected: { anthropicVersion: '2024-10-22' },
+    },
+    {
+      option: 'openAIOptions',
+      provider: openaiProvider({ options: { organization: 'org-test', project: 'proj-test' } }),
+      expected: { openAIOptions: { organization: 'org-test', project: 'proj-test' } },
+    },
+  ])('parses provider-specific $option discovery options', async ({ provider, expected }) => {
     const settings = makeSettings({ myprov: provider })
     const fetchUpstream = fetchUpstreamMock()
 
@@ -225,54 +230,7 @@ describe('discoverProviderModels', () => {
       fetchUpstream,
     })
 
-    expect(fetchUpstream).toHaveBeenCalledWith(
-      expect.objectContaining({ baseURL: 'https://api.openai.com/v1' }),
-    )
-  })
-
-  it('defaults anthropic provider baseURL to https://api.anthropic.com/v1 when absent', async () => {
-    const provider = anthropicProvider()
-    delete provider.baseURL
-    const settings = makeSettings({ myprov: provider })
-    const fetchUpstream = fetchUpstreamMock()
-
-    await discoverProviderModels({
-      providerName: 'myprov',
-      provider,
-      settings,
-      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
-      authFilePath,
-      fetchUpstream,
-    })
-
-    expect(fetchUpstream).toHaveBeenCalledWith(
-      expect.objectContaining({ baseURL: 'https://api.anthropic.com/v1' }),
-    )
-  })
-
-  it('propagates provider.options.anthropicVersion to fetchUpstream', async () => {
-    const provider = anthropicProvider({
-      baseURL: 'https://api.anthropic.com/v1',
-      options: { anthropicVersion: '2024-10-22' },
-    })
-    const settings = makeSettings({ myprov: provider })
-    const fetchUpstream = fetchUpstreamMock()
-
-    await discoverProviderModels({
-      providerName: 'myprov',
-      provider,
-      settings,
-      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
-      authFilePath,
-      fetchUpstream,
-    })
-
-    expect(fetchUpstream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authMode: 'anthropic',
-        anthropicVersion: '2024-10-22',
-      }),
-    )
+    expect(fetchUpstream).toHaveBeenCalledWith(expect.objectContaining(expected))
   })
 
   it('returns skipped oauth_needs_login when token status is needs_login', async () => {
@@ -303,9 +261,13 @@ describe('discoverProviderModels', () => {
   it('returns skipped oauth_refresh_failed when ensureValidToken throws OAuthError', async () => {
     const provider = openaiCompatibleProvider({ oauth: oauthConfig })
     const settings = makeSettings({ myprov: provider })
+    const refreshCause = new Error('token endpoint unavailable')
+    const refreshError = new OAuthError('refresh_failed', 'refresh exploded', {
+      cause: refreshCause,
+    })
     const tokenManager = tokenManagerMock({
       status: 'needs_refresh',
-      ensureError: new OAuthError('refresh_failed', 'refresh exploded'),
+      ensureError: refreshError,
     })
 
     const result = await discoverProviderModels({
@@ -322,8 +284,14 @@ describe('discoverProviderModels', () => {
         providerName: 'myprov',
         reason: 'oauth_refresh_failed',
         message: 'OAuth token refresh failed — refresh exploded',
+        cause: refreshError,
       },
     })
+    if ('skipped' in result) {
+      expect(result.skipped.cause).toBe(refreshError)
+      expect((result.skipped.cause as Error).cause).toBe(refreshCause)
+      expect((result.skipped.cause as Error).stack).toBe(refreshError.stack)
+    }
   })
 
   it('returns ok via HTTP fallback with injected fetchUpstream', async () => {
@@ -354,7 +322,6 @@ describe('discoverProviderModels', () => {
       expect.objectContaining({
         baseURL: 'https://api.example.com/v1',
         apiKey: 'test-key',
-        modelsEndpoint: undefined,
       }),
     )
   })
@@ -362,7 +329,9 @@ describe('discoverProviderModels', () => {
   it('returns skipped fetch_failed when fetchUpstream throws', async () => {
     const provider = openaiCompatibleProvider()
     const settings = makeSettings({ myprov: provider })
-    const fetchUpstream = vi.fn().mockRejectedValue(new Error('HTTP 500 oops'))
+    const fetchCause = new Error('socket closed')
+    const fetchError = new Error('HTTP 500 oops', { cause: fetchCause })
+    const fetchUpstream = vi.fn().mockRejectedValue(fetchError)
 
     const result = await discoverProviderModels({
       providerName: 'myprov',
@@ -378,6 +347,44 @@ describe('discoverProviderModels', () => {
         providerName: 'myprov',
         reason: 'fetch_failed',
         message: 'HTTP 500 oops',
+        cause: fetchError,
+      },
+    })
+    if ('skipped' in result) {
+      expect(result.skipped.cause).toBe(fetchError)
+      expect((result.skipped.cause as Error).cause).toBe(fetchCause)
+      expect((result.skipped.cause as Error).stack).toBe(fetchError.stack)
+    }
+  })
+
+  it.each([
+    { models: [{ id: '' }], expected: 'id' },
+    { models: [{ id: 'bad-limit', context_length: 0 }], expected: 'context' },
+    { models: [{ id: 'bad-limit', max_output_tokens: 1.5 }], expected: 'output' },
+    {
+      models: [{ id: 'bad-limit', context_length: Number.POSITIVE_INFINITY }],
+      expected: 'context',
+    },
+  ])('rejects invalid HTTP discovery data: $expected', async ({ models, expected }) => {
+    const provider = openaiCompatibleProvider()
+    const settings = makeSettings({ myprov: provider })
+    const fetchUpstream = fetchUpstreamMock(models as UpstreamModelResponse[])
+
+    const result = await discoverProviderModels({
+      providerName: 'myprov',
+      provider,
+      settings,
+      rawParsed: { providers: { myprov: { apiKey: 'test-key' } } },
+      authFilePath,
+      fetchUpstream,
+    })
+
+    expect(result).toEqual({
+      skipped: {
+        providerName: 'myprov',
+        reason: 'fetch_failed',
+        message: expect.stringMatching(new RegExp(`Invalid discovered models.*${expected}`, 's')),
+        cause: expect.any(Error),
       },
     })
   })

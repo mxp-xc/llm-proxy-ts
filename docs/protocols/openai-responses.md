@@ -68,8 +68,12 @@ OpenAI 推荐的新接口，agentic 原语。支持内置工具、多轮状态�
 - `function_call`：工具调用（输出回放）
 - `function_call_output`：工具结果，带 `call_id` 关联
 - `custom_tool_call` / `custom_tool_call_output`
+- `tool_search_call`：工具发现调用，使用 `call_id` 关联结果；client execution 的历史项保留原始 `id` 和 `execution`
+- `tool_search_output`：工具发现结果，使用 `call_id` 关联调用并在 `tools` 中携带发现的工具
 - `reasoning`：推理 item（可加密回放）
 - `web_search_call` / `file_search_call` / `computer_call` / `code_interpreter_call` / `mcp_call`：内置工具调用（输出回放）
+
+OpenAI provider 的 Responses passthrough 会保留 Codex client tool-search 历史的原生 wire shape，包括 opaque 扩展字段。`openai-compatible` provider 通过普通 tool call/result shim 转换 tool search，不承诺原生 item 透传。
 
 ## 响应（非流式）
 

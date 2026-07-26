@@ -43,19 +43,24 @@ export function planModelSyncChanges({
 }: ModelSyncPlanInput): ModelSyncPlan {
   const selected = new Set(selectedIds)
   const discoveredById = new Map(discoveredModels.map((model) => [model.id, model]))
-  const existingByUpstreamModel = new Map(
-    Object.entries(existingModels).map(([modelKey, config]) => [config.upstreamModel, modelKey]),
-  )
+  const existingByUpstreamModel = new Map<string, string[]>()
+  for (const [modelKey, config] of Object.entries(existingModels)) {
+    const existingKeys = existingByUpstreamModel.get(config.upstreamModel) ?? []
+    existingKeys.push(modelKey)
+    existingByUpstreamModel.set(config.upstreamModel, existingKeys)
+  }
   const newModels: Record<string, ModelRouteInput> = {}
   let kept = 0
   let added = 0
 
   for (const modelId of selected) {
-    const existingKey = existingByUpstreamModel.get(modelId)
+    const existingKeys = existingByUpstreamModel.get(modelId)
 
-    if (existingKey) {
-      newModels[existingKey] = omitEmptyModelDefaults(existingModels[existingKey]!)
-      kept++
+    if (existingKeys) {
+      for (const existingKey of existingKeys) {
+        newModels[existingKey] = omitEmptyModelDefaults(existingModels[existingKey]!)
+        kept++
+      }
       continue
     }
 

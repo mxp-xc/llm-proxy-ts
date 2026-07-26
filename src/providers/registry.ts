@@ -15,6 +15,7 @@ import {
 } from './shared/provider-factory.js'
 import { safeProxyUrl } from '../proxy-url.js'
 import { createAnthropicProvider } from './anthropic/provider.js'
+import { resolveProviderMetadata } from './metadata.js'
 import { createOpenAIProvider } from './openai/provider.js'
 
 // ─── ProviderFactory interface ──────────────────────────────────
@@ -169,7 +170,7 @@ export async function createProviderRegistry(
 
   return {
     languageModel(providerName, upstreamModel, modelHeaders, options) {
-      const provider = getProvider(providerName)
+      const provider = resolveProviderMetadata(getProvider(providerName)).provider
 
       const modelFactory = createProviderModelFactory(
         providerName,
@@ -215,8 +216,17 @@ export function createOAuthFetch(
   tokenManager: TokenManager,
 ): (baseFetch?: typeof fetch) => typeof fetch {
   return (baseFetch) => async (input, init) => {
-    const token = await tokenManager.ensureValidToken(providerName, oauthConfig)
-    const headers = new Headers(init?.headers)
+    const signal =
+      init?.signal === null
+        ? undefined
+        : (init?.signal ?? (input instanceof Request ? input.signal : undefined))
+    const token = await tokenManager.ensureValidToken(providerName, oauthConfig, signal)
+    const headers = new Headers(input instanceof Request ? input.headers : undefined)
+    if (init?.headers !== undefined) {
+      for (const [name, value] of new Headers(init.headers)) {
+        headers.set(name, value)
+      }
+    }
     // 清理 SDK 注入的占位/过期认证头，防止 oauth-placeholder 泄漏到上游
     // @ai-sdk/openai 注入 Authorization: Bearer oauth-placeholder
     // @ai-sdk/anthropic 注入 x-api-key: oauth-placeholder
@@ -256,6 +266,8 @@ function createProviderModelFactory(
     proxyFetch,
   })
 
+  // metadata.ts 只集中 registry/discovery 重复的 URL 与发现策略。动态索引异构
+  // ProviderFactory 会丢失 provider/config 类型关联并需要不安全断言，因此保留穷尽 switch。
   switch (provider.type) {
     case 'anthropic':
       return (selectedApiKey, customFetch) =>
@@ -375,7 +387,7 @@ function createFailoverLanguageModel(
               }
             }
             buffered.push(next.value)
-            if (isProviderStreamCommitPart(next.value.type)) {
+            if (isProviderStreamCommitPart(next.value)) {
               return { ...result, stream: replayProviderStream(buffered, reader) }
             }
           }
@@ -388,7 +400,20 @@ function createFailoverLanguageModel(
   })
 }
 
-function isProviderStreamCommitPart(type: string): boolean {
+function isProviderStreamCommitPart(part: { type: string; rawValue?: unknown }): boolean {
+  if (part.type === 'raw') {
+    const rawType =
+      part.rawValue && typeof part.rawValue === 'object'
+        ? (part.rawValue as Record<string, unknown>).type
+        : undefined
+    if (
+      rawType === 'response.created' ||
+      rawType === 'response.queued' ||
+      rawType === 'response.in_progress'
+    ) {
+      return false
+    }
+  }
   return ![
     'stream-start',
     'response-metadata',
@@ -397,7 +422,7 @@ function isProviderStreamCommitPart(type: string): boolean {
     'reasoning-start',
     'reasoning-end',
     'tool-input-end',
-  ].includes(type)
+  ].includes(part.type)
 }
 
 function toRetryableProviderStreamError(error: unknown): unknown {

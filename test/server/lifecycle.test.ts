@@ -1,6 +1,16 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer as createNetServer, type AddressInfo, type Server } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Logger } from '../../src/types.js'
-import { createShutdownController, type ClosableServer } from '../../src/server/lifecycle.js'
+import {
+  createShutdownController,
+  type ClosableServer,
+  type ShutdownControllerOptions,
+} from '../../src/server/lifecycle.js'
+import { startServer } from '../../src/server/server.js'
+import type { LoggingRuntime } from '../../src/server/logging.js'
 
 function createLogger(isClosed: () => boolean = () => false) {
   const entries: Array<{ level: string; payload: unknown; message?: string }> = []
@@ -28,32 +38,151 @@ function createLogger(isClosed: () => boolean = () => false) {
   return { logger, entries }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+async function listenOnRandomPort(): Promise<{ server: Server; port: number }> {
+  const server = createNetServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address() as AddressInfo
+  return { server, port: address.port }
+}
+
+async function closeNetServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()))
+  })
+}
+
+async function writeOAuthServerSettings(
+  rootDir: string,
+  port: number,
+  requestTimeoutMs = 30_000,
+): Promise<void> {
+  const configDir = join(rootDir, 'config')
+  await mkdir(configDir, { recursive: true })
+  await writeFile(
+    join(configDir, 'settings.jsonc'),
+    JSON.stringify({
+      service: { host: '127.0.0.1', port },
+      requestTimeoutMs,
+      providers: {
+        oauth: {
+          type: 'openai-compatible',
+          baseURL: 'https://api.example.com/v1',
+          apiKey: null,
+          oauth: {
+            flow: 'client_credentials',
+            clientId: 'test-client-id',
+            clientSecret: 'test-client-secret',
+            tokenUrl: 'https://auth.example.com/oauth2/token',
+            scopes: [],
+          },
+          models: { chat: { upstreamModel: 'm' } },
+        },
+      },
+    }),
+    'utf8',
+  )
+}
+
+function createShutdownControllerFixture(
+  options: Omit<ShutdownControllerOptions, 'setExitCode' | 'forceExit'>,
+) {
+  const setExitCode = vi.fn<(code: number) => void>()
+  const forceExit = vi.fn<(code: number) => void>()
+  const controller = createShutdownController({ ...options, setExitCode, forceExit })
+  return { controller, setExitCode, forceExit }
+}
+
 describe('createShutdownController', () => {
   it('closes the server and flushes logging once', async () => {
     const { logger, entries } = createLogger()
     const server: ClosableServer = { close: (callback) => callback() }
     const closeLogging = vi.fn(async () => {})
-    const exitCodes: number[] = []
-    const controller = createShutdownController({
+    const { controller, setExitCode } = createShutdownControllerFixture({
       server,
       logger,
       closeLogging,
       timeoutMs: 100,
       now: () => 10,
-      setExitCode: (code) => exitCodes.push(code),
     })
 
     await controller.shutdown('SIGTERM')
     await controller.shutdown('SIGTERM')
 
     expect(closeLogging).toHaveBeenCalledTimes(1)
-    expect(exitCodes).toEqual([])
+    expect(setExitCode).not.toHaveBeenCalled()
     expect(entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ message: 'server.shutdown.requested' }),
         expect.objectContaining({ message: 'server.shutdown.completed' }),
       ]),
     )
+  })
+
+  it('disposes plugins once after closing the server and before flushing logging', async () => {
+    const { logger } = createLogger()
+    const calls: string[] = []
+    const { controller } = createShutdownControllerFixture({
+      server: {
+        close(callback) {
+          calls.push('server')
+          callback()
+        },
+      },
+      logger,
+      disposePlugins: async () => {
+        calls.push('plugins')
+      },
+      closeLogging: async () => {
+        calls.push('logging')
+      },
+      timeoutMs: 100,
+    })
+
+    await controller.shutdown('SIGTERM')
+    await controller.shutdown('SIGINT')
+
+    expect(calls).toEqual(['server', 'plugins', 'logging'])
+  })
+
+  it('records plugin disposal failures and still closes logging', async () => {
+    const { logger, entries } = createLogger()
+    const disposeError = new Error('dispose failed')
+    const closeLogging = vi.fn(async () => {})
+    const { controller, setExitCode, forceExit } = createShutdownControllerFixture({
+      server: { close: (callback) => callback() },
+      logger,
+      disposePlugins: async () => {
+        throw disposeError
+      },
+      closeLogging,
+      timeoutMs: 100,
+    })
+
+    await controller.shutdown('SIGTERM')
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        payload: expect.objectContaining({ err: disposeError }),
+        message: 'server.shutdown.plugin_dispose_failed',
+      }),
+    )
+    expect(setExitCode).toHaveBeenCalledWith(1)
+    expect(forceExit).not.toHaveBeenCalled()
+    expect(closeLogging).toHaveBeenCalledOnce()
   })
 
   it('forces connections closed when shutdown is requested again', async () => {
@@ -65,7 +194,7 @@ describe('createShutdownController', () => {
       },
       closeAllConnections: vi.fn(),
     }
-    const controller = createShutdownController({
+    const { controller } = createShutdownControllerFixture({
       server,
       logger,
       closeLogging: async () => {},
@@ -94,13 +223,11 @@ describe('createShutdownController', () => {
     const closeError = new Error('close failed')
     const server: ClosableServer = { close: (callback) => callback(closeError) }
     const closeLogging = vi.fn(async () => {})
-    const setExitCode = vi.fn()
-    const controller = createShutdownController({
+    const { controller, setExitCode } = createShutdownControllerFixture({
       server,
       logger,
       closeLogging,
       timeoutMs: 100,
-      setExitCode,
     })
 
     await controller.shutdown('SIGTERM')
@@ -129,14 +256,12 @@ describe('createShutdownController', () => {
         closeAllConnections,
       }
       const closeLogging = vi.fn(async () => {})
-      const setExitCode = vi.fn()
       const abortActiveRequests = vi.fn()
-      const controller = createShutdownController({
+      const { controller, setExitCode, forceExit } = createShutdownControllerFixture({
         server,
         logger,
         closeLogging,
         timeoutMs: 25,
-        setExitCode,
         abortActiveRequests,
       })
 
@@ -158,6 +283,7 @@ describe('createShutdownController', () => {
       )
       expect(setExitCode).not.toHaveBeenCalled()
       expect(closeLogging).toHaveBeenCalledOnce()
+      expect(forceExit).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -166,12 +292,11 @@ describe('createShutdownController', () => {
   it('marks process errors fatal before shutting down', async () => {
     const { logger, entries } = createLogger()
     const processError = new Error('boom')
-    const controller = createShutdownController({
+    const { controller } = createShutdownControllerFixture({
       server: { close: (callback) => callback() },
       logger,
       closeLogging: async () => {},
       timeoutMs: 100,
-      setExitCode: vi.fn(),
     })
 
     await controller.shutdown('unhandledRejection', processError)
@@ -251,9 +376,8 @@ describe('createShutdownController', () => {
     const { logger, entries } = createLogger()
     let finishClose: (() => void) | undefined
     const processError = new Error('shutdown crash')
-    const setExitCode = vi.fn()
     const fallbackError = vi.fn()
-    const controller = createShutdownController({
+    const { controller, setExitCode } = createShutdownControllerFixture({
       server: {
         close(callback) {
           finishClose = callback
@@ -263,7 +387,6 @@ describe('createShutdownController', () => {
       logger,
       closeLogging: async () => {},
       timeoutMs: 100,
-      setExitCode,
       fallbackError,
     })
 
@@ -298,12 +421,11 @@ describe('createShutdownController', () => {
         finishLogging = resolve
       })
     })
-    const controller = createShutdownController({
+    const { controller } = createShutdownControllerFixture({
       server: { close: (callback) => callback() },
       logger,
       closeLogging,
       timeoutMs: 100,
-      setExitCode: vi.fn(),
       fallbackError,
     })
 
@@ -335,13 +457,11 @@ describe('createShutdownController', () => {
       const closeLogging = vi.fn(async () => {
         loggingClosed = true
       })
-      const setExitCode = vi.fn()
-      const controller = createShutdownController({
+      const { controller, setExitCode } = createShutdownControllerFixture({
         server,
         logger,
         closeLogging,
         timeoutMs: 100,
-        setExitCode,
         fallbackError,
       })
 
@@ -366,11 +486,10 @@ describe('createShutdownController', () => {
     vi.useFakeTimers()
     try {
       const { logger } = createLogger()
-      const setExitCode = vi.fn()
       const fallbackError = vi.fn()
       const closeLogging = vi.fn(() => new Promise<void>(() => {}))
       let currentTime = 0
-      const controller = createShutdownController({
+      const { controller, setExitCode, forceExit } = createShutdownControllerFixture({
         server: {
           close(callback) {
             currentTime = 20
@@ -382,7 +501,6 @@ describe('createShutdownController', () => {
         timeoutMs: 25,
         loggingTimeoutMs: 5,
         now: () => currentTime,
-        setExitCode,
         fallbackError,
       })
 
@@ -399,8 +517,614 @@ describe('createShutdownController', () => {
         'FATAL: logging shutdown timed out',
         expect.any(Error),
       )
+      expect(forceExit).toHaveBeenCalledOnce()
+      expect(forceExit).toHaveBeenCalledWith(1)
     } finally {
       vi.useRealTimers()
+    }
+  })
+
+  it('bounds plugin disposal by the remaining deadline and still closes logging', async () => {
+    vi.useFakeTimers()
+    try {
+      const { logger, entries } = createLogger()
+      const closeLogging = vi.fn(async () => {})
+      const fallbackError = vi.fn()
+      let rejectDispose: ((reason: unknown) => void) | undefined
+      let disposeSignal: AbortSignal | undefined
+      const disposePlugins = vi.fn(
+        (signal: AbortSignal) =>
+          new Promise<void>((_resolve, reject) => {
+            disposeSignal = signal
+            rejectDispose = reject
+          }),
+      )
+      let currentTime = 0
+      const { controller, setExitCode, forceExit } = createShutdownControllerFixture({
+        server: {
+          close(callback) {
+            currentTime = 20
+            callback()
+          },
+        },
+        logger,
+        disposePlugins,
+        closeLogging,
+        timeoutMs: 25,
+        now: () => currentTime,
+        fallbackError,
+      })
+
+      const shutdown = controller.shutdown('SIGTERM')
+      await vi.advanceTimersByTimeAsync(4)
+      expect(closeLogging).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      await shutdown
+
+      expect(disposePlugins).toHaveBeenCalledOnce()
+      expect(closeLogging).toHaveBeenCalledOnce()
+      expect(setExitCode).toHaveBeenCalledWith(1)
+      expect(disposeSignal?.aborted).toBe(true)
+      expect(forceExit).toHaveBeenCalledOnce()
+      expect(forceExit).toHaveBeenCalledWith(1)
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          message: 'server.shutdown.plugin_dispose_timed_out',
+        }),
+      )
+
+      const lateDisposeError = new Error('late dispose failure')
+      rejectDispose?.(lateDisposeError)
+      await Promise.resolve()
+      expect(fallbackError).toHaveBeenCalledWith(
+        'FATAL: plugin disposal failed after shutdown deadline',
+        lateDisposeError,
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('startServer', () => {
+  it('disposes initialized plugins in reverse order when startup fails', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-startup-cleanup-'))
+    const calls: string[] = []
+    const globals = globalThis as unknown as { __startupCleanupCalls?: string[] }
+    globals.__startupCleanupCalls = calls
+    try {
+      const configDir = join(rootDir, 'config')
+      await mkdir(configDir, { recursive: true })
+      const firstPluginPath = join(rootDir, 'first.mjs')
+      const secondPluginPath = join(rootDir, 'second.mjs')
+      await writeFile(
+        firstPluginPath,
+        `export default {
+          name: 'first',
+          async init() {
+            globalThis.__startupCleanupCalls.push('init:first')
+          },
+          async dispose() {
+            globalThis.__startupCleanupCalls.push('dispose:first')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        secondPluginPath,
+        `export default {
+          name: 'second',
+          async init() {
+            globalThis.__startupCleanupCalls.push('init:second')
+          },
+          async beforeServerStart() {
+            globalThis.__startupCleanupCalls.push('before:second')
+            throw new Error('startup boom')
+          },
+          async dispose() {
+            globalThis.__startupCleanupCalls.push('dispose:second')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        join(configDir, 'settings.jsonc'),
+        JSON.stringify({
+          plugins: [{ module: firstPluginPath }, { module: secondPluginPath }],
+        }),
+        'utf8',
+      )
+      const { logger } = createLogger()
+      const logging: LoggingRuntime = {
+        logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+
+      await expect(startServer(rootDir, logging)).rejects.toThrow('startup boom')
+
+      expect(calls).toEqual([
+        'init:first',
+        'init:second',
+        'before:second',
+        'dispose:second',
+        'dispose:first',
+      ])
+      expect(logging.close).not.toHaveBeenCalled()
+    } finally {
+      delete globals.__startupCleanupCalls
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('bounds startup cleanup when plugin disposal hangs and rethrows the startup error', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-bounded-startup-cleanup-'))
+    const startupError = new Error('startup boom')
+    const disposeStarted = createDeferred<void>()
+    const globals = globalThis as unknown as {
+      __boundedStartupError?: Error
+      __boundedStartupDisposeStarted?: () => void
+      __boundedStartupDisposeSignal?: AbortSignal
+    }
+    globals.__boundedStartupError = startupError
+    globals.__boundedStartupDisposeStarted = () => disposeStarted.resolve()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const configDir = join(rootDir, 'config')
+      await mkdir(configDir, { recursive: true })
+      const pluginPath = join(rootDir, 'hanging-dispose.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'hanging-dispose',
+          async beforeServerStart() {
+            throw globalThis.__boundedStartupError
+          },
+          async dispose(signal) {
+            globalThis.__boundedStartupDisposeSignal = signal
+            globalThis.__boundedStartupDisposeStarted()
+            await new Promise(() => {})
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        join(configDir, 'settings.jsonc'),
+        JSON.stringify({ requestTimeoutMs: 1, plugins: [{ module: pluginPath }] }),
+        'utf8',
+      )
+      const { logger, entries } = createLogger()
+      const logging: LoggingRuntime = {
+        logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+      const onStartupCleanupTimeout = vi.fn()
+
+      const startup = startServer(rootDir, logging, { onStartupCleanupTimeout })
+      const startupFailure = expect(startup).rejects.toBe(startupError)
+      await disposeStarted.promise
+      await vi.advanceTimersByTimeAsync(5_001)
+
+      await startupFailure
+      expect(globals.__boundedStartupDisposeSignal?.aborted).toBe(true)
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          payload: expect.objectContaining({ err: expect.any(Error) }),
+          message: 'plugin.dispose_after_startup_failure_timed_out',
+        }),
+      )
+      expect(onStartupCleanupTimeout).toHaveBeenCalledOnce()
+      expect(logging.close).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      consoleError.mockRestore()
+      delete globals.__boundedStartupError
+      delete globals.__boundedStartupDisposeStarted
+      delete globals.__boundedStartupDisposeSignal
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('aborts and awaits the background OAuth refresh during shutdown', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-oauth-shutdown-'))
+    const reservation = await listenOnRandomPort()
+    const port = reservation.port
+    await closeNetServer(reservation.server)
+    const fetchStarted = createDeferred<void>()
+    let refreshSignal: AbortSignal | undefined
+    const fetchFn = vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+      refreshSignal = init?.signal ?? undefined
+      fetchStarted.resolve()
+      return new Promise<Response>((_resolve, reject) => {
+        const rejectOnAbort = (): void => reject(refreshSignal?.reason)
+        refreshSignal?.addEventListener('abort', rejectOnAbort, { once: true })
+        if (refreshSignal?.aborted) rejectOnAbort()
+      })
+    })
+    vi.stubGlobal('fetch', fetchFn)
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandledRejection)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    let started: Awaited<ReturnType<typeof startServer>> | undefined
+    try {
+      await writeOAuthServerSettings(rootDir, port)
+      const { logger, entries } = createLogger()
+      const logging: LoggingRuntime = {
+        logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+
+      started = await startServer(rootDir, logging)
+      await fetchStarted.promise
+      await started.shutdownController.shutdown('SIGTERM')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(refreshSignal?.aborted).toBe(true)
+      expect(logging.close).toHaveBeenCalledOnce()
+      expect(exitSpy).not.toHaveBeenCalled()
+      expect(unhandledRejections).toEqual([])
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: 'info',
+          payload: expect.objectContaining({ err: expect.anything() }),
+          message: 'oauth.status_refresh_aborted',
+        }),
+      )
+    } finally {
+      await started?.shutdownController.shutdown('testCleanup')
+      process.off('unhandledRejection', onUnhandledRejection)
+      exitSpy.mockRestore()
+      vi.unstubAllGlobals()
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not force exit when the background OAuth refresh completes normally', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-oauth-refresh-complete-'))
+    const reservation = await listenOnRandomPort()
+    const port = reservation.port
+    await closeNetServer(reservation.server)
+    const refreshSucceeded = createDeferred<void>()
+    let refreshSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+        refreshSignal = init?.signal ?? undefined
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              access_token: 'access-token',
+              expires_in: 3600,
+              token_type: 'Bearer',
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }),
+    )
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandledRejection)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    let started: Awaited<ReturnType<typeof startServer>> | undefined
+    try {
+      await writeOAuthServerSettings(rootDir, port)
+      const base = createLogger()
+      const logging: LoggingRuntime = {
+        logger: {
+          ...base.logger,
+          info(payload, message) {
+            base.logger.info(payload, message)
+            if (message === 'oauth.refresh.succeeded') refreshSucceeded.resolve()
+          },
+        },
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+
+      started = await startServer(rootDir, logging)
+      await refreshSucceeded.promise
+      await started.shutdownController.shutdown('SIGTERM')
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(refreshSignal).toBeDefined()
+      expect(logging.close).toHaveBeenCalledOnce()
+      expect(exitSpy).not.toHaveBeenCalled()
+      expect(unhandledRejections).toEqual([])
+      expect(base.entries).not.toContainEqual(
+        expect.objectContaining({ message: 'oauth.status_refresh_failed' }),
+      )
+    } finally {
+      await started?.shutdownController.shutdown('testCleanup')
+      process.off('unhandledRejection', onUnhandledRejection)
+      exitSpy.mockRestore()
+      vi.unstubAllGlobals()
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('forces exit when an aborted background OAuth refresh ignores its signal', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-oauth-refresh-timeout-'))
+    const originalExitCode = process.exitCode
+    const reservation = await listenOnRandomPort()
+    const port = reservation.port
+    await closeNetServer(reservation.server)
+    const fetchStarted = createDeferred<void>()
+    let refreshSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof globalThis.fetch>().mockImplementation((_input, init) => {
+        refreshSignal = init?.signal ?? undefined
+        fetchStarted.resolve()
+        return new Promise<Response>(() => {})
+      }),
+    )
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandledRejection)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let started: Awaited<ReturnType<typeof startServer>> | undefined
+    try {
+      await writeOAuthServerSettings(rootDir, port, 1)
+      const { logger } = createLogger()
+      const logging: LoggingRuntime = {
+        logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+
+      started = await startServer(rootDir, logging)
+      await fetchStarted.promise
+
+      vi.useFakeTimers()
+      const shutdown = started.shutdownController.shutdown('SIGTERM')
+      await vi.advanceTimersByTimeAsync(5_001)
+      await shutdown
+      await Promise.resolve()
+
+      expect(refreshSignal?.aborted).toBe(true)
+      expect(logging.close).toHaveBeenCalledOnce()
+      expect(exitSpy).toHaveBeenCalledOnce()
+      expect(exitSpy).toHaveBeenCalledWith(1)
+      expect(unhandledRejections).toEqual([])
+    } finally {
+      vi.useRealTimers()
+      await started?.shutdownController.shutdown('testCleanup')
+      process.exitCode = originalExitCode
+      process.off('unhandledRejection', onUnhandledRejection)
+      exitSpy.mockRestore()
+      consoleError.mockRestore()
+      vi.unstubAllGlobals()
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('runs afterServerStart only after listening and waits for it before dispose', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-listening-lifecycle-'))
+    const reservation = await listenOnRandomPort()
+    const port = reservation.port
+    await closeNetServer(reservation.server)
+    const calls: string[] = []
+    const globals = globalThis as unknown as {
+      __listeningLifecycleCalls?: string[]
+      __finishAfterServerStart?: () => void
+    }
+    globals.__listeningLifecycleCalls = calls
+    let started: Awaited<ReturnType<typeof startServer>> | undefined
+    try {
+      const configDir = join(rootDir, 'config')
+      await mkdir(configDir, { recursive: true })
+      const pluginPath = join(rootDir, 'lifecycle.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'listening-lifecycle',
+          async afterServerStart() {
+            globalThis.__listeningLifecycleCalls.push('after:start')
+            await new Promise((resolve) => {
+              globalThis.__finishAfterServerStart = resolve
+            })
+            globalThis.__listeningLifecycleCalls.push('after:end')
+          },
+          async dispose() {
+            globalThis.__listeningLifecycleCalls.push('dispose')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        join(configDir, 'settings.jsonc'),
+        JSON.stringify({
+          service: { host: '127.0.0.1', port },
+          plugins: [{ module: pluginPath }],
+        }),
+        'utf8',
+      )
+      const base = createLogger()
+      const logging: LoggingRuntime = {
+        logger: {
+          ...base.logger,
+          info(payload, message) {
+            if (message === 'server.listening') calls.push('listening')
+            base.logger.info(payload, message)
+          },
+        },
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {
+          calls.push('logging')
+        }),
+      }
+
+      started = await startServer(rootDir, logging)
+
+      expect(calls).toEqual(['listening', 'after:start'])
+      const shutdown = started.shutdownController.shutdown('SIGTERM')
+      await Promise.resolve()
+      expect(calls).not.toContain('dispose')
+
+      globals.__finishAfterServerStart?.()
+      await shutdown
+
+      expect(calls).toEqual(['listening', 'after:start', 'after:end', 'dispose', 'logging'])
+    } finally {
+      globals.__finishAfterServerStart?.()
+      await started?.shutdownController.shutdown('testCleanup')
+      delete globals.__listeningLifecycleCalls
+      delete globals.__finishAfterServerStart
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('forces exit after a hanging afterServerStart without running dispose concurrently', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-hanging-after-start-'))
+    const originalExitCode = process.exitCode
+    const reservation = await listenOnRandomPort()
+    const port = reservation.port
+    await closeNetServer(reservation.server)
+    const calls: string[] = []
+    const globals = globalThis as unknown as {
+      __hangingAfterCalls?: string[]
+      __finishHangingAfter?: () => void
+    }
+    globals.__hangingAfterCalls = calls
+    let started: Awaited<ReturnType<typeof startServer>> | undefined
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code) => {
+      calls.push(`exit:${String(code)}`)
+      return undefined as never
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const configDir = join(rootDir, 'config')
+      await mkdir(configDir, { recursive: true })
+      const pluginPath = join(rootDir, 'hanging-after.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'hanging-after',
+          async afterServerStart() {
+            globalThis.__hangingAfterCalls.push('after:start')
+            await new Promise((resolve) => {
+              globalThis.__finishHangingAfter = resolve
+            })
+            globalThis.__hangingAfterCalls.push('after:end')
+          },
+          async dispose() {
+            globalThis.__hangingAfterCalls.push('dispose')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        join(configDir, 'settings.jsonc'),
+        JSON.stringify({
+          service: { host: '127.0.0.1', port },
+          requestTimeoutMs: 1,
+          plugins: [{ module: pluginPath }],
+        }),
+        'utf8',
+      )
+      const base = createLogger()
+      const logging: LoggingRuntime = {
+        logger: base.logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {
+          calls.push('logging')
+        }),
+      }
+
+      started = await startServer(rootDir, logging)
+      expect(calls).toEqual(['after:start'])
+
+      vi.useFakeTimers()
+      const shutdown = started.shutdownController.shutdown('SIGTERM')
+      await vi.advanceTimersByTimeAsync(5_001)
+      await shutdown
+
+      expect(logging.close).toHaveBeenCalledOnce()
+      expect(exitSpy).toHaveBeenCalledOnce()
+      expect(exitSpy).toHaveBeenCalledWith(1)
+      expect(calls).toEqual(['after:start', 'logging', 'exit:1'])
+
+      globals.__finishHangingAfter?.()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(calls).toEqual(['after:start', 'logging', 'exit:1', 'after:end'])
+      expect(calls).not.toContain('dispose')
+    } finally {
+      vi.useRealTimers()
+      globals.__finishHangingAfter?.()
+      await started?.shutdownController.shutdown('testCleanup')
+      process.exitCode = originalExitCode
+      exitSpy.mockRestore()
+      consoleError.mockRestore()
+      delete globals.__hangingAfterCalls
+      delete globals.__finishHangingAfter
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not run afterServerStart when the server fails to bind', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'llm-proxy-bind-failure-'))
+    const occupied = await listenOnRandomPort()
+    const calls: string[] = []
+    const globals = globalThis as unknown as { __bindFailureCalls?: string[] }
+    globals.__bindFailureCalls = calls
+    try {
+      const configDir = join(rootDir, 'config')
+      await mkdir(configDir, { recursive: true })
+      const pluginPath = join(rootDir, 'bind-failure.mjs')
+      await writeFile(
+        pluginPath,
+        `export default {
+          name: 'bind-failure',
+          async init() {
+            globalThis.__bindFailureCalls.push('init')
+          },
+          async afterServerStart() {
+            globalThis.__bindFailureCalls.push('after')
+          },
+          async dispose() {
+            globalThis.__bindFailureCalls.push('dispose')
+          }
+        }`,
+        'utf8',
+      )
+      await writeFile(
+        join(configDir, 'settings.jsonc'),
+        JSON.stringify({
+          service: { host: '127.0.0.1', port: occupied.port },
+          plugins: [{ module: pluginPath }],
+        }),
+        'utf8',
+      )
+      const { logger } = createLogger()
+      const logging: LoggingRuntime = {
+        logger,
+        logDir: join(rootDir, 'logs'),
+        close: vi.fn(async () => {}),
+      }
+
+      await expect(startServer(rootDir, logging)).rejects.toMatchObject({ code: 'EADDRINUSE' })
+
+      expect(calls).toEqual(['init', 'dispose'])
+      expect(logging.close).not.toHaveBeenCalled()
+    } finally {
+      delete globals.__bindFailureCalls
+      await closeNetServer(occupied.server)
+      await rm(rootDir, { recursive: true, force: true })
     }
   })
 })

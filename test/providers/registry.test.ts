@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APICallError, generateText, streamText, type LanguageModel } from 'ai'
 import type { Settings } from '../../src/index.js'
 import type { AuthFetchRegistry } from '../../src/plugins/registry.js'
-import { createProviderRegistry } from '../../src/providers/registry.js'
+import type { TokenManager } from '../../src/oauth/index.js'
+import { createOAuthFetch, createProviderRegistry } from '../../src/providers/registry.js'
 import * as providerFactoryModule from '../../src/providers/shared/provider-factory.js'
 import { makeSettings } from '../helpers/settings.js'
+import { authCodeConfig, makeToken } from '../helpers/oauth.js'
 import { createCapturingLogger } from '../helpers/registry.js'
 import { createCapturingProviderFactory } from '../helpers/provider-factory.js'
 
@@ -35,7 +37,13 @@ function failoverFactory(
   behavior: (
     key: string,
     operation: 'generate' | 'stream',
-  ) => 'fail' | 'in-band-error' | 'transport-error' | 'error-after-output' | 'success',
+  ) =>
+    | 'fail'
+    | 'in-band-error'
+    | 'raw-error-before-output'
+    | 'transport-error'
+    | 'error-after-output'
+    | 'success',
 ) {
   const create = (input: providerFactoryModule.ProviderBuildInput) => (modelId: string) => {
     const key = input.selectedApiKey ?? 'none'
@@ -74,6 +82,31 @@ function failoverFactory(
           stream: new ReadableStream({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings: [] })
+              if (streamBehavior === 'raw-error-before-output') {
+                controller.enqueue({
+                  type: 'raw',
+                  rawValue: { type: 'response.created', response: { id: 'response-1' } },
+                })
+                controller.enqueue({
+                  type: 'raw',
+                  rawValue: { type: 'response.in_progress', response: { id: 'response-1' } },
+                })
+                controller.enqueue({
+                  type: 'raw',
+                  rawValue: {
+                    type: 'response.failed',
+                    response: {
+                      error: {
+                        type: 'api_error',
+                        code: 'service_unavailable',
+                        message: 'Service temporarily unavailable',
+                      },
+                    },
+                  },
+                })
+                controller.close()
+                return
+              }
               controller.enqueue({ type: 'text-start', id: 'text-0' })
               if (streamBehavior === 'in-band-error') {
                 controller.enqueue({
@@ -266,6 +299,34 @@ describe('provider registry', () => {
       undefined,
       failoverFactory(calls, (key, operation) =>
         operation === 'stream' && key === 'key-0' ? 'in-band-error' : 'success',
+      ),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+
+    await expect(streamed.text).resolves.toBe('key-1')
+    expect(calls).toEqual(['key-0', 'key-1'])
+  })
+
+  it('uses the next api key for a retryable raw error after Responses prelude events', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key, operation) =>
+        operation === 'stream' && key === 'key-0' ? 'raw-error-before-output' : 'success',
       ),
     )
 
@@ -523,9 +584,16 @@ describe('provider registry', () => {
     expect(result.keySelection).toBeUndefined()
   })
 
-  it.each(['openai-compatible' as const, 'anthropic' as const, 'openai' as const])(
-    'dispatches %s providers to the matching factory adapter',
-    async (providerType) => {
+  it.each([
+    {
+      providerType: 'openai-compatible' as const,
+      expectedBaseURL: 'https://api.example.com/v1',
+    },
+    { providerType: 'anthropic' as const, expectedBaseURL: 'https://api.anthropic.com/v1' },
+    { providerType: 'openai' as const, expectedBaseURL: 'https://api.openai.com/v1' },
+  ])(
+    'dispatches $providerType providers with their resolved base URL',
+    async ({ providerType, expectedBaseURL }) => {
       const provider =
         providerType === 'openai'
           ? {
@@ -538,7 +606,6 @@ describe('provider registry', () => {
           : providerType === 'anthropic'
             ? {
                 type: 'anthropic' as const,
-                baseURL: 'https://api.anthropic.com/v1',
                 apiKey: 'secret',
                 headers: {},
                 plugins: [],
@@ -571,6 +638,7 @@ describe('provider registry', () => {
       registry.languageModel('provider', provider.models.chat!.upstreamModel, {})
 
       expect(capturedFactoryInputs[0]!.kind).toBe(providerType)
+      expect(capturedFactoryInputs[0]!.provider.baseURL).toBe(expectedBaseURL)
     },
   )
 
@@ -671,6 +739,98 @@ describe('provider registry', () => {
     expect(calls).toEqual(['auth', 'request', 'base'])
     expect(capturedHeaders?.get('x-auth-plugin')).toBe('yes')
     expect(capturedBody).toBe('request-body')
+  })
+})
+
+describe('createOAuthFetch', () => {
+  it('preserves Request-only headers, applies init overrides, and replaces authentication', async () => {
+    let capturedHeaders: Headers | undefined
+    const baseFetch = (async (_input, init) => {
+      capturedHeaders = new Headers(init?.headers)
+      return new Response('{}')
+    }) satisfies typeof fetch
+    const tokenManager = {
+      ensureValidToken: vi.fn(async () =>
+        makeToken({ accessToken: 'fresh-token', tokenType: 'Bearer' }),
+      ),
+    } as unknown as TokenManager
+    const oauthFetch = createOAuthFetch('provider', authCodeConfig, tokenManager)(baseFetch)
+    const request = new Request('https://example.test/v1/models', {
+      headers: {
+        Authorization: 'Bearer request-token',
+        'x-api-key': 'request-key',
+        'x-request-only': 'request-value',
+        'x-shared': 'request-value',
+      },
+    })
+
+    await oauthFetch(request, {
+      headers: {
+        authorization: 'Bearer init-token',
+        'x-api-key': 'init-key',
+        'x-init-only': 'init-value',
+        'x-shared': 'init-value',
+      },
+    })
+
+    expect(capturedHeaders?.get('x-request-only')).toBe('request-value')
+    expect(capturedHeaders?.get('x-init-only')).toBe('init-value')
+    expect(capturedHeaders?.get('x-shared')).toBe('init-value')
+    expect(capturedHeaders?.get('authorization')).toBe('Bearer fresh-token')
+    expect(capturedHeaders?.has('x-api-key')).toBe(false)
+  })
+
+  it('passes the effective request signal to token acquisition', async () => {
+    const abortReason = new DOMException('request cancelled', 'AbortError')
+    const tokenManager = {
+      ensureValidToken: vi.fn(
+        async (_providerName: string, _config: unknown, signal?: AbortSignal) => {
+          if (!signal) throw new Error('missing token acquisition signal')
+          return await new Promise<never>((_, reject) => {
+            const rejectOnAbort = () => reject(signal.reason)
+            if (signal.aborted) rejectOnAbort()
+            else signal.addEventListener('abort', rejectOnAbort, { once: true })
+          })
+        },
+      ),
+    } as unknown as TokenManager
+    const baseFetch = vi.fn<typeof globalThis.fetch>()
+    const oauthFetch = createOAuthFetch('provider', authCodeConfig, tokenManager)(baseFetch)
+    const controller = new AbortController()
+    const request = new Request('https://example.test/v1/models', {
+      signal: controller.signal,
+    })
+
+    const responsePromise = oauthFetch(request)
+    controller.abort(abortReason)
+
+    await expect(responsePromise).rejects.toBe(abortReason)
+    expect(tokenManager.ensureValidToken).toHaveBeenCalledWith(
+      'provider',
+      authCodeConfig,
+      request.signal,
+    )
+    expect(baseFetch).not.toHaveBeenCalled()
+  })
+
+  it('does not inherit the Request signal when init explicitly sets signal to null', async () => {
+    const tokenManager = {
+      ensureValidToken: vi.fn(async () => makeToken()),
+    } as unknown as TokenManager
+    const baseFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response('{}'))
+    const oauthFetch = createOAuthFetch('provider', authCodeConfig, tokenManager)(baseFetch)
+    const requestController = new AbortController()
+    const request = new Request('https://example.test/v1/models', {
+      signal: requestController.signal,
+    })
+
+    await oauthFetch(request, { signal: null })
+
+    expect(tokenManager.ensureValidToken).toHaveBeenCalledWith(
+      'provider',
+      authCodeConfig,
+      undefined,
+    )
   })
 })
 

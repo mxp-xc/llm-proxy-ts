@@ -94,6 +94,48 @@ describe('loadPlugin', () => {
     )
   })
 
+  it('should accept a module that only implements the dispose lifecycle hook', async () => {
+    const filePath = await writePluginFile(
+      'dispose-only.mjs',
+      `
+      export default {
+        name: 'dispose-only',
+        async dispose() {},
+      };
+    `,
+    )
+
+    const result = await loadPlugin({ module: filePath }, tempDir)
+
+    expect(result.plugin.name).toBe('dispose-only')
+  })
+
+  it.each([
+    'init',
+    'beforeServerStart',
+    'afterServerStart',
+    'dispose',
+    'inspectStreamChunk',
+    'createFetch',
+    'discoverModels',
+  ])('should reject a non-function %s hook', async (hook) => {
+    const fallbackHook = hook === 'dispose' ? 'init' : 'dispose'
+    const filePath = await writePluginFile(
+      `invalid-${hook}.mjs`,
+      `
+      export default {
+        name: 'invalid-${hook}',
+        ${fallbackHook}: async function () {},
+        ${hook}: 'not-a-function',
+      };
+    `,
+    )
+
+    await expect(loadPlugin({ module: filePath }, tempDir)).rejects.toThrow(
+      `Plugin at '${filePath}' hook '${hook}' must be a function`,
+    )
+  })
+
   it('should load modules with hooks and ignore non-hook validateConfig', async () => {
     const filePath = await writePluginFile(
       'bad-validate.mjs',

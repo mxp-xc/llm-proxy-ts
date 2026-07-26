@@ -9,15 +9,17 @@ export interface ClosableServer {
 export interface ShutdownControllerOptions {
   server: ClosableServer
   logger: Logger
+  disposePlugins?: (signal: AbortSignal) => Promise<void>
   closeLogging: () => Promise<void>
   timeoutMs: number
   forceTimeoutMs?: number
+  cleanupTimeoutMs?: number
   loggingTimeoutMs?: number
   abortActiveRequests?: (reason: unknown) => void
   waitForActiveRequests?: () => Promise<void>
-  forceExit?: (code: number) => void
   now?: () => number
   setExitCode?: (code: number) => void
+  forceExit?: (code: number) => void
   fallbackError?: (message: string, err: unknown) => void
 }
 
@@ -26,23 +28,90 @@ export interface ShutdownController {
   isShuttingDown(): boolean
 }
 
+export type DeadlineSettlement =
+  | { status: 'completed' }
+  | { status: 'failed'; error: unknown }
+  | { status: 'timed_out'; error: Error }
+
+export interface RunWithDeadlineOptions {
+  timeoutMs: number
+  timeoutMessage: string
+  now?: () => number
+  onLateFailure?: (error: unknown) => void
+}
+
 type CloseResult = 'graceful' | 'forced' | 'failed' | 'force_timed_out'
-type ServerCloseResult = 'closed' | 'failed'
+
+function settleWithin(
+  operation: () => Promise<void>,
+  timeoutMs: number,
+  timeoutMessage: string,
+  onTimeout: (error: Error) => void,
+  onLateFailure: (error: unknown) => void,
+): Promise<DeadlineSettlement> {
+  let operationPromise: Promise<void>
+  try {
+    operationPromise = Promise.resolve(operation())
+  } catch (error) {
+    return Promise.resolve({ status: 'failed', error })
+  }
+
+  let timedOut = false
+  const observed = operationPromise.then<DeadlineSettlement, DeadlineSettlement>(
+    () => ({ status: 'completed' }),
+    (error: unknown) => {
+      if (timedOut) onLateFailure(error)
+      return { status: 'failed', error }
+    },
+  )
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<DeadlineSettlement>((resolve) => {
+    timer = setTimeout(
+      () => {
+        timedOut = true
+        const error = new Error(timeoutMessage)
+        onTimeout(error)
+        resolve({ status: 'timed_out', error })
+      },
+      Math.max(0, timeoutMs),
+    )
+  })
+
+  return Promise.race([observed, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+export function runWithDeadline(
+  operation: (signal: AbortSignal) => Promise<void>,
+  { timeoutMs, timeoutMessage, onLateFailure = () => {} }: RunWithDeadlineOptions,
+): Promise<DeadlineSettlement> {
+  const controller = new AbortController()
+  return settleWithin(
+    () => operation(controller.signal),
+    timeoutMs,
+    timeoutMessage,
+    (error) => controller.abort(error),
+    onLateFailure,
+  )
+}
 
 export function createShutdownController({
   server,
   logger,
+  disposePlugins,
   closeLogging,
   timeoutMs,
   forceTimeoutMs = 5000,
+  cleanupTimeoutMs,
   loggingTimeoutMs = 5000,
   abortActiveRequests,
   waitForActiveRequests = () => Promise.resolve(),
-  forceExit = (code) => process.exit(code),
   now = () => performance.now(),
   setExitCode = (code) => {
     process.exitCode = code
   },
+  forceExit = () => {},
   fallbackError = (message, err) => console.error(message, err),
 }: ShutdownControllerOptions): ShutdownController {
   const startedAt = now()
@@ -54,8 +123,9 @@ export function createShutdownController({
   const forceCloseConnections = (trigger: string): boolean => {
     forceRequested = true
     let succeeded = true
+    const abortReason = new DOMException(`Server shutdown forced by ${trigger}`, 'AbortError')
     try {
-      abortActiveRequests?.(new DOMException(`Server shutdown forced by ${trigger}`, 'AbortError'))
+      abortActiveRequests?.(abortReason)
     } catch (err) {
       logger.error({ err, trigger }, 'server.shutdown.abort_requests_failed')
       setExitCode(1)
@@ -84,9 +154,7 @@ export function createShutdownController({
 
   const shutdown = (trigger: string, err?: unknown): Promise<void> => {
     if (shutdownPromise) {
-      if (err !== undefined) {
-        recordProcessError(trigger, err)
-      }
+      if (err !== undefined) recordProcessError(trigger, err)
       logger.warn({ trigger }, 'server.shutdown.repeated')
       forceCloseConnections(trigger)
       return shutdownPromise
@@ -94,70 +162,60 @@ export function createShutdownController({
 
     shutdownPromise = (async () => {
       const shutdownStartedAt = now()
-      if (err !== undefined) {
-        recordProcessError(trigger, err)
-      }
-
+      const shutdownDeadline = shutdownStartedAt + timeoutMs
+      let mustForceExit = false
+      if (err !== undefined) recordProcessError(trigger, err)
       logger.info(
         { trigger, uptimeMs: Math.round(shutdownStartedAt - startedAt), timeoutMs },
         'server.shutdown.requested',
       )
 
-      let closeResult: CloseResult
-      let closeError: unknown
-      let timer: ReturnType<typeof setTimeout> | undefined
-
-      const serverClose = new Promise<ServerCloseResult>((resolve) => {
+      let closeFailure: unknown
+      const serverClose = new Promise<void>((resolve, reject) => {
         try {
-          server.close((serverError) => {
-            if (serverError) {
-              closeError = serverError
-              resolve('failed')
-            } else {
-              resolve('closed')
-            }
-          })
-        } catch (serverError) {
-          closeError = serverError
-          resolve('failed')
+          server.close((serverError) => (serverError ? reject(serverError) : resolve()))
+        } catch (error) {
+          reject(error)
         }
       })
-      const requestsDrained = serverClose.then(async (result) => {
-        if (result === 'closed') await waitForActiveRequests()
-        return result
-      })
-      const timeout = new Promise<'grace_expired'>((resolve) => {
-        timer = setTimeout(() => resolve('grace_expired'), timeoutMs)
-      })
+      const closeAndDrain = serverClose.then(waitForActiveRequests)
+      const graceResult = await settleWithin(
+        () => closeAndDrain,
+        timeoutMs,
+        `Server did not drain within ${timeoutMs}ms`,
+        () => {},
+        (error) => fallbackError('FATAL: server close failed after grace period', error),
+      )
 
-      const gracefulResult = await Promise.race([requestsDrained, timeout])
-      if (timer) clearTimeout(timer)
-
-      if (gracefulResult === 'closed') {
+      let closeResult: CloseResult
+      if (graceResult.status === 'completed') {
         closeResult = forceFailed ? 'failed' : forceRequested ? 'forced' : 'graceful'
-      } else if (gracefulResult === 'failed') {
+      } else if (graceResult.status === 'failed') {
+        closeFailure = graceResult.error
         closeResult = 'failed'
-        logger.error({ err: closeError, trigger }, 'server.shutdown.failed')
+        logger.error({ err: closeFailure, trigger }, 'server.shutdown.failed')
         setExitCode(1)
       } else {
         logger.warn({ trigger, timeoutMs }, 'server.shutdown.grace_expired')
         const forceSucceeded = forceCloseConnections(trigger)
-        let forceTimer: ReturnType<typeof setTimeout> | undefined
-        const forceTimeout = new Promise<'force_timed_out'>((resolve) => {
-          forceTimer = setTimeout(() => resolve('force_timed_out'), forceTimeoutMs)
-        })
-        const forcedResult = await Promise.race([requestsDrained, forceTimeout])
-        if (forceTimer) clearTimeout(forceTimer)
-        if (forcedResult === 'closed') {
+        const forcedResult = await settleWithin(
+          () => closeAndDrain,
+          forceTimeoutMs,
+          `Active requests did not drain within ${forceTimeoutMs}ms after force close`,
+          () => {},
+          (error) => fallbackError('FATAL: server close failed after force timeout', error),
+        )
+        if (forcedResult.status === 'completed') {
           closeResult = forceSucceeded ? 'forced' : 'failed'
-        } else if (forcedResult === 'failed') {
+        } else if (forcedResult.status === 'failed') {
           closeResult = 'failed'
-          logger.error({ err: closeError, trigger }, 'server.shutdown.failed')
+          logger.error({ err: forcedResult.error, trigger }, 'server.shutdown.failed')
           setExitCode(1)
         } else {
           closeResult = 'force_timed_out'
           logger.error({ trigger, forceTimeoutMs }, 'server.shutdown.force_timed_out')
           setExitCode(1)
+          mustForceExit = true
         }
       }
 
@@ -166,32 +224,47 @@ export function createShutdownController({
         'server.shutdown.completed',
       )
 
-      let loggingTimer: ReturnType<typeof setTimeout> | undefined
-      // createLoggingRuntime.close() silences its adapter before the flush completes.
-      loggingUnavailable = true
-      const loggingClose = Promise.resolve()
-        .then(closeLogging)
-        .then(
-          () => ({ status: 'closed' as const }),
-          (error: unknown) => ({ status: 'failed' as const, error }),
-        )
-      const loggingTimeout = new Promise<{ status: 'timed_out' }>((resolve) => {
-        loggingTimer = setTimeout(() => resolve({ status: 'timed_out' }), loggingTimeoutMs)
-      })
-      const loggingResult = await Promise.race([loggingClose, loggingTimeout])
-      if (loggingTimer) clearTimeout(loggingTimer)
+      if (disposePlugins) {
+        const disposeTimeoutMs = cleanupTimeoutMs ?? Math.max(0, shutdownDeadline - now())
+        const disposeResult = await runWithDeadline(disposePlugins, {
+          timeoutMs: disposeTimeoutMs,
+          timeoutMessage: `Plugins did not dispose within ${disposeTimeoutMs}ms`,
+          onLateFailure: (error) =>
+            fallbackError('FATAL: plugin disposal failed after shutdown deadline', error),
+        })
+        if (disposeResult.status === 'failed') {
+          logger.error(
+            { err: disposeResult.error, trigger },
+            'server.shutdown.plugin_dispose_failed',
+          )
+          setExitCode(1)
+        } else if (disposeResult.status === 'timed_out') {
+          logger.error(
+            { err: disposeResult.error, trigger },
+            'server.shutdown.plugin_dispose_timed_out',
+          )
+          setExitCode(1)
+          mustForceExit = true
+        }
+      }
 
+      loggingUnavailable = true
+      const loggingResult = await runWithDeadline(() => closeLogging(), {
+        timeoutMs: loggingTimeoutMs,
+        timeoutMessage: `Logging did not close within ${loggingTimeoutMs}ms`,
+        onLateFailure: (error) =>
+          fallbackError('FATAL: logging shutdown failed after shutdown deadline', error),
+      })
       if (loggingResult.status === 'failed') {
         setExitCode(1)
         fallbackError('FATAL: logging shutdown failed', loggingResult.error)
       } else if (loggingResult.status === 'timed_out') {
         setExitCode(1)
-        fallbackError(
-          'FATAL: logging shutdown timed out',
-          new Error(`Logging did not close within ${loggingTimeoutMs}ms`),
-        )
+        fallbackError('FATAL: logging shutdown timed out', loggingResult.error)
+        mustForceExit = true
       }
-      if (closeResult === 'force_timed_out') forceExit(1)
+
+      if (mustForceExit) forceExit(1)
     })()
 
     return shutdownPromise

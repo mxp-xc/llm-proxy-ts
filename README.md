@@ -89,3 +89,4 @@ bun dev serve
 - 日志递归脱敏 API key、Authorization、OAuth token、client secret、cookie 等敏感字段
 - 普通请求遥测不记录 prompt、completion、tool input、raw chunk、headers、OAuth code/state/nonce 或凭据
 - API key 选择日志仅记录 provider 名称以及 `{ index, count }`，不记录 key、片段或指纹
+- `plugins[].module` 是受信任的本地代码执行边界：动态模块与服务在同一进程运行并拥有当前进程权限，不提供 sandbox；只加载已审查且可信的模块

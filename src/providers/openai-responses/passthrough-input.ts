@@ -203,8 +203,130 @@ function shouldRestoreUnmatchedEasyMessage(message: Record<string, unknown>): bo
 
 function getToolSearchItemIdentity(item: unknown): string | undefined {
   if (!isRecord(item)) return undefined
-  if (typeof item.call_id === 'string') return item.call_id
-  return typeof item.id === 'string' ? item.id : undefined
+  if (typeof item.call_id === 'string' && item.call_id.length > 0) return item.call_id
+  return typeof item.id === 'string' && item.id.length > 0 ? item.id : undefined
+}
+
+interface NativeToolSearchCandidate {
+  item: Record<string, unknown>
+  kind: 'compaction' | 'function-output' | 'tool-search-output'
+  consumed: boolean
+}
+
+function queueNativeToolSearchCandidate(
+  candidates: Map<string, NativeToolSearchCandidate[]>,
+  identity: string,
+  candidate: NativeToolSearchCandidate,
+): void {
+  const queued = candidates.get(identity)
+  if (queued === undefined) candidates.set(identity, [candidate])
+  else queued.push(candidate)
+}
+
+function takeNativeToolSearchCandidate(
+  candidates: NativeToolSearchCandidate[] | undefined,
+  kind?: NativeToolSearchCandidate['kind'],
+): NativeToolSearchCandidate | undefined {
+  const candidate = candidates?.find(
+    (queued) => !queued.consumed && (kind === undefined || queued.kind === kind),
+  )
+  if (candidate !== undefined) candidate.consumed = true
+  return candidate
+}
+
+function patchNativeToolSearchInput(
+  sdkBody: Record<string, unknown>,
+  rawBody: Record<string, unknown>,
+): Record<string, unknown> {
+  const sdkInput = sdkBody.input
+  const rawInput = rawBody.input
+  if (!Array.isArray(sdkInput) || !Array.isArray(rawInput)) return sdkBody
+
+  const rawCalls = new Map<string, Record<string, unknown>[]>()
+  const rawOutputs = new Map<string, NativeToolSearchCandidate[]>()
+  const rawReferences = new Map<string, NativeToolSearchCandidate[]>()
+  for (const item of rawInput) {
+    if (!isRecord(item)) continue
+
+    if (item.type === 'tool_search_call') {
+      const identity = getToolSearchItemIdentity(item)
+      if (identity === undefined) continue
+      const queued = rawCalls.get(identity)
+      if (queued === undefined) rawCalls.set(identity, [item])
+      else queued.push(item)
+      continue
+    }
+
+    if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
+      queueNativeToolSearchCandidate(rawOutputs, item.call_id, {
+        item,
+        kind: 'function-output',
+        consumed: false,
+      })
+      continue
+    }
+
+    if (item.type === 'tool_search_output') {
+      const identity = getToolSearchItemIdentity(item)
+      if (identity === undefined) continue
+      const candidate: NativeToolSearchCandidate = {
+        item,
+        kind: 'tool-search-output',
+        consumed: false,
+      }
+      queueNativeToolSearchCandidate(rawOutputs, identity, candidate)
+      queueNativeToolSearchCandidate(rawReferences, identity, candidate)
+      continue
+    }
+
+    if (item.type === 'compaction' && typeof item.id === 'string' && item.id.length > 0) {
+      queueNativeToolSearchCandidate(rawReferences, item.id, {
+        item,
+        kind: 'compaction',
+        consumed: false,
+      })
+    }
+  }
+
+  let changed = false
+  const patchedInput = sdkInput.map((item) => {
+    if (!isRecord(item)) return item
+
+    if (item.type === 'item_reference' && typeof item.id === 'string') {
+      takeNativeToolSearchCandidate(rawReferences.get(item.id))
+      return item
+    }
+
+    if (item.type === 'tool_search_call') {
+      const identity = getToolSearchItemIdentity(item)
+      const rawCall = identity === undefined ? undefined : rawCalls.get(identity)?.shift()
+      if (rawCall === undefined) return item
+      changed = true
+      return rawCall
+    }
+
+    if (item.type === 'tool_search_output') {
+      const identity = getToolSearchItemIdentity(item)
+      const candidate =
+        identity === undefined
+          ? undefined
+          : takeNativeToolSearchCandidate(rawOutputs.get(identity), 'tool-search-output')
+      if (candidate === undefined) return item
+      changed = true
+      return candidate.item
+    }
+
+    if (item.type === 'function_call_output' && typeof item.call_id === 'string') {
+      const candidate = takeNativeToolSearchCandidate(rawOutputs.get(item.call_id))
+      if (candidate?.kind !== 'tool-search-output') return item
+      changed = true
+      return candidate.item
+    }
+
+    return item
+  })
+
+  return changed ? { ...sdkBody, input: patchedInput } : sdkBody
 }
 
 // 当前 mapper 仅为这两类保留足够 identity，供 SDK 在 store=true 时改写为 item_reference。
@@ -281,7 +403,6 @@ function patchFilteredRawInputItems(
 
   const rawEasyMessages: IndexedRawInputItem[] = []
   const rawCallOutputs = new Map<string, IndexedRawInputItem[]>()
-  const rawToolSearchOutputIndexes = new Map<string, number[]>()
   const rawItemReferenceIndexes = new Map<string, number[]>()
   const rawAgentMessageIndexes: number[] = []
   const rawAdditionalToolsIndexes: number[] = []
@@ -295,17 +416,6 @@ function patchFilteredRawInputItems(
     }
     if (isRecord(item) && item.type === 'additional_tools') {
       rawAdditionalToolsIndexes.push(rawInputIndex)
-    }
-    if (isRecord(item) && item.type === 'tool_search_output') {
-      const toolSearchId = getToolSearchItemIdentity(item)
-      if (toolSearchId !== undefined) {
-        const queuedIndexes = rawToolSearchOutputIndexes.get(toolSearchId)
-        if (queuedIndexes === undefined) {
-          rawToolSearchOutputIndexes.set(toolSearchId, [rawInputIndex])
-        } else {
-          queuedIndexes.push(rawInputIndex)
-        }
-      }
     }
     const itemReferenceId = getRawItemReferenceId(item)
     if (itemReferenceId !== undefined) {
@@ -376,16 +486,6 @@ function patchFilteredRawInputItems(
       if (indexedRawItem !== undefined) {
         changed = true
         return indexedRawItem
-      }
-      if (item.type === 'function_call_output') {
-        const callId = item.call_id
-        if (typeof callId === 'string') {
-          const rawInputIndex = takeUnconsumedRawInputIndex(
-            rawToolSearchOutputIndexes.get(callId),
-            consumedRawInputIndexes,
-          )
-          if (rawInputIndex !== undefined) return { item, rawInputIndex }
-        }
       }
     }
 
@@ -564,9 +664,10 @@ export function patchOpenAIResponsesPassthroughInput(
   restoreFilteredInputItems: boolean,
 ): Record<string, unknown> {
   const restoredMessages = restoreMessageItemTypes(sdkBody)
+  const restoredToolSearch = patchNativeToolSearchInput(restoredMessages, rawBody)
   const restoredFilteredItems = restoreFilteredInputItems
-    ? patchFilteredRawInputItems(restoredMessages, rawBody)
-    : restoredMessages
+    ? patchFilteredRawInputItems(restoredToolSearch, rawBody)
+    : restoredToolSearch
   const patchedAgentMessages = patchAgentMessagesInput(restoredFilteredItems, rawBody)
   return patchAdditionalToolsInput(patchedAgentMessages, rawBody)
 }
