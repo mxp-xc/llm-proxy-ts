@@ -1,4 +1,4 @@
-import type { LanguageModel } from 'ai'
+import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai'
 import type { Settings, OAuthConfig, ProviderConfig } from '../config.js'
 import type { OpenAICompatibleProviderConfig } from '../config.js'
 import type { AnthropicProviderConfig } from '../config.js'
@@ -63,10 +63,11 @@ export interface LanguageModelResult {
 
 export interface LanguageModelOptions {
   customFetch?: ((baseFetch?: typeof fetch) => typeof fetch) | undefined
+  onKeySelection?: (selection: KeySelection) => void
 }
 
 interface ResolvedProviderTransport {
-  apiKey: string | undefined
+  apiKeys: Array<{ apiKey: string | undefined; index?: number }>
   keySelection?: KeySelection
   customFetch?: ((baseFetch?: typeof fetch) => typeof fetch) | undefined
 }
@@ -129,33 +130,24 @@ export async function createProviderRegistry(
     }
   }
 
-  const toKeySelection = (
-    selection: ReturnType<typeof selectApiKey>,
-  ): { apiKey: string | undefined; keySelection?: KeySelection } => {
-    if (!selection) return { apiKey: undefined }
-    return {
-      apiKey: selection.apiKey,
-      keySelection: { index: selection.index, count: selection.count },
-    }
-  }
-
   const resolveProviderTransport = (
     providerName: string,
     provider: ProviderConfig,
   ): ResolvedProviderTransport => {
     const authFetch = authFetchMap.get(providerName)
     if (authFetch) {
-      const selection = toKeySelection(selectApiKey(providerName, provider.apiKey, apiKeyIndexes))
-      return { ...selection, customFetch: authFetch }
+      return {
+        ...selectApiKeys(providerName, provider.apiKey, apiKeyIndexes),
+        customFetch: authFetch,
+      }
     }
 
     if (provider.oauth && tokenManager) {
       const oauthFetch = createOAuthFetch(providerName, provider.oauth, tokenManager)
-      return { apiKey: undefined, customFetch: oauthFetch }
+      return { apiKeys: [{ apiKey: undefined }], customFetch: oauthFetch }
     }
 
-    const selection = toKeySelection(selectApiKey(providerName, provider.apiKey, apiKeyIndexes))
-    return selection
+    return selectApiKeys(providerName, provider.apiKey, apiKeyIndexes)
   }
 
   const getProvider = (providerName: string): ProviderConfig => {
@@ -188,8 +180,20 @@ export async function createProviderRegistry(
       )
       const transport = resolveProviderTransport(providerName, provider)
       const customFetch = composeFetchWrappers(transport.customFetch, options?.customFetch)
+      const delegates = transport.apiKeys.map(({ apiKey }) =>
+        modelFactory(apiKey, customFetch)(upstreamModel),
+      )
       const result: LanguageModelResult = {
-        model: modelFactory(transport.apiKey, customFetch)(upstreamModel),
+        model:
+          delegates.length > 1
+            ? createFailoverLanguageModel(
+                delegates,
+                transport.keySelection!.count,
+                transport.apiKeys.map(({ index }) => index!),
+                options?.onKeySelection,
+                log,
+              )
+            : delegates[0]!,
       }
       if (transport.keySelection) {
         result.keySelection = transport.keySelection
@@ -271,25 +275,225 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported provider type ${(value as { type?: string }).type}`)
 }
 
-function selectApiKey(
+function selectApiKeys(
   providerName: string,
   apiKey: string | [string, ...string[]] | null | undefined,
   apiKeyIndexes: Map<string, number>,
-): { apiKey: string; index: number; count: number } | undefined {
+): ResolvedProviderTransport {
   if (apiKey === undefined || apiKey === null) {
-    return undefined
+    return { apiKeys: [{ apiKey: undefined }] }
   }
 
   if (typeof apiKey === 'string') {
-    return { apiKey, index: 0, count: 1 }
+    return {
+      apiKeys: [{ apiKey, index: 0 }],
+      keySelection: { index: 0, count: 1 },
+    }
   }
 
   const index = apiKeyIndexes.get(providerName) ?? 0
   const selectedIndex = index % apiKey.length
-  const selectedApiKey = apiKey[selectedIndex]
-  if (selectedApiKey === undefined) {
-    throw new Error(`Missing API key at index ${selectedIndex} for provider '${providerName}'`)
-  }
   apiKeyIndexes.set(providerName, index + 1)
-  return { apiKey: selectedApiKey, index: selectedIndex, count: apiKey.length }
+  const apiKeys = apiKey.map((_, offset) => {
+    const plannedIndex = (selectedIndex + offset) % apiKey.length
+    const selectedApiKey = apiKey[plannedIndex]
+    if (selectedApiKey === undefined) {
+      throw new Error(`Missing API key at index ${plannedIndex} for provider '${providerName}'`)
+    }
+    return { apiKey: selectedApiKey, index: plannedIndex }
+  })
+  return {
+    apiKeys,
+    keySelection: { index: selectedIndex, count: apiKey.length },
+  }
+}
+
+function createFailoverLanguageModel(
+  models: LanguageModel[],
+  keyCount: number,
+  keyIndexes: number[],
+  onKeySelection: ((selection: KeySelection) => void) | undefined,
+  logger: Logger,
+): LanguageModel {
+  type WrappableLanguageModel = Parameters<typeof wrapLanguageModel>[0]['model']
+  const delegates = models.map((model) =>
+    wrapLanguageModel({ model: model as WrappableLanguageModel, middleware: {} }),
+  )
+  let current = 0
+
+  const select = () => {
+    const delegateIndex = current % delegates.length
+    const delegate = delegates[delegateIndex]!
+    onKeySelection?.({ index: keyIndexes[delegateIndex]!, count: keyCount })
+    return delegate
+  }
+
+  const advanceAfterFailure = (): void => {
+    current = (current + 1) % delegates.length
+  }
+
+  return wrapLanguageModel({
+    model: delegates[0]!,
+    middleware: {
+      async wrapGenerate({ params }) {
+        try {
+          const result = await select().doGenerate(params)
+          return result
+        } catch (error) {
+          advanceAfterFailure()
+          throw error
+        }
+      },
+      async wrapStream({ params }) {
+        try {
+          const result = await select().doStream(params)
+          const reader = result.stream.getReader()
+          const buffered = []
+
+          while (true) {
+            const next = await reader.read()
+            if (next.done) {
+              return { ...result, stream: replayProviderStream(buffered, reader) }
+            }
+            if (next.value.type === 'error') {
+              try {
+                await reader.cancel(next.value.error)
+              } catch (cancelError) {
+                logger.error({ err: cancelError }, 'provider failover stream cleanup failed')
+              }
+              throw toRetryableProviderStreamError(next.value.error)
+            }
+            if (next.value.type === 'raw') {
+              const rawError = retryableProviderStreamError(next.value.rawValue)
+              if (rawError) {
+                try {
+                  await reader.cancel(rawError)
+                } catch (cancelError) {
+                  logger.error({ err: cancelError }, 'provider failover stream cleanup failed')
+                }
+                throw rawError
+              }
+            }
+            buffered.push(next.value)
+            if (isProviderStreamCommitPart(next.value.type)) {
+              return { ...result, stream: replayProviderStream(buffered, reader) }
+            }
+          }
+        } catch (error) {
+          advanceAfterFailure()
+          throw toRetryableProviderStreamError(error)
+        }
+      },
+    },
+  })
+}
+
+function isProviderStreamCommitPart(type: string): boolean {
+  return ![
+    'stream-start',
+    'response-metadata',
+    'text-start',
+    'text-end',
+    'reasoning-start',
+    'reasoning-end',
+    'tool-input-end',
+  ].includes(type)
+}
+
+function toRetryableProviderStreamError(error: unknown): unknown {
+  return retryableProviderStreamError(error) ?? error
+}
+
+function retryableProviderStreamError(error: unknown): APICallError | undefined {
+  if (APICallError.isInstance(error)) return error.isRetryable ? error : undefined
+
+  const details = providerStreamErrorDetails(error)
+  const retryableStatus =
+    details.statusCode === 408 ||
+    details.statusCode === 409 ||
+    details.statusCode === 429 ||
+    (details.statusCode !== undefined && details.statusCode >= 500)
+  const retryableMarker =
+    /rate.?limit|too.?many.?requests|temporar(?:y|ily).?unavailable|service.?unavailable|overload|server.?error|bad.?gateway|gateway.?timeout|connection.?(?:closed|reset)|socket.?connection|fetch.?failed|body.?terminated|\bterminated\b/i.test(
+      `${details.code ?? ''} ${details.type ?? ''} ${details.message}`,
+    )
+  if (details.statusCode !== undefined && !retryableStatus) return undefined
+  if (!retryableStatus && !retryableMarker) return undefined
+
+  return new APICallError({
+    message: details.message,
+    url: 'provider-stream://upstream',
+    requestBodyValues: {},
+    ...(details.statusCode !== undefined ? { statusCode: details.statusCode } : {}),
+    responseHeaders: { 'retry-after-ms': '0' },
+    isRetryable: true,
+    cause: error,
+  })
+}
+
+function providerStreamErrorDetails(error: unknown): {
+  message: string
+  statusCode?: number
+  code?: string
+  type?: string
+} {
+  if (typeof error === 'string') return { message: error }
+  if (!error || typeof error !== 'object') return { message: String(error) }
+
+  const record = error as Record<string, unknown>
+  const nestedSource =
+    record.error && typeof record.error === 'object'
+      ? record.error
+      : record.response && typeof record.response === 'object'
+        ? record.response
+        : undefined
+  const nested = nestedSource ? providerStreamErrorDetails(nestedSource) : undefined
+  const statusValue = record.statusCode ?? record.status ?? nested?.statusCode
+  const statusCode =
+    typeof statusValue === 'number'
+      ? statusValue
+      : typeof statusValue === 'string' && /^\d{3}$/.test(statusValue)
+        ? Number(statusValue)
+        : undefined
+  return {
+    message:
+      typeof record.message === 'string'
+        ? record.message
+        : (nested?.message ?? 'Upstream provider stream failed'),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+    ...(typeof record.code === 'string'
+      ? { code: record.code }
+      : nested?.code
+        ? { code: nested.code }
+        : {}),
+    ...(typeof record.type === 'string'
+      ? { type: record.type }
+      : nested?.type
+        ? { type: nested.type }
+        : {}),
+  }
+}
+
+function replayProviderStream<T>(
+  buffered: T[],
+  reader: ReadableStreamDefaultReader<T>,
+): ReadableStream<T> {
+  let bufferIndex = 0
+  return new ReadableStream<T>({
+    async pull(controller) {
+      if (bufferIndex < buffered.length) {
+        controller.enqueue(buffered[bufferIndex++]!)
+        return
+      }
+      const next = await reader.read()
+      if (next.done) {
+        controller.close()
+      } else {
+        controller.enqueue(next.value)
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
 }

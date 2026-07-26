@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { serve } from '@hono/node-server'
+import { createAdaptorServer, type ServerType } from '@hono/node-server'
 import { createApp } from './app.js'
 import {
   loadSettingsFromFile,
@@ -17,9 +17,45 @@ import { createLoggingRuntime, type LoggingRuntime } from './logging.js'
 import { createShutdownController, type ShutdownController } from './lifecycle.js'
 import { generateNonce, refreshAuthStatuses } from './oauth/startup.js'
 import type { ProviderAuthStatus } from './oauth/startup.js'
+import { createActiveRequestRegistry } from './active-requests.js'
 
 interface StartedServer {
   shutdownController: ShutdownController
+}
+
+export function resolveServerPort(configuredPort: number, portOverride?: string): number {
+  if (portOverride === undefined) return configuredPort
+
+  const port = Number(portOverride)
+  if (!/^\d+$/.test(portOverride) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('LLM_PROXY_PORT must be an integer between 1 and 65535')
+  }
+  return port
+}
+
+export function listenForStartup(
+  server: ServerType,
+  host: string,
+  port: number,
+): Promise<{ address: string; port: number }> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error): void => {
+      server.off('listening', onListening)
+      reject(error)
+    }
+    const onListening = (): void => {
+      server.off('error', onError)
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('Server started without a network address'))
+        return
+      }
+      resolve({ address: address.address, port: address.port })
+    }
+    server.once('error', onError)
+    server.once('listening', onListening)
+    server.listen(port, host)
+  })
 }
 
 function countConfiguredPlugins(settings: Settings): number {
@@ -42,6 +78,7 @@ async function startServer(rootDir: string, logging: LoggingRuntime): Promise<St
   const settings = hasSettingsFile
     ? await loadSettingsFromFile(settingsPath)
     : (logger.warn({ settingsPath }, 'server.settings_missing'), settingsSchema.parse({}))
+  const port = resolveServerPort(settings.service.port, process.env.LLM_PROXY_PORT)
 
   const providers = Object.values(settings.providers)
   logger.info(
@@ -49,7 +86,7 @@ async function startServer(rootDir: string, logging: LoggingRuntime): Promise<St
       settingsPath,
       settingsSource: hasSettingsFile ? 'file' : 'defaults',
       host: settings.service.host,
-      port: settings.service.port,
+      port,
       providerCount: providers.length,
       modelCount: providers.reduce(
         (total, provider) => total + Object.keys(provider.models).length,
@@ -86,6 +123,7 @@ async function startServer(rootDir: string, logging: LoggingRuntime): Promise<St
     pluginRegistry,
     authFilePath,
   )
+  const activeRequestRegistry = createActiveRequestRegistry()
   const app = createApp({
     settings,
     logger,
@@ -93,27 +131,26 @@ async function startServer(rootDir: string, logging: LoggingRuntime): Promise<St
     pluginRegistry,
     providerRegistry,
     getAuthStatuses: () => authStatuses,
+    activeRequestRegistry,
     ...(tokenManager && nonce ? { tokenManager, nonce } : {}),
   })
 
-  const server = serve(
-    {
-      fetch: app.fetch,
-      hostname: settings.service.host,
-      port: settings.service.port,
-    },
-    (info) => {
-      logger.info(
-        { service: settings.service.name, url: `http://${info.address}:${info.port}` },
-        'server.listening',
-      )
-    },
+  const server = createAdaptorServer({
+    fetch: app.fetch,
+    hostname: settings.service.host,
+  })
+  const info = await listenForStartup(server, settings.service.host, port)
+  logger.info(
+    { service: settings.service.name, url: `http://${info.address}:${info.port}` },
+    'server.listening',
   )
   const shutdownController = createShutdownController({
     server,
     logger,
     closeLogging: logging.close,
     timeoutMs: settings.requestTimeoutMs + 5000,
+    abortActiveRequests: (reason) => activeRequestRegistry.abortAll(reason),
+    waitForActiveRequests: () => activeRequestRegistry.drain(),
   })
 
   server.on('error', (err: NodeJS.ErrnoException) => {

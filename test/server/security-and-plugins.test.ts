@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { createApp, type ModelGateway } from '../../src/server/app.js'
+import type { ModelGateway } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import type { Settings } from '../../src/index.js'
 import {
   loadEnvironmentFiles,

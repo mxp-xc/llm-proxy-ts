@@ -8,6 +8,7 @@ import {
   createLoggingRuntime,
   formatCNDate,
   formatCNTimestamp,
+  formatPlainLogLine,
   redact,
 } from '../../src/server/logging.js'
 
@@ -181,6 +182,18 @@ describe('logging redaction', () => {
 })
 
 describe('China time formatting and rotation', () => {
+  it('includes the process id in plain log lines', () => {
+    expect(
+      formatPlainLogLine({
+        level: 30,
+        time: '2026-07-20T16:00:01.000Z',
+        pid: 12345,
+        name: 'llm-proxy',
+        msg: 'server.listening',
+      }),
+    ).toContain('pid=12345')
+  })
+
   it('formats timestamps with a fixed +08:00 offset', () => {
     const date = new Date('2026-07-20T16:00:01.000Z')
     expect(formatCNDate(date)).toBe('2026-07-21')

@@ -9,6 +9,7 @@ import type { CodexCatalogCache } from '../codex-catalog.js'
 import type { ErrorLogger } from './error-logger.js'
 import type { Logger } from '../types.js'
 import type { VisionArtifactStore } from './vision-artifact-store.js'
+import type { ActiveRequestRegistry } from './active-requests.js'
 
 export type { Settings } from '../config.js'
 
@@ -62,6 +63,7 @@ export interface AppDependencies {
   errorLogger?: ErrorLogger
   errorLogDir?: string
   visionArtifactStore?: Pick<VisionArtifactStore, 'persistBatch'>
+  activeRequestRegistry?: ActiveRequestRegistry
 }
 
 export type RequestOutcome =
@@ -118,5 +120,6 @@ export type AppEnv = {
     requestId: string
     logger: Logger
     requestLogContext?: RequestTelemetryContext
+    abortController?: AbortController
   }
 }

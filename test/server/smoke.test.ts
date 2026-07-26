@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import { createProviderRegistry } from '../../src/index.js'
 import { makeSettings } from '../helpers/settings.js'
 

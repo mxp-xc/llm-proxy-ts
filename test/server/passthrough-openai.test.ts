@@ -9,7 +9,7 @@ vi.mock('../../src/providers/shared/provider-factory.js', async (importOriginal)
   createDirectFetch: createDirectFetchMock,
 }))
 
-import { createApp } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import { createProviderRegistry, TokenManager } from '../../src/index.js'
 import {
   createOpenAIResponsesRequestBodyMergeFetch,
@@ -1311,6 +1311,78 @@ describe('openai provider /v1/responses via AI SDK passthrough override', () => 
 
     expect(res.status).toBe(200)
     expect(forwardedBody?.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
+  it('does not send chat reasoning as a non-OpenAI reasoning item', async () => {
+    const settings = makeOpenaiSettings()
+    let forwardedBody: Record<string, unknown> | undefined
+    const warnings: unknown[] = []
+    vi.stubGlobal('AI_SDK_LOG_WARNINGS', ({ warnings: sdkWarnings }: { warnings: unknown[] }) => {
+      warnings.push(...sdkWarnings)
+    })
+    vi.stubGlobal('fetch', async (_input: string | URL | Request, init?: RequestInit) => {
+      forwardedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      return Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        messages: [
+          {
+            role: 'assistant',
+            content: null,
+            reasoning_content: 'historical reasoning',
+          },
+          { role: 'user', content: 'continue' },
+        ],
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(JSON.stringify(forwardedBody?.input)).not.toContain('historical reasoning')
+    expect(JSON.stringify(forwardedBody?.input)).not.toContain('"type":"reasoning"')
+    expect(JSON.stringify(warnings)).not.toContain('Non-OpenAI reasoning parts')
+  })
+
+  it('does not warn for native Responses reasoning item references', async () => {
+    const settings = makeOpenaiSettings()
+    const warnings: unknown[] = []
+    vi.stubGlobal('AI_SDK_LOG_WARNINGS', ({ warnings: sdkWarnings }: { warnings: unknown[] }) => {
+      warnings.push(...sdkWarnings)
+    })
+    vi.stubGlobal('fetch', async () =>
+      Response.json(makeRawResponseBody(), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const providerRegistry = await createProviderRegistry(settings)
+    const app = createApp({ settings, providerRegistry })
+
+    const res = await app.request('/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai/chat',
+        input: [
+          {
+            id: 'rs_123',
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: 'historical reasoning' }],
+          },
+          { type: 'message', role: 'user', content: 'continue' },
+        ],
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(JSON.stringify(warnings)).not.toContain('Non-OpenAI reasoning parts')
   })
 
   it('preserves positional additional_tools in the final non-streaming SDK request body', async () => {

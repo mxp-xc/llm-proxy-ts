@@ -110,7 +110,10 @@ export function validateOpenAIChatRequest(value: unknown): OpenAIChatRequest {
   return openAIChatRequestSchema.parse(value)
 }
 
-export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AISDKInput {
+export function mapOpenAIChatRequestToAISDKInput(
+  request: OpenAIChatRequest,
+  providerType = 'openai-compatible',
+): AISDKInput {
   // System prompt → AI SDK system 选项（不放入 messages，避免 AI SDK v4+ 警告）
   const systemParts: string[] = []
   for (const msg of request.messages) {
@@ -133,7 +136,10 @@ export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AI
   const input: AISDKInput = {
     messages: request.messages
       .filter((msg) => msg.role !== 'system')
-      .map((msg) => mapMessage(msg, toolCallIdToName)),
+      .flatMap((msg) => {
+        const mapped = mapMessage(msg, toolCallIdToName, providerType)
+        return mapped === undefined ? [] : [mapped]
+      }),
   }
 
   if (systemParts.length > 0) {
@@ -196,7 +202,8 @@ export function mapOpenAIChatRequestToAISDKInput(request: OpenAIChatRequest): AI
 function mapMessage(
   message: z.infer<typeof messageSchema>,
   toolCallIdToName: Map<string, string>,
-): ProtocolMessage {
+  providerType: string,
+): ProtocolMessage | undefined {
   const reasoningText = message.reasoning_content ?? message.reasoning
   if (
     message.role === 'assistant' &&
@@ -207,12 +214,14 @@ function mapMessage(
   ) {
     const content: ProtocolMessagePart[] = []
     if (reasoningText) {
-      content.push({ type: 'reasoning', text: reasoningText })
+      content.push(...mapReasoningPart(reasoningText, providerType))
     }
     if (typeof message.content === 'string' && message.content.length > 0) {
       content.push({ type: 'text', text: message.content })
     } else if (Array.isArray(message.content)) {
-      content.push(...message.content.flatMap(mapAssistantContentPart))
+      content.push(
+        ...message.content.flatMap((part) => mapAssistantContentPart(part, providerType)),
+      )
     }
     if (message.refusal) {
       content.push({ type: 'text', text: message.refusal })
@@ -227,6 +236,7 @@ function mapMessage(
         })),
       )
     }
+    if (content.length === 0) return undefined
 
     return {
       role: 'assistant',
@@ -261,11 +271,21 @@ function mapMessage(
   return { role: message.role as 'user' | 'assistant', content } as ProtocolMessage
 }
 
-function mapAssistantContentPart(part: Record<string, unknown>): ProtocolMessagePart[] {
+function mapAssistantContentPart(
+  part: Record<string, unknown>,
+  providerType: string,
+): ProtocolMessagePart[] {
   if (part.type === 'refusal' && typeof part.refusal === 'string') {
     return [{ type: 'text', text: part.refusal }]
   }
+  if (part.type === 'reasoning' && typeof part.text === 'string') {
+    return mapReasoningPart(part.text, providerType)
+  }
   return [part as ProtocolMessagePart]
+}
+
+function mapReasoningPart(text: string, providerType: string): ProtocolMessagePart[] {
+  return providerType === 'openai-compatible' ? [{ type: 'reasoning', text }] : []
 }
 
 type MessageContent = z.infer<typeof messageSchema>['content']

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import type { AISDKInput } from '../../src/providers/shared/aisdk-types.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
 import { makeGateway } from '../helpers/gateway.js'

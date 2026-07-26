@@ -57,6 +57,7 @@ export interface ProtocolRequestScope {
   requestId: string
   logger: Logger
   telemetry: RequestTelemetryContext
+  abortController: AbortController
   readJson(): Promise<unknown>
 }
 
@@ -1252,7 +1253,7 @@ export async function handleProtocolRequest<
   const providerType = route.provider.type
 
   // 3. Prepare execution override（例如 openai-responses + openai 上游的 AI SDK raw renderer）
-  const abortController = new AbortController()
+  const abortController = requestScope.abortController
   const executionOverride = getExecutionOverrideCapability(strategy)?.prepareExecution({
     providerType,
     rawBody,
@@ -1277,7 +1278,12 @@ export async function handleProtocolRequest<
       route.providerName,
       route.upstreamModel,
       route.modelHeaders,
-      executionOverride?.languageModelOptions,
+      {
+        ...executionOverride?.languageModelOptions,
+        onKeySelection: (selection) => {
+          telemetry.keySelection = selection
+        },
+      },
     )
     model = modelResult.model
     if (modelResult.keySelection) {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { APICallError, generateText, streamText, type LanguageModel } from 'ai'
 import type { Settings } from '../../src/index.js'
 import type { AuthFetchRegistry } from '../../src/plugins/registry.js'
 import { createProviderRegistry } from '../../src/providers/registry.js'
@@ -6,6 +7,117 @@ import * as providerFactoryModule from '../../src/providers/shared/provider-fact
 import { makeSettings } from '../helpers/settings.js'
 import { createCapturingLogger } from '../helpers/registry.js'
 import { createCapturingProviderFactory } from '../helpers/provider-factory.js'
+
+function retryableError(): APICallError {
+  return new APICallError({
+    message: 'temporarily unavailable',
+    url: 'https://example.test/v1/chat/completions',
+    requestBodyValues: {},
+    statusCode: 503,
+    responseHeaders: { 'retry-after-ms': '0' },
+  })
+}
+
+function successfulResult(text: string) {
+  return {
+    content: [{ type: 'text' as const, text }],
+    finishReason: { unified: 'stop' as const, raw: 'stop' },
+    usage: {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    },
+    warnings: [],
+  }
+}
+
+function failoverFactory(
+  calls: string[],
+  behavior: (
+    key: string,
+    operation: 'generate' | 'stream',
+  ) => 'fail' | 'in-band-error' | 'transport-error' | 'error-after-output' | 'success',
+) {
+  const create = (input: providerFactoryModule.ProviderBuildInput) => (modelId: string) => {
+    const key = input.selectedApiKey ?? 'none'
+    const model = {
+      specificationVersion: 'v4',
+      provider: 'test',
+      modelId,
+      supportedUrls: {},
+      async doGenerate() {
+        calls.push(key)
+        if (behavior(key, 'generate') === 'fail') throw retryableError()
+        return successfulResult(key)
+      },
+      async doStream() {
+        calls.push(key)
+        const streamBehavior = behavior(key, 'stream')
+        if (streamBehavior === 'fail') throw retryableError()
+        if (streamBehavior === 'transport-error') {
+          let pullCount = 0
+          return {
+            stream: new ReadableStream(
+              {
+                pull(controller) {
+                  if (pullCount++ === 0) {
+                    controller.enqueue({ type: 'stream-start', warnings: [] })
+                  } else {
+                    controller.error(new TypeError('terminated'))
+                  }
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+          }
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] })
+              controller.enqueue({ type: 'text-start', id: 'text-0' })
+              if (streamBehavior === 'in-band-error') {
+                controller.enqueue({
+                  type: 'error',
+                  error: {
+                    type: 'response.failed',
+                    response: {
+                      error: {
+                        type: 'api_error',
+                        code: 'service_unavailable',
+                        message: 'Service temporarily unavailable',
+                      },
+                    },
+                  },
+                })
+                controller.close()
+                return
+              }
+              controller.enqueue({ type: 'text-delta', id: 'text-0', delta: key })
+              if (streamBehavior === 'error-after-output') {
+                controller.enqueue({ type: 'error', error: 'Service temporarily unavailable' })
+                controller.close()
+                return
+              }
+              controller.enqueue({ type: 'text-end', id: 'text-0' })
+              controller.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop' as const, raw: 'stop' },
+                usage: successfulResult(key).usage,
+              })
+              controller.close()
+            },
+          }),
+        }
+      },
+    }
+    return model as LanguageModel
+  }
+  return {
+    createOpenAICompatible: create,
+    createAnthropic: create,
+    createOpenAI: create,
+  }
+}
 
 const { logger: mockLogger, capturedLogs } = createCapturingLogger()
 const { factory: stubFactory, inputs: capturedFactoryInputs } = createCapturingProviderFactory()
@@ -82,6 +194,282 @@ describe('provider registry', () => {
     expect(r3.keySelection).toEqual({ index: 0, count: 2 })
     // registry should NOT emit separate key-selection logs
     expect(capturedLogs).toEqual([])
+  })
+
+  it('uses the next api key within the existing generate retry budget', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key) => (key === 'key-0' ? 'fail' : 'success')),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const generated = await generateText({ model: result.model, prompt: 'hello' })
+
+    expect(generated.text).toBe('key-1')
+    expect(calls).toEqual(['key-0', 'key-1'])
+  })
+
+  it('uses the next api key when stream setup fails before output', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key) => (key === 'key-0' ? 'fail' : 'success')),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+
+    await expect(streamed.text).resolves.toBe('key-1')
+    expect(calls).toEqual(['key-0', 'key-1'])
+  })
+
+  it('uses the next api key for a retryable in-band error before the first delta', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key, operation) =>
+        operation === 'stream' && key === 'key-0' ? 'in-band-error' : 'success',
+      ),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+
+    await expect(streamed.text).resolves.toBe('key-1')
+    expect(calls).toEqual(['key-0', 'key-1'])
+  })
+
+  it('does not switch api keys after the first output delta', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key, operation) =>
+        operation === 'stream' && key === 'key-0' ? 'error-after-output' : 'success',
+      ),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const errors: unknown[] = []
+    const streamed = streamText({
+      model: result.model,
+      prompt: 'hello',
+      onError: ({ error }) => {
+        errors.push(error)
+      },
+    })
+
+    for await (const _part of streamed.fullStream) {
+      // Consume the stream so the in-band error reaches onError.
+    }
+    expect(errors).toContain('Service temporarily unavailable')
+    expect(calls).toEqual(['key-0'])
+  })
+
+  it('does not switch api keys for an explicit non-retryable 4xx stream error', async () => {
+    const calls: string[] = []
+    const factory = failoverFactory(calls, () => 'success')
+    factory.createOpenAICompatible = (input) => (modelId) =>
+      ({
+        specificationVersion: 'v4',
+        provider: 'test',
+        modelId,
+        supportedUrls: {},
+        doGenerate: async () => successfulResult('unused'),
+        async doStream() {
+          calls.push(input.selectedApiKey ?? 'none')
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] })
+                controller.enqueue({
+                  type: 'error',
+                  error: {
+                    statusCode: 400,
+                    code: 'invalid_request_error',
+                    message: 'upstream request failed validation',
+                  },
+                })
+                controller.close()
+              },
+            }),
+          }
+        },
+      }) as LanguageModel
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      factory,
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+    for await (const _part of streamed.fullStream) {
+      // Consume the stream to run the provider error path.
+    }
+
+    expect(calls).toEqual(['key-0'])
+  })
+
+  it('does not switch api keys for an ambiguous validation error string', async () => {
+    const calls: string[] = []
+    const factory = failoverFactory(calls, () => 'success')
+    factory.createOpenAICompatible = (input) => (modelId) =>
+      ({
+        specificationVersion: 'v4',
+        provider: 'test',
+        modelId,
+        supportedUrls: {},
+        doGenerate: async () => successfulResult('unused'),
+        async doStream() {
+          calls.push(input.selectedApiKey ?? 'none')
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] })
+                controller.enqueue({ type: 'error', error: 'upstream request failed validation' })
+                controller.close()
+              },
+            }),
+          }
+        },
+      }) as LanguageModel
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      factory,
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+    for await (const _part of streamed.fullStream) {
+      // Consume the stream to run the provider error path.
+    }
+
+    expect(calls).toEqual(['key-0'])
+  })
+
+  it('switches api keys for a transport failure before the first output', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, (key, operation) =>
+        operation === 'stream' && key === 'key-0' ? 'transport-error' : 'success',
+      ),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+    const streamed = streamText({ model: result.model, prompt: 'hello' })
+
+    await expect(streamed.text).resolves.toBe('key-1')
+    expect(calls).toEqual(['key-0', 'key-1'])
+  })
+
+  it('does not multiply the retry budget by the number of api keys', async () => {
+    const calls: string[] = []
+    const registry = await createProviderRegistry(
+      {
+        ...settings,
+        providers: {
+          openrouter: {
+            ...settings.providers.openrouter!,
+            apiKey: ['key-0', 'key-1', 'key-2'],
+          },
+        },
+      },
+      undefined,
+      mockLogger,
+      undefined,
+      undefined,
+      failoverFactory(calls, () => 'fail'),
+    )
+
+    const result = registry.languageModel('openrouter', 'openrouter/chat', {})
+
+    await expect(generateText({ model: result.model, prompt: 'hello' })).rejects.toThrow()
+    expect(calls).toEqual(['key-0', 'key-1', 'key-2'])
   })
 
   it('does not log api keys', async () => {

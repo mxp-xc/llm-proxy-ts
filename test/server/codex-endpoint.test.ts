@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import { makeSettings } from '../helpers/settings.js'
 import { stubRegistry } from '../helpers/registry.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'

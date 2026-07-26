@@ -81,6 +81,12 @@ describe('createShutdownController', () => {
     expect(entries).toContainEqual(
       expect.objectContaining({ level: 'warn', message: 'server.shutdown.repeated' }),
     )
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        payload: expect.objectContaining({ closeResult: 'forced' }),
+        message: 'server.shutdown.completed',
+      }),
+    )
   })
 
   it('records close failures, sets a failure exit code, and still flushes logging', async () => {
@@ -114,29 +120,43 @@ describe('createShutdownController', () => {
     vi.useFakeTimers()
     try {
       const { logger, entries } = createLogger()
+      let finishClose: (() => void) | undefined
+      const closeAllConnections = vi.fn(() => finishClose?.())
       const server: ClosableServer = {
-        close() {},
-        closeAllConnections: vi.fn(),
+        close(callback) {
+          finishClose = callback
+        },
+        closeAllConnections,
       }
       const closeLogging = vi.fn(async () => {})
       const setExitCode = vi.fn()
+      const abortActiveRequests = vi.fn()
       const controller = createShutdownController({
         server,
         logger,
         closeLogging,
         timeoutMs: 25,
         setExitCode,
+        abortActiveRequests,
       })
 
       const shutdown = controller.shutdown('SIGTERM')
       await vi.advanceTimersByTimeAsync(25)
       await shutdown
 
-      expect(server.closeAllConnections).toHaveBeenCalledOnce()
+      expect(closeAllConnections).toHaveBeenCalledOnce()
+      expect(abortActiveRequests).toHaveBeenCalledOnce()
       expect(entries).toContainEqual(
-        expect.objectContaining({ level: 'error', message: 'server.shutdown.timed_out' }),
+        expect.objectContaining({ level: 'warn', message: 'server.shutdown.grace_expired' }),
       )
-      expect(setExitCode).toHaveBeenCalledWith(1)
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          level: 'info',
+          payload: expect.objectContaining({ closeResult: 'forced' }),
+          message: 'server.shutdown.completed',
+        }),
+      )
+      expect(setExitCode).not.toHaveBeenCalled()
       expect(closeLogging).toHaveBeenCalledOnce()
     } finally {
       vi.useRealTimers()
@@ -161,6 +181,70 @@ describe('createShutdownController', () => {
       payload: { err: processError, event: 'unhandledRejection' },
       message: 'server.process_error',
     })
+  })
+
+  it('waits for active request logs before closing logging after force close', async () => {
+    vi.useFakeTimers()
+    try {
+      let finishClose: (() => void) | undefined
+      let finishDrain: (() => void) | undefined
+      const closeLogging = vi.fn(async () => {})
+      const controller = createShutdownController({
+        server: {
+          close(callback) {
+            finishClose = callback
+          },
+          closeAllConnections() {
+            finishClose?.()
+          },
+        },
+        logger: createLogger().logger,
+        closeLogging,
+        timeoutMs: 25,
+        forceTimeoutMs: 25,
+        waitForActiveRequests: () =>
+          new Promise<void>((resolve) => {
+            finishDrain = resolve
+          }),
+      })
+
+      const shutdown = controller.shutdown('SIGTERM')
+      await vi.advanceTimersByTimeAsync(25)
+      expect(closeLogging).not.toHaveBeenCalled()
+
+      finishDrain?.()
+      await shutdown
+      expect(closeLogging).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces process exit when forced shutdown cannot drain', async () => {
+    vi.useFakeTimers()
+    try {
+      const forceExit = vi.fn()
+      const { logger, entries } = createLogger()
+      const controller = createShutdownController({
+        server: { close() {}, closeAllConnections: vi.fn() },
+        logger,
+        closeLogging: async () => {},
+        timeoutMs: 10,
+        forceTimeoutMs: 10,
+        forceExit,
+      })
+
+      const shutdown = controller.shutdown('SIGTERM')
+      await vi.advanceTimersByTimeAsync(20)
+      await shutdown
+
+      expect(entries).toContainEqual(
+        expect.objectContaining({ level: 'error', message: 'server.shutdown.force_timed_out' }),
+      )
+      expect(forceExit).toHaveBeenCalledWith(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('still marks a repeated process error fatal during graceful shutdown', async () => {
@@ -278,7 +362,7 @@ describe('createShutdownController', () => {
     },
   )
 
-  it('bounds logging close by the shutdown deadline', async () => {
+  it('bounds logging close with an independent timeout', async () => {
     vi.useFakeTimers()
     try {
       const { logger } = createLogger()
@@ -296,6 +380,7 @@ describe('createShutdownController', () => {
         logger,
         closeLogging,
         timeoutMs: 25,
+        loggingTimeoutMs: 5,
         now: () => currentTime,
         setExitCode,
         fallbackError,

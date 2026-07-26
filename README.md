@@ -59,7 +59,7 @@ bun dev serve
 - **requestTimeoutMs** — 请求超时毫秒（默认 30000）
 - **routing** — 路由选项（`enableFlatModelLookup` 全局裸名查找）
 - **providers** — 上游 provider 定义，每个包含 `type`、`baseURL`、`apiKey`、`headers`、`models`、`plugins`、`oauth`、`options`；类型特定配置放在 `options`
-- **apiKey 轮询** — `apiKey` 支持字符串数组，按请求 round-robin 选择
+- **apiKey 轮询** — `apiKey` 支持字符串数组，按请求 round-robin 选择起始 key；可重试故障在同一 AI SDK retry budget 内切换后续 key
 - **模型别名** — `models` 中可定义 `aliases` 和自定义 `upstreamModel`
 - **`${ENV_NAME}`** — 占位符，加载时从环境变量解析（仅匹配完整字符串）
 - **proxy** — 可选 HTTP 代理（undici `ProxyAgent`）

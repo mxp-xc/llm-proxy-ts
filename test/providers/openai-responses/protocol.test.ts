@@ -766,6 +766,57 @@ describe('mapResponsesRequestToAISDKInput', () => {
     })
   })
 
+  it('maps native OpenAI reasoning item ids into provider options', () => {
+    const result = mapResponsesRequestToAISDKInput(
+      {
+        model: 'gpt-4o',
+        input: [
+          {
+            id: 'rs_123',
+            type: 'reasoning',
+            summary: [{ type: 'summary_text', text: 'thinking...' }],
+            encrypted_content: null,
+          },
+          { type: 'message', role: 'user', content: 'continue' },
+        ],
+      },
+      'openai',
+    )
+
+    expect(result.messages[0]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'reasoning',
+          text: 'thinking...',
+          providerOptions: { openai: { itemId: 'rs_123' } },
+        },
+      ],
+    })
+  })
+
+  it.each(['openai', 'anthropic'])(
+    'omits unreferenced reasoning items for %s providers',
+    (providerType) => {
+      const result = mapResponsesRequestToAISDKInput(
+        {
+          model: 'gpt-4o',
+          input: [
+            {
+              type: 'reasoning',
+              summary: [{ type: 'summary_text', text: 'thinking...' }],
+              encrypted_content: null,
+            },
+            { type: 'message', role: 'user', content: 'continue' },
+          ],
+        },
+        providerType,
+      )
+
+      expect(result.messages).toEqual([{ role: 'user', content: 'continue' }])
+    },
+  )
+
   it('maps parameters — temperature, top_p, max_output_tokens', () => {
     const result = mapResponsesRequestToAISDKInput({
       model: 'gpt-4o',

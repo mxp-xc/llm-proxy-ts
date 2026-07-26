@@ -1,4 +1,8 @@
-import type { ProtocolStrategy, ProtocolVisionInputFilter } from '../shared/strategy.js'
+import type {
+  ProtocolProviderAwareMapping,
+  ProtocolStrategy,
+  ProtocolVisionInputFilter,
+} from '../shared/strategy.js'
 import { openAIErrorFormat } from '../shared/error-format.js'
 import { validateOpenAIChatRequest, mapOpenAIChatRequestToAISDKInput } from './protocol.js'
 import { renderOpenAIChatCompletion, renderOpenAIChatCompletionSSE } from './renderer.js'
@@ -14,7 +18,8 @@ export const openaiCompatibleStrategy: ProtocolStrategy<
   OpenAIChatChunk | OpenAIChatStreamError,
   OpenAIChatCompletion
 > &
-  ProtocolVisionInputFilter = {
+  ProtocolVisionInputFilter &
+  ProtocolProviderAwareMapping<OpenAIChatRequest> = {
   visionInputProtocol: 'openai-chat-completions',
   planUnsupportedVisionInput: planUnsupportedOpenAIChatVisionInput,
   applyUnsupportedVisionInput: applyUnsupportedOpenAIChatVisionInput,
@@ -23,6 +28,7 @@ export const openaiCompatibleStrategy: ProtocolStrategy<
   getModel: (req) => req.model,
   isStream: (req) => req.stream ?? false,
   mapToAISDKInput: mapOpenAIChatRequestToAISDKInput,
+  mapToProviderAISDKInput: mapOpenAIChatRequestToAISDKInput,
   renderResult: renderOpenAIChatCompletion,
   renderStreamSSE: renderOpenAIChatCompletionSSE,
   formatErrors: openAIErrorFormat,

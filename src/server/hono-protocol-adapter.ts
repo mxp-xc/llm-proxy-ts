@@ -9,6 +9,7 @@ export function createProtocolRequestScope(c: Context<AppEnv>): ProtocolRequestS
     requestId: c.get('requestId'),
     logger: c.get('logger'),
     telemetry,
+    abortController: c.get('abortController') ?? new AbortController(),
     readJson: () => c.req.json(),
   }
 }

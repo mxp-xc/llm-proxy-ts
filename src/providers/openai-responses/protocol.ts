@@ -1013,16 +1013,15 @@ export function mapResponsesRequestToAISDKInput(
           })
         }
       } else if ('type' in item && item.type === 'reasoning') {
-        // reasoning item：多轮对话回传的推理项。@ai-sdk/openai@3.0.71 支持 encrypted_content
-        // 透传；@ai-sdk/openai-compatible 把 reasoning part 的 text 转成 Chat Completions 的
-        // reasoning_content 文本（已验证 openai-compatible index.mjs:215-217,245）。
-        //   - openai provider：encrypted_content 透传给上游维持推理上下文；为 null 时 SDK 过滤
-        //   - openai-compatible provider：providerOptions 被忽略，summary 文本降级为 reasoning_content
+        // Native OpenAI reasoning requires an item id or encrypted state. Compatible providers
+        // can fall back to the visible summary; other providers cannot consume OpenAI reasoning.
         const reasoningItem = item as {
+          id?: string | null
           type: 'reasoning'
           encrypted_content?: string | null
           summary?: Array<{ type: string; text: string }>
         }
+        const itemId = reasoningItem.id ?? undefined
         const encryptedContent = reasoningItem.encrypted_content ?? undefined
         const summaryText = Array.isArray(reasoningItem.summary)
           ? reasoningItem.summary
@@ -1030,15 +1029,41 @@ export function mapResponsesRequestToAISDKInput(
               .filter(Boolean)
               .join('\n')
           : ''
-        const reasoningPart: ProtocolMessagePart =
-          encryptedContent !== undefined
-            ? {
+        if (nativeResponses) {
+          if (itemId === undefined && encryptedContent === undefined) continue
+          messages.push({
+            role: 'assistant',
+            content: [
+              {
                 type: 'reasoning',
                 text: summaryText,
-                providerOptions: { openai: { reasoningEncryptedContent: encryptedContent } },
-              }
-            : { type: 'reasoning', text: summaryText }
-        messages.push({ role: 'assistant', content: [reasoningPart] })
+                providerOptions: {
+                  openai: {
+                    ...(itemId !== undefined ? { itemId } : {}),
+                    ...(encryptedContent !== undefined
+                      ? { reasoningEncryptedContent: encryptedContent }
+                      : {}),
+                  },
+                },
+              },
+            ],
+          })
+        } else if (providerType !== 'anthropic') {
+          messages.push({
+            role: 'assistant',
+            content: [
+              encryptedContent !== undefined
+                ? {
+                    type: 'reasoning',
+                    text: summaryText,
+                    providerOptions: {
+                      openai: { reasoningEncryptedContent: encryptedContent },
+                    },
+                  }
+                : { type: 'reasoning', text: summaryText },
+            ],
+          })
+        }
       } else if ('type' in item && item.type === 'web_search_call') {
         // 历史 hosted web_search 调用：AI SDK 不处理，跳过（不传给上游）。
         // openai 上游走 passthrough 透传原始 body，不走此 map；此处仅 openai-compatible 兜底。

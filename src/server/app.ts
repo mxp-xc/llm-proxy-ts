@@ -134,6 +134,7 @@ export function createApp({
   errorLogger,
   errorLogDir = 'logs',
   visionArtifactStore,
+  activeRequestRegistry,
 }: AppDependencies): Hono<AppEnv> {
   const app = new Hono<AppEnv>()
   const routingTable = RoutingTable.fromSettings(settings, pluginRegistry)
@@ -166,6 +167,9 @@ export function createApp({
     c.set('requestId', id)
     const reqLogger = logger.child({ requestId: id })
     c.set('logger', reqLogger)
+    const abortController = new AbortController()
+    const unregisterRequest = activeRequestRegistry?.register(abortController)
+    c.set('abortController', abortController)
     const telemetry: RequestTelemetryContext = {
       requestId: id,
       startedAt: performance.now(),
@@ -189,6 +193,7 @@ export function createApp({
     const logCompleted = () => {
       if (telemetry.completed) return
       telemetry.completed = true
+      unregisterRequest?.()
       telemetry.status = c.res.status
       telemetry.outcome ??= outcomeFromStatus(telemetry.status)
       if (isHealth && telemetry.outcome === 'success') return

@@ -188,8 +188,9 @@ export function redact(value: unknown): unknown {
   return redactValue(value, new WeakMap())
 }
 
-const baseLogKeys = new Set(['level', 'time', 'pid', 'hostname', 'name', 'msg'])
+const baseLogKeys = new Set(['level', 'time', 'hostname', 'name', 'msg'])
 const orderedFieldKeys = [
+  'pid',
   'requestId',
   'method',
   'path',

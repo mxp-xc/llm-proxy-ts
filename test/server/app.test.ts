@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import pino from 'pino'
-import { createApp } from '../../src/server/app.js'
+import { createApp } from '../helpers/app.js'
 import type { Settings, TokenManager } from '../../src/index.js'
 import type { ProviderRegistry } from '../../src/providers/registry.js'
 import type { ProxyStreamPart } from '../../src/providers/shared/aisdk-types.js'
@@ -8,6 +8,7 @@ import { makeGateway } from '../helpers/gateway.js'
 import { makeSettings } from '../helpers/settings.js'
 import { createProviderRegistryStub, stubRegistry } from '../helpers/registry.js'
 import type { GenerateTextReturn } from '../../src/server/types.js'
+import { createActiveRequestRegistry } from '../../src/server/active-requests.js'
 
 /** 构造一个 pino logger，将 JSON 日志行收集到 logs 数组，便于断言 phase 字段。 */
 function capturingPino(): { logger: pino.Logger; logs: Array<Record<string, unknown>> } {
@@ -1196,6 +1197,45 @@ describe('request logging', () => {
     ])
   })
 
+  it('classifies forced shutdown aborts without recording an upstream failure', async () => {
+    const { logger, logs } = capturingPino()
+    const activeRequestRegistry = createActiveRequestRegistry()
+    let requestStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      requestStarted = resolve
+    })
+    const gateway = makeGateway({
+      async generate(input) {
+        requestStarted?.()
+        const signal = input.abortSignal
+        if (!signal) throw new Error('expected abort signal')
+        return await new Promise<GenerateTextReturn>((_, reject) => {
+          const rejectOnAbort = () => reject(signal.reason)
+          if (signal.aborted) rejectOnAbort()
+          else signal.addEventListener('abort', rejectOnAbort, { once: true })
+        })
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry: stubRegistry,
+      logger,
+      activeRequestRegistry,
+    })
+
+    const responsePromise = app.request('/v1/chat/completions', chatRequestBody())
+    await started
+    activeRequestRegistry.abortAll(new DOMException('server shutdown', 'AbortError'))
+    const response = await responsePromise
+
+    expect(response.status).toBe(502)
+    expect(logs.find((entry) => entry.msg === 'request.completed')).toMatchObject({
+      outcome: 'upstream_aborted',
+    })
+    expect(activeRequestRegistry.size()).toBe(0)
+  })
+
   it('logs keySelection for generated responses', async () => {
     const { logger, logs } = capturingPino()
     const gateway = makeGateway({
@@ -1229,6 +1269,40 @@ describe('request logging', () => {
 
     const completed = logs.find((e) => e.msg === 'request.completed')
     expect(completed?.keySelection).toEqual({ index: 1, count: 2 })
+  })
+
+  it('logs the successful failover key in request.completed', async () => {
+    const { logger, logs } = capturingPino()
+    let onKeySelection: ((selection: { index: number; count: number }) => void) | undefined
+    const providerRegistry: ProviderRegistry = createProviderRegistryStub({
+      languageModel(_providerName, _upstreamModel, _modelHeaders, options) {
+        onKeySelection = options?.onKeySelection
+        return { model: {} as never, keySelection: { index: 0, count: 2 } }
+      },
+    })
+    const gateway = makeGateway({
+      async generate() {
+        onKeySelection?.({ index: 1, count: 2 })
+        return { text: 'hi', finishReason: 'stop' } as GenerateTextReturn
+      },
+    })
+    const app = createApp({
+      settings: openrouterSettings,
+      gateway,
+      providerRegistry,
+      logger,
+    })
+
+    await app.request('/v1/chat/completions', chatRequestBody())
+
+    expect(logs.find((entry) => entry.msg === 'request.route_resolved')?.keySelection).toEqual({
+      index: 0,
+      count: 2,
+    })
+    expect(logs.find((entry) => entry.msg === 'request.completed')?.keySelection).toEqual({
+      index: 1,
+      count: 2,
+    })
   })
 
   it('logs keySelection for openai responses AI SDK path', async () => {

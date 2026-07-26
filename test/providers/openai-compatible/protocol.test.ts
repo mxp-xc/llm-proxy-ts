@@ -205,7 +205,7 @@ describe('OpenAI chat protocol mapping', () => {
       ],
     })
 
-    const input = mapOpenAIChatRequestToAISDKInput(request)
+    const input = mapOpenAIChatRequestToAISDKInput(request, 'openai-compatible')
 
     expect(input.messages[0]).toEqual({
       role: 'assistant',
@@ -213,6 +213,51 @@ describe('OpenAI chat protocol mapping', () => {
     })
     expect(assistantModelMessageSchema.safeParse(input.messages[0]).success).toBe(true)
   })
+
+  it.each(['openai', 'anthropic'])('omits unsigned assistant reasoning for %s', (providerType) => {
+    const request = validateOpenAIChatRequest({
+      model: 'gpt-5.6-sol',
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'partial answer' },
+            { type: 'reasoning', text: 'content part reasoning' },
+          ],
+          reasoning_content: 'top-level reasoning',
+        },
+      ],
+    })
+
+    const input = mapOpenAIChatRequestToAISDKInput(request, providerType)
+
+    expect(input.messages[0]).toEqual({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'partial answer' }],
+    })
+    expect(
+      (input.messages[0]!.content as ProtocolMessagePart[]).some(
+        (part) => part.type === 'reasoning',
+      ),
+    ).toBe(false)
+  })
+
+  it.each(['openai', 'anthropic'])(
+    'omits reasoning-only assistant messages for %s',
+    (providerType) => {
+      const request = validateOpenAIChatRequest({
+        model: 'reasoning-model',
+        messages: [
+          { role: 'assistant', content: null, reasoning_content: 'historical reasoning' },
+          { role: 'user', content: 'continue' },
+        ],
+      })
+
+      const input = mapOpenAIChatRequestToAISDKInput(request, providerType)
+
+      expect(input.messages).toEqual([{ role: 'user', content: 'continue' }])
+    },
+  )
 
   it('maps assistant content parts and refusal to AI SDK text parts', () => {
     const request = validateOpenAIChatRequest({
