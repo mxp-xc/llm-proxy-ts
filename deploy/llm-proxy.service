@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM protocol proxy
+After=network-online.target mihomo.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/srv/projects/github.com/mxp-xc/llm-proxy-ts
+Environment=NODE_ENV=production
+ExecStart=/root/.bun/bin/bun src/server/server.ts
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
